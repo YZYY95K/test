@@ -1,0 +1,81 @@
+schema_version: "1.0"
+name: test-runner
+version: "2.0.0"
+owner: TesterAgent
+intent: Verify a candidate in isolation against a trusted baseline.
+invoke_when:
+  - A validated PatchCandidate is ready and its repository revision is available.
+  - TeamLeader requests a deterministic retry under the same test policy.
+refuse_when:
+  - Isolation, baseline, candidate integrity, or resource policy cannot be established.
+  - The request asks to edit code, tests, acceptance criteria, or review status.
+input:
+  type: PatchCandidate
+  schema_version: "1.0"
+  required_fields:
+    [issue_id, repository_revision, branch_name, changes, validation, artifact_digest]
+output:
+  type: TestEvidence
+  schema_version: "1.0"
+  required_fields:
+    [issue_id, candidate_digest, baseline_revision, suite, status, totals,
+     baseline_comparison, duration_ms, evidence]
+dependencies:
+  - Isolated CI or disposable local sandbox.
+  - Repository-declared test adapter and trusted baseline revision.
+allowed_actions:
+  - Create and destroy an isolated candidate checkout.
+  - Apply the candidate inside that checkout.
+  - Execute the policy-selected suite with bounded resources.
+forbidden_actions:
+  - Modify the canonical checkout, source files, or test files.
+  - Mark a candidate approved or create, review, or merge a pull request.
+  - Interpolate untrusted input into a shell command.
+  - Report pass after timeout, missing evidence, error, or regression.
+handoffs:
+  - "on": success
+    consumer: ReviewerAgent
+    artifact_type: TestEvidence
+    event: test.passed
+  - "on": failure
+    consumer: CoderAgent
+    artifact_type: TestEvidence
+    event: test.failed
+  - "on": blocked
+    consumer: TeamLeader
+    artifact_type: SkillFailure
+    event: test.error
+failures:
+  - code: INFRASTRUCTURE_ERROR
+    retryable: true
+    max_attempts: 1
+    action: Retry once in fresh isolation, then report error.
+    route_to: TeamLeader
+    event: test.error
+  - code: TEST_REGRESSION
+    retryable: false
+    max_attempts: 0
+    action: Return exact failures and baseline comparison for revision.
+    route_to: CoderAgent
+    event: test.failed
+  - code: ISOLATION_UNAVAILABLE
+    retryable: false
+    max_attempts: 0
+    action: Fail closed without executing repository code.
+    route_to: TeamLeader
+    event: test.error
+verification:
+  - id: isolation
+    requirement: Candidate execution occurred outside the canonical checkout.
+    evidence: Disposable workspace identity and cleanup record.
+  - id: suite-policy
+    requirement: T3 through T5 run the full configured suite.
+    evidence: Tier, selected command identifier, and suite manifest.
+  - id: comparison
+    requirement: Pass means zero failures, zero errors, and no regression.
+    evidence: Candidate totals and baseline comparison.
+release:
+  compatibility: AgentTeams v1beta1 and HandoffEnvelope 1.x.
+  change_policy: Pass semantics and suite policy changes require a major version.
+  rollback: Restore the prior signed Skill bundle; never rewrite prior test evidence.
+examples_ref: references/examples.md

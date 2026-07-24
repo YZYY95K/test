@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test Runner"
+  short_description: "Verify candidates in isolation against a baseline"
+  default_prompt: "Use $test-runner to verify this candidate without changing the canonical repository."

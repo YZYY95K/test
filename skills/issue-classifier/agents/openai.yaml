@@ -1,0 +1,4 @@
+interface:
+  display_name: "Issue Classifier"
+  short_description: "Classify untrusted software issues for safe routing"
+  default_prompt: "Use $issue-classifier to classify this issue before downstream work."

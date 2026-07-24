@@ -1,0 +1,28 @@
+# Runtime Skill catalog. The versioned package contract is authoritative;
+# keeping this file as an index prevents schema drift across three copies.
+schema_version: "2.0"
+contract_schema: "src/devflow/skills/contracts.py#SkillContract"
+handoff_schema: "src/devflow/skills/contracts.py#HandoffEnvelope"
+quality_gate:
+  evaluator: "scripts/evaluate_skills.py"
+  minimum_score: 90
+  critical_failures_block: true
+skills:
+  - name: issue-classifier
+    owner: TriageAgent
+    contract: skills/issue-classifier/references/contract.yaml
+  - name: code-root-cause
+    owner: LocatorAgent
+    contract: skills/code-root-cause/references/contract.yaml
+  - name: patch-generator
+    owner: CoderAgent
+    contract: skills/patch-generator/references/contract.yaml
+  - name: test-runner
+    owner: TesterAgent
+    contract: skills/test-runner/references/contract.yaml
+  - name: pr-reviewer
+    owner: ReviewerAgent
+    contract: skills/pr-reviewer/references/contract.yaml
+  - name: experience-distiller
+    owner: ReviewerAgent
+    contract: skills/experience-distiller/references/contract.yaml

@@ -1,0 +1,84 @@
+schema_version: "1.0"
+name: pr-reviewer
+version: "2.0.0"
+owner: ReviewerAgent
+intent: Independently gate a tested candidate and create a policy-compliant PR.
+invoke_when:
+  - TestEvidence is current, integrity-checked, and eligible for review.
+  - Human approval evidence arrives for a previously blocked T4 or T5 review.
+refuse_when:
+  - Tests failed, regressed, errored, are stale, or do not match the candidate.
+  - The authoring agent asks to self-approve or bypass a security or human gate.
+input:
+  type: TestEvidence
+  schema_version: "1.0"
+  required_fields:
+    [issue_id, candidate_digest, baseline_revision, suite, status, totals,
+     baseline_comparison, evidence]
+output:
+  type: ReviewDecision
+  schema_version: "1.0"
+  required_fields:
+    [issue_id, candidate_digest, tier, decision, findings, summary,
+     requires_human_approval, approval_evidence, pr, evidence]
+dependencies:
+  - Scoped GitHub PR and review MCP capabilities.
+  - Versioned security scanners and config/security.yaml policy.
+  - Append-only approval and audit evidence store.
+allowed_actions:
+  - Read candidate, test, policy, and security evidence.
+  - Submit a review and create a pull request through scoped tools.
+  - Merge only as a separate audited action after every policy gate passes.
+forbidden_actions:
+  - Approve red, stale, incomplete, or mismatched test evidence.
+  - Dismiss unresolved high or critical security findings.
+  - Auto-approve or auto-merge T4 or T5.
+  - Self-approve a change authored by the same agent instance.
+  - Fabricate a pull-request URL or human approval record.
+handoffs:
+  - "on": success
+    consumer: TeamLeader
+    artifact_type: ReviewDecision
+    event: review.approved
+  - "on": failure
+    consumer: CoderAgent
+    artifact_type: ReviewDecision
+    event: review.rejected
+  - "on": blocked
+    consumer: HumanReviewer
+    artifact_type: ReviewDecision
+    event: approval.required
+failures:
+  - code: SECURITY_SCAN_UNAVAILABLE
+    retryable: true
+    max_attempts: 1
+    action: Fail closed for T3+ and require human review for T1/T2.
+    route_to: TeamLeader
+    event: review.blocked
+  - code: PR_CREATE_FAILED
+    retryable: true
+    max_attempts: 2
+    action: Preserve review decision and mark PR creation deferred.
+    route_to: TeamLeader
+    event: review.degraded
+  - code: POLICY_BLOCK
+    retryable: false
+    max_attempts: 0
+    action: Record the unmet gate and stop promotion.
+    route_to: TeamLeader
+    event: approval.required
+verification:
+  - id: evidence-binding
+    requirement: Candidate, test, and review digests identify the same revision.
+    evidence: Digest and repository-revision comparison.
+  - id: security
+    requirement: No unresolved high or critical finding exists.
+    evidence: Versioned scanner reports and finding dispositions.
+  - id: approval-policy
+    requirement: T4 and T5 include verifiable human approval before merge.
+    evidence: Approver identity, timestamp, target digest, and audit record.
+release:
+  compatibility: AgentTeams v1beta1 and HandoffEnvelope 1.x.
+  change_policy: Any approval relaxation requires a major version and human sign-off.
+  rollback: Restore the prior stricter signed bundle; never grandfather blocked reviews.
+examples_ref: references/examples.md

@@ -1,0 +1,277 @@
+# =============================================================================
+# DevFlow Agent Identity Definitions
+# =============================================================================
+# Defines the 6 core agents of the DevFlow multi-agent system. Each agent is an
+# autonomous, identity-driven unit within the AgentTeams framework: it owns a
+# bounded set of capabilities, observes specific events, and is constrained by
+# explicit boundaries that prevent scope creep and enforce safe behavior.
+#
+# Identity (role/description/model/temperature) is *intentional* — the same
+# underlying LLM behaves very differently under different role framing and
+# sampling temperatures, so each field is treated as a first-class config
+# rather than an incidental label.
+#
+# Conventions:
+#   - model "glm-4"  : served via OpenAI-compatible endpoint (LLM_BASE_URL)
+#   - model "codex"  : code-specialized model used for patch generation
+#   - temperature    : lower = deterministic orchestration, higher = creative
+#   - watches        : events this agent subscribes to via the event bus
+#   - boundaries     : hard limits the runtime enforces; violations are audited
+# =============================================================================
+
+# Global defaults applied to every agent unless overridden per-agent.
+defaults:
+  # Soft limit on consecutive LLM failures before the agent yields control back
+  # to the TeamLeader for re-planning. Prevents runaway retry loops.
+  max_consecutive_failures: 3
+  # Wall-clock budget (seconds) for a single agent invocation. The runtime
+  # sends a `agent.timeout` event and attempts graceful cancellation.
+  timeout_seconds: 600
+  # Maximum tokens the agent may consume in one invocation across all LLM
+  # calls. Enforced by the token meter to keep cost predictable.
+  max_tokens_per_invocation: 32000
+  # Retry policy inherited from tenacity; agents may override.
+  retry:
+    max_attempts: 3
+    backoff: "exponential"
+    initial_delay_seconds: 2
+    max_delay_seconds: 30
+    retry_on: ["RateLimitError", "TimeoutError", "ConnectionError"]
+
+agents:
+
+  # ===========================================================================
+  # 1. TeamLeader — Central Orchestrator
+  # ===========================================================================
+  # The only agent permitted to decompose issues into sub-tasks and assign
+  # them to workers. It holds the canonical state machine for an issue's
+  # lifecycle and is the final arbiter when agents disagree (e.g. Tester says
+  # pass but Reviewer flags a security concern).
+  # ===========================================================================
+  - name: "TeamLeader"
+    identity:
+      role: "Team Leader"
+      description: >-
+        Central orchestrator that decomposes tasks, tracks state, and
+        arbitrates conflicts across the agent team.
+      model: "glm-4"
+      temperature: 0.3  # low temperature for stable, reproducible planning
+      system_prompt_ref: "prompts/team_leader.md"
+    capabilities:
+      - task_decomposition   # split T1-T5 issues into ordered sub-tasks
+      - state_tracking       # maintain issue lifecycle state machine
+      - conflict_arbitration # resolve disagreements between workers
+      - worker_management    # assign/re-assign tasks, handle failures
+      - plan_generation      # produce executable plan DAG
+    boundaries:
+      - "Cannot write code directly"
+      - "Cannot approve PRs without human review for T4/T5 issues"
+      - "Cannot modify files outside the .devflow/ state directory"
+      - "Cannot bypass the approval workflow defined in security.yaml"
+    watches:
+      - "issue.created"        # kick off decomposition
+      - "agent.completed"      # advance state machine
+      - "agent.failed"         # trigger re-plan or re-assignment
+      - "review.rejected"      # route back to CoderAgent
+      - "test.failed"          # route back to CoderAgent with context
+      - "approval.required"    # pause pipeline pending human input
+    # Routing hints for the scheduler: which agents this leader dispatches to.
+    dispatches_to:
+      - "TriageAgent"
+      - "LocatorAgent"
+      - "CoderAgent"
+      - "TesterAgent"
+      - "ReviewerAgent"
+
+  # ===========================================================================
+  # 2. TriageAgent — Issue Intake & Classification
+  # ===========================================================================
+  # First agent to touch an incoming issue. Assigns a T1-T5 complexity tier
+  # which drives every downstream decision (approval gate, parallelism, model
+  # selection). Also de-duplicates against the experience store so recurring
+  # issues can be fast-pathed.
+  # ===========================================================================
+  - name: "TriageAgent"
+    identity:
+      role: "Triage Agent"
+      description: >-
+        Classifies incoming issues into T1-T5 complexity tiers, deduplicates
+        against historical issues, and assigns priority.
+      model: "glm-4"
+      temperature: 0.2  # very low — classification must be deterministic
+      system_prompt_ref: "prompts/triage.md"
+    capabilities:
+      - issue_classification  # T1 (trivial) .. T5 (critical/architectural)
+      - deduplication         # match against ChromaDB experience store
+      - priority_assignment   # P0-P3 based on severity & blast radius
+      - label_assignment      # map to repo label taxonomy
+    boundaries:
+      - "Cannot modify issue body or title"
+      - "Cannot assign complexity higher than T5"
+      - "Cannot skip deduplication step"
+    watches:
+      - "issue.created"
+      - "issue.updated"   # re-classify if the body changes materially
+    depends_on_skills:
+      - "issue-classifier"
+
+  # ===========================================================================
+  # 3. LocatorAgent — Root Cause & Impact Analysis
+  # ===========================================================================
+  # Uses retrieval-augmented generation over the indexed codebase to pinpoint
+  # the likely root-cause file(s)/function(s) and assess blast radius. Its
+  # output is the contract CoderAgent consumes to generate a patch.
+  # ===========================================================================
+  - name: "LocatorAgent"
+    identity:
+      role: "Locator Agent"
+      description: >-
+        Performs code root cause analysis and impact assessment using RAG over
+        the indexed repository, producing a located-context payload for the
+        CoderAgent.
+      model: "glm-4"
+      temperature: 0.4  # slightly higher to explore candidate locations
+      system_prompt_ref: "prompts/locator.md"
+    capabilities:
+      - code_root_cause    # identify faulty code region
+      - impact_assessment  # enumerate affected call sites / tests
+      - rag_retrieval      # query ChromaDB code index
+      - context_packaging  # assemble token-budgeted context for Coder
+    boundaries:
+      - "Cannot write or modify source files"
+      - "Cannot execute repository code"
+      - "Context payload must stay under the CoderAgent input token budget"
+    watches:
+      - "triage.completed"
+      - "codebase.indexed"   # rebuild context after re-index
+    depends_on_skills:
+      - "code-root-cause"
+    resources:
+      # Vector store backing RAG. Path resolved from CHROMADB_PATH env var.
+      vector_store:
+        type: "chromadb"
+        collection: "codebase_index"
+        embedding_model: "text-embedding-3-small"
+
+  # ===========================================================================
+  # 4. CoderAgent — Patch Generation
+  # ===========================================================================
+  # Consumes the located-context payload and produces a concrete diff. Uses a
+  # code-specialized model (codex) when available, falling back to glm-4.
+  # Output is a structured patch object, never a direct file write — the
+  # ReviewerAgent/CI gate sits between patch and merge.
+  # ===========================================================================
+  - name: "CoderAgent"
+    identity:
+      role: "Coder Agent"
+      description: >-
+        Generates code-aware fix patches from located context using a
+        code-specialized model, with automatic fallback to GLM-4.
+      model: "codex"            # primary; falls back per model_fallback
+      temperature: 0.2          # low for syntactically stable diffs
+      system_prompt_ref: "prompts/coder.md"
+      model_fallback:           # ordered fallback chain
+        - "codex"
+        - "glm-4"
+    capabilities:
+      - patch_generation      # produce unified diff / structured patch
+      - code_context_awareness # respects surrounding style & imports
+      - multi_file_edit       # coordinated edits across files when needed
+      - self_verification     # syntax-check generated patch before emit
+    boundaries:
+      - "Cannot push directly to the default branch"
+      - "Cannot run tests — that is TesterAgent's responsibility"
+      - "Cannot approve its own patch"
+      - "Maximum 3 patch-generation attempts per sub-task before escalation"
+    watches:
+      - "locator.completed"
+      - "review.rejected"   # regenerate with reviewer feedback
+      - "test.failed"       # regenerate with failing test output
+    depends_on_skills:
+      - "patch-generator"
+
+  # ===========================================================================
+  # 5. TesterAgent — Verification & Coverage
+  # ===========================================================================
+  # Runs the test suite against the candidate patch, compares results to the
+  # baseline, and reports coverage delta. It is the gate that determines
+  # whether a patch may proceed to review.
+  # ===========================================================================
+  - name: "TesterAgent"
+    identity:
+      role: "Tester Agent"
+      description: >-
+        Executes tests, compares results against the baseline, and analyses
+        coverage to gate patch promotion.
+      model: "glm-4"
+      temperature: 0.1  # near-deterministic — test orchestration must be stable
+      system_prompt_ref: "prompts/tester.md"
+    capabilities:
+      - test_execution        # invoke test runner via CI/CD MCP
+      - baseline_comparison   # diff pass/fail/coverage vs baseline
+      - coverage_analysis     # line & branch coverage delta
+      - regression_detection  # flag newly failing previously-passing tests
+    boundaries:
+      - "Cannot modify source code"
+      - "Cannot modify test files"
+      - "Cannot mark a patch as approved — only report pass/fail"
+      - "Must run full suite, not a subset, for T3+ issues"
+    watches:
+      - "coder.patch_ready"
+      - "pipeline.completed"   # react to CI results
+    depends_on_skills:
+      - "test-runner"
+
+  # ===========================================================================
+  # 6. ReviewerAgent — Review, PR & Security Gate
+  # ===========================================================================
+  # Final autonomous gate. Creates the pull request, runs automated code
+  # review and security scanning, and applies the approval policy from
+  # security.yaml. For T4/T5 it must block pending human approval.
+  # ===========================================================================
+  - name: "ReviewerAgent"
+    identity:
+      role: "Reviewer Agent"
+      description: >-
+        Creates pull requests, performs automated code review and security
+        scanning, and drives the approval workflow per the security policy.
+      model: "glm-4"
+      temperature: 0.3
+      system_prompt_ref: "prompts/reviewer.md"
+    capabilities:
+      - pr_creation          # open PR via GitHub MCP
+      - code_review          # static analysis + style + correctness
+      - security_scan        # dependency & secret scanning
+      - approval_workflow    # enforce T1-T3 auto / T4-T5 human gate
+      - merge_management     # squash/merge once approved & CI green
+    boundaries:
+      - "Cannot auto-merge T4/T5 PRs without recorded human approval"
+      - "Cannot merge when CI is red"
+      - "Cannot bypass security scan findings classified critical/high"
+      - "Cannot self-approve a PR it authored"
+    watches:
+      - "test.passed"
+      - "review.requested"
+      - "security.finding"
+      - "human.approved"     # unblock T4/T5 after human sign-off
+    depends_on_skills:
+      - "pr-reviewer"
+
+# =============================================================================
+# Cross-cutting relationships
+# =============================================================================
+# The default flow for a fresh issue is linear but event-driven, not a fixed
+# pipeline — any agent may emit an event that routes work backwards:
+#
+#   issue.created
+#     -> TriageAgent  (issue-classifier)
+#        -> TeamLeader decomposes by tier
+#           -> LocatorAgent (code-root-cause)
+#              -> CoderAgent (patch-generator)
+#                 -> TesterAgent (test-runner)
+#                    -> ReviewerAgent (pr-reviewer)
+#                       -> experience-distiller (post-merge, async)
+#
+# Reversal edges: review.rejected/test.failed -> CoderAgent;
+#                 human.approved -> ReviewerAgent.
+# =============================================================================

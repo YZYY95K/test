@@ -1,0 +1,79 @@
+schema_version: "1.0"
+name: patch-generator
+version: "2.0.0"
+owner: CoderAgent
+intent: Produce the smallest safe candidate patch justified by located evidence.
+invoke_when:
+  - TeamLeader delegates implementation with a validated LocatedContext.
+  - Exact test or review findings request a bounded revision of a prior candidate.
+refuse_when:
+  - Located evidence is blocked, stale, below confidence floor, or lacks a revision.
+  - The request asks for direct apply, push, approval, merge, or gate weakening.
+input:
+  type: LocatedContext
+  schema_version: "1.0"
+  required_fields:
+    [issue_id, repository_revision, root_cause, affected_files,
+     related_tests, context_ref, confidence, evidence]
+output:
+  type: PatchCandidate
+  schema_version: "1.0"
+  required_fields:
+    [issue_id, repository_revision, branch_name, changes, commit_message,
+     description, validation, artifact_digest]
+dependencies:
+  - Code-specialized structured completion adapter.
+  - Non-mutating syntax, diff, path, and secret validators.
+allowed_actions:
+  - Read the supplied verified context and repository conventions.
+  - Generate repository-relative candidate file changes and tests.
+  - Perform non-mutating schema, syntax, diff, and security checks.
+forbidden_actions:
+  - Apply, push, approve, merge, or write to a protected branch.
+  - Run the repository test suite or claim CI success.
+  - Modify files outside the located blast radius without new evidence.
+  - Delete or weaken tests to obtain a passing result.
+  - Emit secrets, traversal paths, or dangerous execution primitives.
+handoffs:
+  - "on": success
+    consumer: TesterAgent
+    artifact_type: PatchCandidate
+    event: coder.patch_ready
+  - "on": failure
+    consumer: TeamLeader
+    artifact_type: SkillFailure
+    event: coder.exhausted
+failures:
+  - code: CANDIDATE_INVALID
+    retryable: true
+    max_attempts: 3
+    action: Regenerate using exact validator diagnostics.
+    route_to: TeamLeader
+    event: coder.exhausted
+  - code: EVIDENCE_STALE
+    retryable: false
+    max_attempts: 0
+    action: Request fresh localization for the current revision.
+    route_to: LocatorAgent
+    event: coder.blocked
+  - code: BOUNDARY_VIOLATION
+    retryable: false
+    max_attempts: 0
+    action: Reject and audit the candidate without emitting patch_ready.
+    route_to: TeamLeader
+    event: boundary.violation
+verification:
+  - id: confinement
+    requirement: Every path is relative and justified by affected_files.
+    evidence: Path allow-list check.
+  - id: candidate-safety
+    requirement: Schema, diff, syntax, secret, and dangerous-pattern checks pass.
+    evidence: Structured validation record.
+  - id: integrity
+    requirement: Candidate binds to the located repository revision.
+    evidence: Repository revision and artifact SHA-256.
+release:
+  compatibility: AgentTeams v1beta1 and HandoffEnvelope 1.x.
+  change_policy: Patch schema or safety-gate changes require paired regression evaluation.
+  rollback: Restore the prior signed Skill bundle; discard unpromoted newer candidates.
+examples_ref: references/examples.md

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Root Cause"
+  short_description: "Locate root cause with read-only repository evidence"
+  default_prompt: "Use $code-root-cause to produce evidence-backed located context."

@@ -1,0 +1,148 @@
+# =============================================================================
+# DevFlow Observability Configuration
+# =============================================================================
+# DevFlow treats observability as a first-class concern: every agent
+# invocation, LLM call, MCP tool invocation, and state transition is traced,
+# logged, and metered. This file configures the three pillars — tracing,
+# logging, and metrics — backed by OpenTelemetry, structlog, and Prometheus
+# respectively (all already declared in pyproject.toml).
+#
+# Design principle: observability must never block the critical path. All
+# exporters are asynchronous; if a backend is down, telemetry is dropped
+# (never buffered unboundedly) and a single warning is emitted.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Tracing — distributed traces span the full issue lifecycle
+# ---------------------------------------------------------------------------
+tracing:
+  enabled: true
+  backend: "opentelemetry"
+  # OTLP exporter endpoint (OTEL_EXPORTER_OTLP_ENDPOINT). Local default points
+  # at a collector on the same host; production overrides via env.
+  exporter:
+    type: "otlp"
+    endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT}"
+    protocol: "grpc"            # grpc for throughput; http/protobuf available
+    insecure: true              # set false + set cert in prod
+  service_name: "devflow"
+  service_version: "1.0.0"
+  # Sampling: head-based for simplicity. 1.0 = all spans; lower for high volume.
+  # T4/T5 issues are always sampled (forced) regardless of this rate — see
+  # the span_attributes below.
+  sample_rate: 1.0
+  # Force-sample high-stakes work so human reviewers always have a full trace.
+  always_sample_tiers: ["T4", "T5"]
+  # Resource attributes attached to every span for filtering in the backend.
+  resource_attributes:
+    deployment.environment: "${DEPLOYMENT_ENV:-development}"
+    agent.team: "devflow"
+  # Span semantics: each agent invocation is a span; LLM + MCP calls are
+  # child spans. These attribute keys are stable for dashboarding.
+  span_attributes:
+    issue_id: "devflow.issue.id"
+    issue_tier: "devflow.issue.tier"
+    agent_name: "devflow.agent.name"
+    skill_name: "devflow.skill.name"
+    model: "devflow.llm.model"
+    tokens_used: "devflow.llm.tokens"
+  # Drop PII from span attributes before export.
+  sanitize:
+    redact_patterns:
+      - "token"
+      - "password"
+      - "secret"
+      - "authorization"
+      - "email"
+
+# ---------------------------------------------------------------------------
+# Logging — structured, correlation-aware
+# ---------------------------------------------------------------------------
+logging:
+  level: "INFO"                 # DEBUG in dev, INFO/WARN in prod
+  structured: true              # structlog JSON output for machine parsing
+  backend: "structlog"
+  # Console renderer is human-readable (rich); JSON renderer for log shippers.
+  renderer:
+    development: "console"      # pretty, colored via rich
+    production: "json"
+  # File sink for local debugging and the audit pipeline.
+  file:
+    path: "${LOG_FILE_PATH:-logs/devflow.log}"
+    rotation:
+      when: "midnight"
+      interval: 1
+      backup_count: 14          # two weeks of rolling logs
+    encoding: "utf-8"
+  # Inject trace context into every log line so logs correlate with traces.
+  inject_trace_context: true
+  # Per-logger level overrides — quiet noisy libraries without touching root.
+  loggers:
+    "httpx": "WARNING"
+    "httpcore": "WARNING"
+    "openai": "INFO"
+    "chromadb": "WARNING"
+    "urllib3": "WARNING"
+  # Never log these keys, anywhere in the payload (defense in depth).
+  redact_keys:
+    - "api_key"
+    - "authorization"
+    - "token"
+    - "password"
+    - "GITHUB_PERSONAL_ACCESS_TOKEN"
+    - "LLM_API_KEY"
+
+# ---------------------------------------------------------------------------
+# Metrics — aggregate health and performance signals
+# ---------------------------------------------------------------------------
+metrics:
+  enabled: true
+  backend: "prometheus"
+  # Expose /metrics on loopback for scraping by a local Prometheus or
+  # prom-to-OTLP collector. Loopback only — metrics are not for the public.
+  host: "127.0.0.1"
+  port: 9090
+  path: "/metrics"
+  # Core metric definitions. Naming follows Prometheus conventions
+  # (snake_case, _total for counters, units in the name).
+  metrics:
+    - name: "devflow_issues_processed_total"
+      type: "counter"
+      description: "Total issues processed, by tier and outcome."
+      labels: ["tier", "outcome"]
+    - name: "devflow_agent_invocations_total"
+      type: "counter"
+      description: "Agent invocations, by agent and result."
+      labels: ["agent", "result"]
+    - name: "devflow_agent_duration_seconds"
+      type: "histogram"
+      description: "Wall-clock duration of a single agent invocation."
+      labels: ["agent"]
+      buckets: [1, 5, 10, 30, 60, 120, 300, 600, 1200]
+    - name: "devflow_llm_tokens_total"
+      type: "counter"
+      description: "LLM tokens consumed, by model and direction."
+      labels: ["model", "direction"]   # direction: prompt|completion
+    - name: "devflow_llm_request_duration_seconds"
+      type: "histogram"
+      description: "LLM request latency."
+      labels: ["model"]
+      buckets: [0.5, 1, 2, 5, 10, 20, 30, 60]
+    - name: "devflow_mcp_tool_calls_total"
+      type: "counter"
+      description: "MCP tool invocations, by server, tool, and status."
+      labels: ["server", "tool", "status"]
+    - name: "devflow_patch_attempts"
+      type: "histogram"
+      description: "Number of patch-generation attempts before success/failure."
+      labels: ["tier"]
+      buckets: [1, 2, 3, 4, 5]
+    - name: "devflow_pipeline_active"
+      type: "gauge"
+      description: "Number of CI pipelines currently in flight."
+    - name: "devflow_approval_pending"
+      type: "gauge"
+      description: "PRs blocked on human approval."
+      labels: ["tier"]
+  # Default scrape-friendly histogram buckets for durations not listed above.
+  default_duration_buckets: [0.1, 0.5, 1, 5, 10, 30, 60, 120, 300, 600]

@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "source": {
+    "hostname": "devflow-template",
+    "os": "portable",
+    "created_at": "2026-07-24T00:00:00Z"
+  },
+  "worker": {
+    "suggested_name": "devflow-worker",
+    "model": "qwen3.5-plus",
+    "runtime": "openclaw",
+    "base_image": "agentteams/agentteams-worker:latest",
+    "apt_packages": [],
+    "pip_packages": [],
+    "npm_packages": []
+  }
+}
+

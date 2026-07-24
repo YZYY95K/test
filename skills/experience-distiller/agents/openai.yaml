@@ -1,0 +1,4 @@
+interface:
+  display_name: "Experience Distiller"
+  short_description: "Distill reviewed outcomes into safe reusable memory"
+  default_prompt: "Use $experience-distiller to capture this terminal reviewed outcome safely."

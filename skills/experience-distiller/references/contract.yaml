@@ -1,0 +1,78 @@
+schema_version: "1.0"
+name: experience-distiller
+version: "2.0.0"
+owner: ReviewerAgent
+intent: Convert terminal reviewed evidence into a safe reusable experience.
+invoke_when:
+  - A merge, rejection, or human closure has complete versioned provenance.
+  - The operational workflow is terminal and no agent action remains.
+refuse_when:
+  - The run is active, unreviewed, lacks digests, or has uncertain redaction.
+  - The request asks to change the completed outcome or trigger new work.
+input:
+  type: ReviewDecision
+  schema_version: "1.0"
+  required_fields:
+    [issue_id, candidate_digest, tier, decision, findings, summary,
+     requires_human_approval, approval_evidence, pr, evidence]
+output:
+  type: ExperiencePattern
+  schema_version: "1.0"
+  required_fields:
+    [pattern_id, schema_version, outcome, summary, reusable_lesson,
+     provenance, redaction, stored]
+dependencies:
+  - Read-only terminal audit and artifact store.
+  - Idempotent experience vector store with redaction scanning.
+allowed_actions:
+  - Read immutable terminal artifacts and audit evidence.
+  - Redact and abstract reviewed evidence.
+  - Create or update a deduplicated experience record.
+forbidden_actions:
+  - Store raw secrets, personal data, or full private source files.
+  - Store an active or unreviewed run as trusted experience.
+  - Invent causal claims not supported by linked evidence.
+  - Trigger coding, testing, review, merge, or tracker actions.
+handoffs:
+  - "on": success
+    consumer: TeamLeader
+    artifact_type: ExperiencePattern
+    event: experience.stored
+  - "on": blocked
+    consumer: HumanReviewer
+    artifact_type: SkillFailure
+    event: experience.quarantined
+failures:
+  - code: PROVENANCE_INCOMPLETE
+    retryable: false
+    max_attempts: 0
+    action: Reject storage and report missing evidence.
+    route_to: TeamLeader
+    event: experience.rejected
+  - code: REDACTION_UNCERTAIN
+    retryable: false
+    max_attempts: 0
+    action: Quarantine the candidate pattern for human inspection.
+    route_to: HumanReviewer
+    event: experience.quarantined
+  - code: STORE_UNAVAILABLE
+    retryable: true
+    max_attempts: 2
+    action: Retry idempotently without changing the completed run.
+    route_to: TeamLeader
+    event: experience.degraded
+verification:
+  - id: provenance
+    requirement: Every claim links to terminal versioned evidence.
+    evidence: Trace ID, artifact digests, outcome, and review decision.
+  - id: redaction
+    requirement: Secret and personal-data scans pass before storage.
+    evidence: Redaction rule version and scan result.
+  - id: dedup
+    requirement: Similar patterns update provenance rather than duplicate content.
+    evidence: Similarity result and chosen create-or-update operation.
+release:
+  compatibility: AgentTeams v1beta1 and HandoffEnvelope 1.x.
+  change_policy: Redaction relaxation or provenance removal requires a major version.
+  rollback: Restore the prior signed bundle and quarantine records from the reverted version.
+examples_ref: references/examples.md

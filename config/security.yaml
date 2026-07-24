@@ -1,0 +1,194 @@
+# =============================================================================
+# DevFlow Security Configuration
+# =============================================================================
+# DevFlow is an autonomous system that can read proprietary code, open PRs,
+# and trigger deployments. Security is therefore enforced declaratively here
+# and checked by the runtime at every capability boundary — agents cannot
+# opt out of these policies.
+#
+# Four pillars:
+#   1. audit_log          — tamper-evident record of every privileged action
+#   2. approval_workflow  — human-in-the-loop gate for high-risk tiers
+#   3. rollback           — safe failure recovery with bounded retries
+#   4. credential_isolation — secrets never reach agents or model prompts
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# 1. Audit Log — who did what, when, with what authority
+# ---------------------------------------------------------------------------
+audit_log:
+  enabled: true
+  # Append-only JSONL file. One event per line for easy ingestion/grep.
+  # Path resolved from AUDIT_LOG_PATH env var so it can differ per env.
+  file_path: "${AUDIT_LOG_PATH:-logs/audit.log}"
+  # How long to retain audit records. 90 days balances forensic needs against
+  # storage; compliance regimes may require longer.
+  retention_days: 90
+  # Rotate when the file crosses this size to keep individual files manageable.
+  rotation:
+    max_size_mb: 100
+    backup_count: 30
+  # What gets recorded. Every privileged/irreversible action is audited.
+  events:
+    - "pr.created"
+    - "pr.merged"
+    - "pr.review_submitted"
+    - "deployment.rolled_back"
+    - "approval.granted"
+    - "approval.denied"
+    - "approval.auto_approved"
+    - "security.finding"
+    - "boundary.violation"       # agent attempted a forbidden action
+    - "credential.access"        # a secret was fetched from the gateway
+    - "mcp.tool_invoked"         # any write-capable MCP tool call
+  # Each entry includes: timestamp (UTC, ISO8601), actor (agent name or
+  # "human:<login>"), action, target (issue/PR/commit id), outcome, and a
+  # correlation_id linking to the trace span.
+  include_fields:
+    - "timestamp"
+    - "actor"
+    - "action"
+    - "target"
+    - "outcome"
+    - "correlation_id"
+    - "issue_tier"
+  # Integrity: hash-chain consecutive entries so tampering is detectable.
+  # The previous entry's hash is included in the current entry's payload.
+  chain_hashes: true
+
+# ---------------------------------------------------------------------------
+# 2. Approval Workflow — risk-tiered human-in-the-loop
+# ---------------------------------------------------------------------------
+# Complexity tier (from issue-classifier) maps directly to an approval policy.
+# This is the single source of truth referenced by ReviewerAgent boundaries
+# and the pr-reviewer skill.
+approval_workflow:
+  rules:
+    - tier: ["T1", "T2", "T3"]
+      policy: "auto_approve"
+      description: >-
+        Low-to-moderate risk: localized fixes, docs, single-module logic.
+        Auto-approved after tests pass and security scan is clean.
+      conditions:
+        tests_passed: true
+        no_critical_security_findings: true
+        no_high_security_findings: true
+      auto_merge: true
+    - tier: ["T4", "T5"]
+      policy: "require_human_approval"
+      description: >-
+        High risk: architectural changes, cross-module refactors, security or
+        data-affecting changes. Must not merge until a human reviewer records
+        explicit approval.
+      conditions:
+        tests_passed: true
+        no_critical_security_findings: true
+      required_approvers: 1      # bump to 2 for regulated deployments
+      # If no human approves within this window, the PR stays open and a
+      # reminder is posted (see pr-reviewer failure_handling).
+      approval_timeout_hours: 72
+      auto_merge: false
+      # Who is allowed to approve. Empty = any repo collaborator with write.
+      allowed_roles: []
+  # Hard rule: security findings of these severities block ALL tiers.
+  blocking_security_severities: ["critical", "high"]
+  # A human may force-override a block, but the override is audited and
+  # requires a written justification (stored with the approval record).
+  allow_override_with_justification: true
+
+# ---------------------------------------------------------------------------
+# 3. Rollback — safe failure recovery
+# ---------------------------------------------------------------------------
+# If a merged change causes a regression or incident, DevFlow can roll back
+# the deployment via the cicd MCP server. Bounded retries + cooldown prevent
+# thrash during a cascading failure.
+rollback:
+  enabled: true
+  # Maximum rollback attempts before escalating to humans. Each attempt is a
+  # full deploy of the previous-known-good release.
+  max_retries: 3
+  # Wait between rollback attempts to let the CI/CD provider settle and to
+  # avoid amplifying a provider outage.
+  cooldown_seconds: 300
+  triggers:
+    # Automatic triggers — the system rolls back without waiting for a human.
+    automatic:
+      - "deployment.health_check_failed"
+      - "error_rate_spike"          # error rate > threshold post-deploy
+      - "test.regression_on_main"   # a previously-passing test fails on main
+    # Manual triggers — a human requests rollback via the TeamLeader.
+    manual:
+      - "human.rollback_requested"
+  # After max_retries, stop trying and page humans via the configured channel.
+  on_exhausted:
+    action: "escalate"
+    emit_event: "rollback.exhausted"
+    notify_channel: "${ALERT_CHANNEL:-}"  # e.g. Slack webhook, unset = log only
+  # Health check used to confirm a rollback succeeded.
+  health_check:
+    endpoint: "${HEALTH_CHECK_ENDPOINT:-/health}"
+    timeout_seconds: 30
+    retry_delay_seconds: 10
+    success_threshold: 2            # consecutive successes required
+
+# ---------------------------------------------------------------------------
+# 4. Credential Isolation — secrets never touch agents or prompts
+# ---------------------------------------------------------------------------
+# Agents and LLM prompts must never see raw credentials. DevFlow uses a
+# credential gateway: the runtime fetches short-lived scoped tokens on behalf
+# of an agent and injects them into MCP server calls only. The agent receives
+# only a capability handle, never the secret.
+credential_isolation:
+  # Gateway URL for the credential broker. Local dev uses an in-process
+  # gateway; prod points at a dedicated secret broker (e.g. Vault).
+  gateway_url: "${CREDENTIAL_GATEWAY_URL:-http://127.0.0.1:8200}"
+  # How often short-lived tokens are refreshed. 3600s aligns with typical
+  # GitHub PAT caching; lower for more sensitive deployments.
+  token_refresh_interval: 3600
+  # Secrets are referenced by logical name in config (e.g. ${GITHUB_PAT})
+  # and resolved by the gateway at runtime. They are NEVER expanded into
+  # agent-visible config, logs, traces, or prompts.
+  secret_refs:
+    github_token: "GITHUB_PERSONAL_ACCESS_TOKEN"
+    llm_api_key: "LLM_API_KEY"
+  # Capabilities granted per agent. An agent can only call gateway-issued
+  # tokens for the scopes listed here — least privilege.
+  agent_capabilities:
+    TeamLeader:
+      - "github:read_issue"
+      - "github:add_issue_comment"
+    TriageAgent:
+      - "github:read_issue"
+      - "github:read_labels"
+    LocatorAgent:
+      - "github:read_file"
+    CoderAgent:
+      - "github:read_file"
+      - "github:write_file"          # scoped to feature branches only
+      - "github:create_branch"
+    TesterAgent:
+      - "cicd:trigger_pipeline"
+      - "cicd:read_results"
+      - "cicd:read_coverage"
+    ReviewerAgent:
+      - "github:read_file"
+      - "github:create_pr"
+      - "github:review_pr"
+      - "github:merge_pr"
+      - "cicd:rollback"
+  # Branch protection: write capabilities are only valid on non-default
+  # branches. The runtime rejects any write_file targeting main/master.
+  branch_protection:
+    protected_branches: ["main", "master"]
+    require_branch_for_write: true
+  # Defense-in-depth: even with the gateway, scrub these patterns from any
+  # text before it is sent to the LLM or written to logs.
+  prompt_scrubbing:
+    enabled: true
+    patterns:
+      - "ghp_[A-Za-z0-9]{36}"          # GitHub PAT
+      - "github_pat_[A-Za-z0-9_]{82}"  # fine-grained PAT
+      - "sk-[A-Za-z0-9]{20,}"          # OpenAI-style key
+      - "AKIA[0-9A-Z]{16}"             # AWS access key id
+      - "-----BEGIN [A-Z ]*PRIVATE KEY-----"  # private key blocks
+    replacement: "[REDACTED]"
