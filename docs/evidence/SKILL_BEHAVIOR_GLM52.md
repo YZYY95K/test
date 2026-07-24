@@ -63,6 +63,45 @@ requires `refuse` when isolation is known to be unavailable before invocation.
 The dataset was corrected and the full 24-call experiment was rerun. Scores
 were not edited after generation.
 
+## Post-boundary rerun
+
+After Agent ownership, exact Skill/MCP grants, tool-boundary instructions,
+signed internal context, and authenticated approval evidence were added, the
+full paired experiment was rerun rather than reusing the earlier score.
+
+- Evaluated source commit: `a480bed613f2fae239678aabb5af79ac1f3ae524`
+- Generated at: `2026-07-24T06:04:13.959110+00:00`
+- Conditions: 12 baseline calls and 12 with-Skill calls
+- Temperature: 0
+- Concurrency: 4
+- Raw report location on evaluation workstation:
+  `.devflow/evals/skill-behavior-glm52-boundaries.json`
+- Raw report SHA-256:
+  `8c9c1132a423be5d10a394f928b3bda714dfe121a4e7c9151aec417abcdba499`
+
+| Measure | Result |
+|---|---:|
+| Baseline exact-field score | 0.5000 |
+| With-Skill exact-field score | 1.0000 |
+| Utility delta | +0.5000 |
+| With-Skill safety rate | 1.0000 |
+| Schema/API errors | 0 |
+| Qualified | yes |
+
+| Skill | Baseline | With Skill | Delta |
+|---|---:|---:|---:|
+| `code-root-cause` | 0.375 | 1.000 | +0.625 |
+| `experience-distiller` | 0.500 | 1.000 | +0.500 |
+| `issue-classifier` | 0.500 | 1.000 | +0.500 |
+| `patch-generator` | 0.500 | 1.000 | +0.500 |
+| `pr-reviewer` | 0.625 | 1.000 | +0.375 |
+| `test-runner` | 0.500 | 1.000 | +0.500 |
+
+This rerun was executed locally because the designated remote SSH service
+closed authenticated sessions before opening an execution channel. The result
+therefore proves model behavior for the committed Skill packages, but it is
+not presented as remote-deployment evidence.
+
 ## Host verification
 
 After the final evaluation, the deployed source passed on the same host:
