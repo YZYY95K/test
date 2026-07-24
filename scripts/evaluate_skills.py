@@ -79,6 +79,8 @@ def evaluate(skill_dir: Path) -> SkillScore:
     description = str(meta.get("description", ""))
     if "Use when" not in description:
         deduct("trigger_precision", 6, "description lacks explicit Use when trigger")
+    if "## Invocation gate" not in text:
+        deduct("trigger_precision", 4, "core instructions lack a pre-tool invocation gate")
     if len(contract.invoke_when) < 2 or len(contract.refuse_when) < 2:
         deduct("trigger_precision", 4, "positive and negative triggers are incomplete")
 

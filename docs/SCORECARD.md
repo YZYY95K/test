@@ -8,7 +8,7 @@ engineering deliverables.
 |---|---:|---|---|
 | Scenario value and replicability | 25% | End-to-end software issue resolution; explicit users, risk tiers, repeatable fixture | Add measured time/cost reduction on real repositories and 3 organization personas |
 | Multi-Agent collaboration and autonomous closure | 25% | 6 clear roles, DAG plan, structured hand-offs, failure feedback, T4/T5 human gate, AgentTeams Team manifest | Run and record the full scenario inside an installed AgentTeams Matrix room |
-| Skill engineering and ecosystem reuse | 25% | 6 self-contained v2 Skills; typed contracts, triggers/refusals, dependencies, permissions, failures, hand-offs, evidence gates, examples, validators, UI metadata, release/rollback policy; reproducible 100-point static gate | Run paired with/without-Skill evaluation on pinned real repositories and publish signed releases |
+| Skill engineering and ecosystem reuse | 25% | 6 self-contained v2 Skills; typed contracts, triggers/refusals, dependencies, permissions, failures, hand-offs, evidence gates, examples, validators, UI metadata, release/rollback policy; reproducible static gate plus 12-case paired behavior protocol | Extend the paired evaluation to blinded repository tasks, repeated trials, and signed releases |
 | Engineering, verification, security, audit | 20% | CLI, config loader, real sandboxed regression test, JSON event report, logs/traces/metrics, credential gateway design | Implement production CI/CD MCP server, OpenTelemetry export dashboard, approval and rollback integration test |
 | Open/open-source contribution | 5% | Apache-2.0, README, reproducible demo, interface docs | Add contribution guide, releases, dependency SBOM, public examples |
 

@@ -12,8 +12,7 @@
 # rather than an incidental label.
 #
 # Conventions:
-#   - model "glm-4"  : served via OpenAI-compatible endpoint (LLM_BASE_URL)
-#   - model "codex"  : code-specialized model used for patch generation
+#   - model "glm-5.2": served via the OpenAI-compatible LLM_BASE_URL
 #   - temperature    : lower = deterministic orchestration, higher = creative
 #   - watches        : events this agent subscribes to via the event bus
 #   - boundaries     : hard limits the runtime enforces; violations are audited
@@ -54,7 +53,7 @@ agents:
       description: >-
         Central orchestrator that decomposes tasks, tracks state, and
         arbitrates conflicts across the agent team.
-      model: "glm-4"
+      model: "glm-5.2"
       temperature: 0.3  # low temperature for stable, reproducible planning
       system_prompt_ref: "prompts/team_leader.md"
     capabilities:
@@ -97,7 +96,7 @@ agents:
       description: >-
         Classifies incoming issues into T1-T5 complexity tiers, deduplicates
         against historical issues, and assigns priority.
-      model: "glm-4"
+      model: "glm-5.2"
       temperature: 0.2  # very low — classification must be deterministic
       system_prompt_ref: "prompts/triage.md"
     capabilities:
@@ -129,7 +128,7 @@ agents:
         Performs code root cause analysis and impact assessment using RAG over
         the indexed repository, producing a located-context payload for the
         CoderAgent.
-      model: "glm-4"
+      model: "glm-5.2"
       temperature: 0.4  # slightly higher to explore candidate locations
       system_prompt_ref: "prompts/locator.md"
     capabilities:
@@ -157,7 +156,7 @@ agents:
   # 4. CoderAgent — Patch Generation
   # ===========================================================================
   # Consumes the located-context payload and produces a concrete diff. Uses a
-  # code-specialized model (codex) when available, falling back to glm-4.
+  # Uses the deployment-pinned GLM-5.2 model validated against Z.AI.
   # Output is a structured patch object, never a direct file write — the
   # ReviewerAgent/CI gate sits between patch and merge.
   # ===========================================================================
@@ -166,13 +165,12 @@ agents:
       role: "Coder Agent"
       description: >-
         Generates code-aware fix patches from located context using a
-        code-specialized model, with automatic fallback to GLM-4.
-      model: "codex"            # primary; falls back per model_fallback
+        deployment-pinned model, with an explicit same-model retry fallback.
+      model: "glm-5.2"
       temperature: 0.2          # low for syntactically stable diffs
       system_prompt_ref: "prompts/coder.md"
       model_fallback:           # ordered fallback chain
-        - "codex"
-        - "glm-4"
+        - "glm-5.2"
     capabilities:
       - patch_generation      # produce unified diff / structured patch
       - code_context_awareness # respects surrounding style & imports
@@ -203,7 +201,7 @@ agents:
       description: >-
         Executes tests, compares results against the baseline, and analyses
         coverage to gate patch promotion.
-      model: "glm-4"
+      model: "glm-5.2"
       temperature: 0.1  # near-deterministic — test orchestration must be stable
       system_prompt_ref: "prompts/tester.md"
     capabilities:
@@ -235,7 +233,7 @@ agents:
       description: >-
         Creates pull requests, performs automated code review and security
         scanning, and drives the approval workflow per the security policy.
-      model: "glm-4"
+      model: "glm-5.2"
       temperature: 0.3
       system_prompt_ref: "prompts/reviewer.md"
     capabilities:

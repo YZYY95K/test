@@ -7,6 +7,13 @@ description: Locate likely root cause and blast radius using read-only repositor
 
 Produce a compact `LocatedContext`; do not solve or edit the issue.
 
+## Invocation gate
+
+Evaluate `refuse_when` before any tool use. A known refusal means `invoke=false`
+and routing to the contract's declared failure or boundary consumer; do not
+enter the procedure. Failure rules apply only when a precondition becomes false
+after a valid invocation starts.
+
 ## Procedure
 
 1. Validate `ClassifiedIssue` and its repository revision.

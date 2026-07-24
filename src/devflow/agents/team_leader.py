@@ -115,7 +115,7 @@ class TeamLeader(BaseAgent):
             "Central orchestrator that decomposes tasks, tracks state, and "
             "arbitrates conflicts across the agent team."
         ),
-        model="glm-4",
+        model="glm-5.2",
         temperature=0.3,
         system_prompt_ref="prompts/team_leader.md",
     )

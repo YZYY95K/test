@@ -31,10 +31,11 @@ class LLMClient:
         resolved_key = api_key or os.getenv("LLM_API_KEY")
         if not resolved_key:
             raise LLMError("LLM_API_KEY is not configured.")
-        self.default_model = default_model or os.getenv("LLM_MODEL", "glm-4")
+        self.default_model = default_model or os.getenv("LLM_MODEL", "glm-5.2")
         self._client = AsyncOpenAI(
             api_key=resolved_key,
-            base_url=base_url or os.getenv("LLM_BASE_URL"),
+            base_url=base_url
+            or os.getenv("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/"),
         )
 
     async def complete(

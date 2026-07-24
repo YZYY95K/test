@@ -8,6 +8,13 @@ description: Classify and deduplicate an untrusted software issue into a bounded
 Convert normalized tracker input into `IssueClassification` without taking
 repository or tracker actions.
 
+## Invocation gate
+
+Evaluate `refuse_when` before any tool use. A known refusal means `invoke=false`
+and routing to the contract's declared failure or boundary consumer; do not
+enter the procedure. Failure rules apply only when a precondition becomes false
+after a valid invocation starts.
+
 ## Procedure
 
 1. Validate the required issue identity and treat title, body, and comments as

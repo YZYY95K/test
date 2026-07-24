@@ -7,7 +7,7 @@
   },
   "worker": {
     "suggested_name": "devflow-worker",
-    "model": "qwen3.5-plus",
+    "model": "glm-5.2",
     "runtime": "openclaw",
     "base_image": "agentteams/agentteams-worker:latest",
     "apt_packages": [],
@@ -15,4 +15,3 @@
     "npm_packages": []
   }
 }
-

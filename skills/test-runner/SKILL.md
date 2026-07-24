@@ -7,6 +7,14 @@ description: Apply a candidate only in isolation, execute tests, and compare aga
 
 Produce reproducible `TestRunResult` evidence; never approve a patch.
 
+## Invocation gate
+
+Evaluate `refuse_when` before any tool use. A known refusal means `invoke=false`
+and routing to the contract's declared failure or boundary consumer; do not
+enter the procedure. Failure rules apply only when a precondition becomes false
+after a valid invocation starts. In particular, isolation known to be
+unavailable is a refusal; isolation lost after startup is `ISOLATION_UNAVAILABLE`.
+
 ## Procedure
 
 1. Validate the candidate digest, repository revision, tier, and test policy.

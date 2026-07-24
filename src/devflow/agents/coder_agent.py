@@ -22,10 +22,10 @@ class CoderAgent(BaseAgent):
         description=(
             "Generate minimal, repository-aware patches from verified located context."
         ),
-        model="codex",
+        model="glm-5.2",
         temperature=0.2,
         system_prompt_ref="prompts/coder.md",
-        model_fallback=("codex", "glm-4"),
+        model_fallback=("glm-5.2",),
     )
     _CAPABILITIES = (
         "patch_generation",

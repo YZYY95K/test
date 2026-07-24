@@ -26,7 +26,7 @@ class ReviewerAgent(BaseAgent):
         description=(
             "Review correctness and security, create PRs, and enforce approval policy."
         ),
-        model="glm-4",
+        model="glm-5.2",
         temperature=0.3,
         system_prompt_ref="prompts/reviewer.md",
     )
@@ -188,4 +188,3 @@ class ReviewerAgent(BaseAgent):
 
 
 __all__ = ["ReviewerAgent"]
-

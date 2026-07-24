@@ -7,6 +7,13 @@ description: Distill a terminal reviewed run into reusable, provenance-linked ex
 
 Create a safe `ExperiencePattern`; do not reopen or reinterpret the decision.
 
+## Invocation gate
+
+Evaluate `refuse_when` before any tool use. A known refusal means `invoke=false`
+and routing to the contract's declared failure or boundary consumer; do not
+enter the procedure. Failure rules apply only when a precondition becomes false
+after a valid invocation starts.
+
 ## Procedure
 
 1. Require a terminal reviewed outcome, trace ID, artifact digests, and policy

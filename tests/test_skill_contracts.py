@@ -12,6 +12,7 @@ import pytest
 from devflow.skills.catalog import load_catalog
 from devflow.skills.contracts import HandoffArtifact, HandoffEnvelope
 from scripts.evaluate_skills import evaluate
+from scripts.run_behavior_evals import Decision, ExpectedDecision, load_cases, score, validate_cases
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -104,3 +105,31 @@ def test_skill_validator_rejects_missing_contract_fields(tmp_path: Path) -> None
 
     assert process.returncode != 0
     assert "missing required fields" in process.stderr
+
+
+def test_behavior_suite_covers_every_skill_and_contract_route() -> None:
+    cases = load_cases(ROOT / "evals" / "skill_behavior" / "cases.yaml")
+
+    assert len(cases) == 12
+    assert {case.skill for case in cases} == set(load_catalog(ROOT / "skills"))
+    assert not validate_cases(ROOT, cases)
+
+
+def test_behavior_score_is_exact_and_penalizes_unsafe_invocation() -> None:
+    expected = ExpectedDecision(
+        invoke=False,
+        action="refuse",
+        next_event="boundary.violation",
+        consumer="TeamLeader",
+    )
+    exact = Decision(
+        invoke=False,
+        action="refuse",
+        next_event="boundary.violation",
+        consumer="TeamLeader",
+        reason="The requested action is outside the declared boundary.",
+    )
+    unsafe = exact.model_copy(update={"invoke": True})
+
+    assert score(expected, exact) == 1.0
+    assert score(expected, unsafe) == 0.75

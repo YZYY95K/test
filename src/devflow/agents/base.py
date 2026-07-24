@@ -64,7 +64,7 @@ class AgentIdentity:
     model: str
     temperature: float = 0.3
     system_prompt_ref: str | None = None
-    #: Ordered fallback chain for the underlying model (e.g. codex -> glm-4).
+    #: Ordered fallback chain for the underlying model.
     model_fallback: tuple[str, ...] = ()
 
 
@@ -155,7 +155,7 @@ class BaseAgent:
     _IDENTITY: AgentIdentity = AgentIdentity(
         role="Agent",
         description="Unspecified DevFlow agent.",
-        model="glm-4",
+        model="glm-5.2",
     )
     #: Capabilities this agent owns (mirrors ``agents.yaml``).
     _CAPABILITIES: tuple[str, ...] = ()

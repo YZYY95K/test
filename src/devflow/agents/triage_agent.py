@@ -38,7 +38,7 @@ class TriageAgent(BaseAgent):
             "Classifies incoming issues into T1-T5 complexity tiers, "
             "deduplicates against historical issues, and assigns priority."
         ),
-        model="glm-4",
+        model="glm-5.2",
         temperature=0.2,  # very low — classification must be deterministic
         system_prompt_ref="prompts/triage.md",
     )

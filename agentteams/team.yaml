@@ -10,7 +10,7 @@ spec:
   peerMentions: true
   leader:
     name: devflow-lead
-    model: qwen3.5-plus
+    model: glm-5.2
     package: file:///tmp/devflow-worker.zip
     heartbeat:
       enabled: true
@@ -36,7 +36,7 @@ spec:
       Pause T4/T5 after automated gates until a human approval is recorded.
   workers:
     - name: devflow-triage
-      model: qwen3.5-plus
+      model: glm-5.2
       package: file:///tmp/devflow-worker.zip
       identity: |
         - Name: DevFlow Triage
@@ -47,7 +47,7 @@ spec:
         Own only the issue-classifier Skill. Return its structured artifact,
         mention devflow-lead in the Team Room, then stop.
     - name: devflow-locator
-      model: qwen3.5-plus
+      model: glm-5.2
       package: file:///tmp/devflow-worker.zip
       skills: [github-operations]
       mcpServers:
@@ -63,7 +63,7 @@ spec:
         Own only the code-root-cause Skill. Use read-only repository tools.
         Store located context as a shared task artifact and notify the Leader.
     - name: devflow-coder
-      model: qwen3.5-plus
+      model: glm-5.2
       runtime: hermes
       package: file:///tmp/devflow-worker.zip
       skills: [git-delegation]
@@ -76,7 +76,7 @@ spec:
         Own only the patch-generator Skill. Produce a candidate branch/patch;
         never merge, self-approve, or weaken tests.
     - name: devflow-tester
-      model: qwen3.5-plus
+      model: glm-5.2
       package: file:///tmp/devflow-worker.zip
       identity: |
         - Name: DevFlow Tester
@@ -87,7 +87,7 @@ spec:
         Own only the test-runner Skill. Test candidates in isolation and return
         exact structured evidence to the Team Room.
     - name: devflow-reviewer
-      model: qwen3.5-plus
+      model: glm-5.2
       package: file:///tmp/devflow-worker.zip
       skills: [github-operations]
       mcpServers:

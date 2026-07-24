@@ -18,7 +18,7 @@ class TesterAgent(BaseAgent):
     _IDENTITY = AgentIdentity(
         role="Tester Agent",
         description="Execute isolated tests and report evidence without editing code.",
-        model="glm-4",
+        model="glm-5.2",
         temperature=0.1,
         system_prompt_ref="prompts/tester.md",
     )
@@ -110,4 +110,3 @@ class TesterAgent(BaseAgent):
 
 
 __all__ = ["TesterAgent"]
-

@@ -7,6 +7,13 @@ description: Generate a minimal structured candidate patch from verified located
 
 Return a candidate `Patch`; Tester and Reviewer own promotion.
 
+## Invocation gate
+
+Evaluate `refuse_when` before any tool use. A known refusal means `invoke=false`
+and routing to the contract's declared failure or boundary consumer; do not
+enter the procedure. Failure rules apply only when a precondition becomes false
+after a valid invocation starts.
+
 ## Procedure
 
 1. Validate `LocatedContext`, repository revision, tier, and optional failure

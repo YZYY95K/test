@@ -33,6 +33,8 @@ approval.
 - AgentTeams `Team` manifest and six self-contained Skill v2 packages with
   typed contracts, deterministic validators, UI metadata, examples, and
   release/rollback policy.
+- Paired GLM behavior evaluation that compares each Skill against a no-Skill
+  baseline on positive and adversarial routing cases.
 - Integrity-checked `HandoffEnvelope` collaboration with versioned artifacts,
   idempotency keys, and SHA-256.
 
@@ -104,11 +106,13 @@ tests/             unit and end-to-end tests
 .\.venv\Scripts\python -m mypy src
 .\.venv\Scripts\python -m pytest --cov=devflow --cov-report=term-missing
 .\.venv\Scripts\python scripts\evaluate_skills.py
+.\.venv\Scripts\python scripts\run_behavior_evals.py --validate-only
 .\.venv\Scripts\devflow demo
 ```
 
 See [the research basis](docs/RESEARCH.md), [competition scorecard](docs/SCORECARD.md),
-[Skill engineering standard](docs/SKILL_ENGINEERING.md), and
+[Skill engineering standard](docs/SKILL_ENGINEERING.md),
+[behavior evaluation protocol](docs/SKILL_BEHAVIOR_EVAL.md), and
 [AgentTeams mapping](docs/AGENTTEAMS.md) for design rationale and remaining work.
 
 ## Security

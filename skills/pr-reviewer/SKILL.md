@@ -7,6 +7,14 @@ description: Review a tested candidate for correctness, security, scope, and app
 
 Act as the independent promotion gate and return `ReviewResult`.
 
+## Invocation gate
+
+Evaluate `refuse_when` before any tool use. A known refusal means `invoke=false`
+and routing to the contract's declared failure or boundary consumer; do not
+enter the procedure. Failure rules apply only when a precondition becomes false
+after a valid invocation starts. Missing T4/T5 human approval is not a refusal:
+invoke the Skill and block on `approval.required`.
+
 ## Procedure
 
 1. Validate Patch and TestRunResult integrity; reject red, missing, stale, or

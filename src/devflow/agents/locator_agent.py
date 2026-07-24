@@ -77,7 +77,7 @@ class LocatorAgent(BaseAgent):
             "over the indexed repository, producing a located-context payload "
             "for the CoderAgent."
         ),
-        model="glm-4",
+        model="glm-5.2",
         temperature=0.4,  # slightly higher to explore candidate locations
         system_prompt_ref="prompts/locator.md",
     )
