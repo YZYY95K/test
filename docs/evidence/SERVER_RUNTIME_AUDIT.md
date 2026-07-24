@@ -28,6 +28,15 @@ mounts, and exposes no host Docker, containerd, or Podman socket. Systemd is
 offline because the container entrypoint is PID 1. The diagnostic daemon was
 stopped after the test; the installed Docker and Compose packages remain.
 
+An independent Python bypass probe produced the same result. Python 3.11.6
+with Docker SDK 7.0.0 connected successfully to Docker Engine 25.0.3 over its
+Unix API socket, then received HTTP 500 with `unshare: operation not permitted`
+while importing the 3.84 MB local image tar. Separate `ctypes` calls to the
+kernel `unshare(2)` syscall for user, mount, and PID namespaces each returned
+`EPERM`. This rules out the Docker CLI and shell wrapper as the source of the
+failure: Python cannot override the outer container's seccomp and capability
+policy.
+
 ## Verified AgentTeams blocker
 
 The official AgentTeams deployment requires Docker Engine/Desktop or a
