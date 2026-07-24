@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import statistics
 import subprocess
@@ -23,6 +24,7 @@ class RepositorySpec(BaseModel):
     url: str
     commit: str = Field(pattern=r"^[a-f0-9]{40}$")
     tree: str = Field(pattern=r"^[a-f0-9]{40}$")
+    snapshot_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class Decision(BaseModel):
@@ -68,6 +70,34 @@ def load_manifest(path: Path) -> BenchmarkManifest:
     return BenchmarkManifest.model_validate(yaml.safe_load(path.read_text("utf-8")))
 
 
+def _source_digest(repository: Path) -> str:
+    """Hash source paths and bytes, excluding transport provenance metadata."""
+
+    digest = hashlib.sha256()
+    paths = sorted(
+        (
+            path
+            for path in repository.rglob("*")
+            if (path.is_file() or path.is_symlink())
+            and ".git" not in path.relative_to(repository).parts
+            and path.name != ".devflow-source.json"
+        ),
+        key=lambda path: path.relative_to(repository).as_posix(),
+    )
+    for path in paths:
+        relative = path.relative_to(repository).as_posix().encode("utf-8")
+        payload = (
+            f"SYMLINK:{path.readlink()}".encode("utf-8")
+            if path.is_symlink()
+            else path.read_bytes()
+        )
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
 def validate_repositories(manifest: BenchmarkManifest, repos_root: Path) -> list[str]:
     """Verify exact revisions and repository-contained evidence paths."""
 
@@ -89,14 +119,21 @@ def validate_repositories(manifest: BenchmarkManifest, repos_root: Path) -> list
             except (OSError, json.JSONDecodeError):
                 errors.append(f"{name}: repository checkout is unavailable")
                 continue
-            if marker != {"url": spec.url, "commit": spec.commit, "tree": spec.tree}:
+            expected_marker = spec.model_dump(mode="json")
+            if marker != expected_marker:
                 errors.append(f"{name}: source provenance marker does not match")
+            snapshot = _source_digest(repository)
+            if snapshot != spec.snapshot_sha256:
+                errors.append(
+                    f"{name}: expected snapshot {spec.snapshot_sha256}, got {snapshot}"
+                )
+            continue
         else:
             if head != spec.commit:
                 errors.append(f"{name}: expected {spec.commit}, got {head}")
         try:
             tree = subprocess.run(
-                ["git", "-C", str(repository), "write-tree"],
+                ["git", "-C", str(repository), "rev-parse", "HEAD^{tree}"],
                 capture_output=True,
                 text=True,
                 timeout=30,
