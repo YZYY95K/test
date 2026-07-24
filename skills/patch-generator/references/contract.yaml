@@ -24,6 +24,7 @@ output:
 dependencies:
   - Code-specialized structured completion adapter.
   - Non-mutating syntax, diff, path, and secret validators.
+mcp_tools: []
 allowed_actions:
   - Read the supplied verified context and repository conventions.
   - Generate repository-relative candidate file changes and tests.

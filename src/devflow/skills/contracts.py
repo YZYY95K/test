@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class ArtifactContract(BaseModel):
@@ -68,6 +69,7 @@ class SkillContract(BaseModel):
     input: ArtifactContract
     output: ArtifactContract
     dependencies: list[str] = Field(min_length=1)
+    mcp_tools: list[str] = Field(default_factory=list)
     allowed_actions: list[str] = Field(min_length=1)
     forbidden_actions: list[str] = Field(min_length=3)
     handoffs: list[HandoffRule] = Field(min_length=1)
@@ -84,6 +86,16 @@ class SkillContract(BaseModel):
                     f"{failure.code}: non-retryable failures need max_attempts=0"
                 )
         return self
+
+    @field_validator("mcp_tools")
+    @classmethod
+    def _validate_mcp_tools(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("mcp_tools must be unique")
+        for item in value:
+            if not re.fullmatch(r"[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*", item):
+                raise ValueError(f"invalid MCP tool identifier: {item}")
+        return value
 
 
 class HandoffStatus(str, Enum):

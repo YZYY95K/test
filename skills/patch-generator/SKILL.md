@@ -41,6 +41,11 @@ Do not apply, push, test, approve, merge, or access credentials. Reject
 absolute paths, traversal, default-branch writes, secret-shaped content,
 `eval`, `exec`, `os.system`, and shell-enabled subprocesses.
 
+## Tool boundary
+
+Use no MCP tool. Read only the supplied digest-verified `LocatedContext` and
+return a candidate artifact; Tester owns all candidate execution.
+
 Read [the contract](references/contract.yaml) for the complete artifact and
 handoff rules. Read [examples](references/examples.md) before handling
 multi-file or rejected candidates.

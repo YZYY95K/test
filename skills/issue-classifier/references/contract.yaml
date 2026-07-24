@@ -22,6 +22,7 @@ output:
 dependencies:
   - Structured completion adapter.
   - Read-only reviewed experience query.
+mcp_tools: []
 allowed_actions:
   - Read normalized issue metadata.
   - Query redacted reviewed experience summaries.

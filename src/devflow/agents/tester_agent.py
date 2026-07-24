@@ -10,6 +10,7 @@ from devflow.models.issue import ComplexityLevel
 from devflow.models.patch import Patch
 from devflow.models.test_result import TestRunResult
 from devflow.observability import logger
+from devflow.skills.contracts import HandoffStatus
 
 
 class TesterAgent(BaseAgent):
@@ -35,6 +36,7 @@ class TesterAgent(BaseAgent):
         "Must run the full suite for T3+ issues",
     )
     _WATCHES = ("coder.patch_ready", "pipeline.completed")
+    _OWNED_SKILLS = ("test-runner",)
     _FORBIDDEN_ACTIONS = {
         "modify_source": "Cannot modify source code",
         "modify_tests": "Cannot modify test files",
@@ -77,6 +79,9 @@ class TesterAgent(BaseAgent):
                     "patch": patch.model_dump(mode="json"),
                     "full_suite": full_suite,
                 },
+                skill="test-runner",
+                issue_id=issue_id,
+                risk_tier=tier.value,
             )
             result = (
                 raw if isinstance(raw, TestRunResult) else TestRunResult.model_validate(raw)
@@ -94,9 +99,14 @@ class TesterAgent(BaseAgent):
                 failed=result.failed,
                 errors=result.errors,
             )
-            await self._emit_event(
+            await self._emit_handoff(
                 event,
-                {
+                issue_id=issue_id,
+                consumer=("ReviewerAgent" if event == "test.passed" else "CoderAgent"),
+                skill="test-runner",
+                artifact_type="TestEvidence",
+                status=(HandoffStatus.READY if event == "test.passed" else HandoffStatus.RETRY),
+                payload={
                     "issue_id": issue_id,
                     "test_result": result.model_dump(mode="json"),
                     "failing_tests": [

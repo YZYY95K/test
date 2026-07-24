@@ -23,6 +23,11 @@ output:
 dependencies:
   - Isolated CI or disposable local sandbox.
   - Repository-declared test adapter and trusted baseline revision.
+mcp_tools:
+  - cicd:run_tests
+  - cicd:trigger_pipeline
+  - cicd:get_test_results
+  - cicd:get_coverage
 allowed_actions:
   - Create and destroy an isolated candidate checkout.
   - Apply the candidate inside that checkout.

@@ -33,10 +33,18 @@ multi-agent transport.
 6. Wait until `agt get teams devflow-swe -o json` reports `phase: Active`.
 7. In Element, give the Manager a repository issue and request a DevFlow run.
 
-The manifest references built-in `github-operations` and `git-delegation`
-skills only where needed. Custom DevFlow skills arrive through the shared
-package. Worker-specific `agents` instructions state which skill each Worker
-owns, preventing responsibility drift.
+The manifest references built-in `github-operations` only for repository-read
+and PR-review roles. Coder receives no Git or MCP capability and emits only a
+typed patch artifact. Custom DevFlow skills arrive through the shared package.
+Worker-specific `agents` instructions state which Skill each Worker owns,
+preventing responsibility drift.
+
+AgentTeams supplies the collaboration rooms and delivery lifecycle; DevFlow
+does not treat a room message as trusted authorization. Every delivered domain
+artifact is wrapped in a digest-bound `HandoffEnvelope`, and the receiving
+Worker verifies its consumer and Skill ownership before execution. MCP access
+then requires the same Agent + Skill pair. See the
+[responsibility matrix and MCP trust model](BOUNDARIES_AND_MCP.md).
 
 The bundled MCP URL is the upstream local-install gateway endpoint. Replace it
 when the AgentTeams gateway uses another hostname, port, or HTTPS origin.

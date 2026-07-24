@@ -40,6 +40,7 @@ class CoderAgent(BaseAgent):
         "Maximum 3 patch-generation attempts per sub-task before escalation",
     )
     _WATCHES = ("locator.completed", "review.rejected", "test.failed")
+    _OWNED_SKILLS = ("patch-generator",)
     _FORBIDDEN_ACTIONS = {
         "push_default_branch": "Cannot push directly to the default branch",
         "run_tests": "Cannot run tests",
@@ -69,9 +70,13 @@ class CoderAgent(BaseAgent):
                 files=len(patch.changes),
                 branch=patch.branch_name,
             )
-            await self._emit_event(
+            await self._emit_handoff(
                 "coder.patch_ready",
-                {
+                issue_id=issue.issue_number,
+                consumer="TesterAgent",
+                skill="patch-generator",
+                artifact_type="PatchCandidate",
+                payload={
                     "issue_id": issue.issue_number,
                     "tier": tier.value,
                     "patch": patch.model_dump(mode="json"),

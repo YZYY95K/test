@@ -28,3 +28,6 @@ class LLMError(DevFlowError):
 class MCPError(DevFlowError):
     """Raised when an MCP tool call fails."""
 
+
+class MCPAuthorizationError(MCPError):
+    """Raised when an MCP call violates the declared capability boundary."""

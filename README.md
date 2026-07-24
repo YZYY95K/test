@@ -25,7 +25,9 @@ approval.
 - Typed event bus and lifecycle events for local execution.
 - AST-aware code indexing and an experience store backed by ChromaDB.
 - OpenAI-compatible LLM client with Pydantic response validation.
-- MCP boundaries for GitHub and isolated CI/CD tools.
+- Default-deny MCP boundaries that authorize the exact Agent + active Skill,
+  validate arguments, require digest-bound approval for dangerous operations,
+  and write hash-chained audit evidence.
 - Structured logs, OpenTelemetry spans, and in-memory metrics.
 - Credential-free offline demo that applies a real candidate patch in a
   temporary repository, executes a real regression test, reviews the result,
@@ -36,7 +38,8 @@ approval.
 - Paired GLM behavior evaluation that compares each Skill against a no-Skill
   baseline on positive and adversarial routing cases.
 - Integrity-checked `HandoffEnvelope` collaboration with versioned artifacts,
-  idempotency keys, and SHA-256.
+  explicit consumer/Skill ownership, retry status, idempotency keys, and
+  SHA-256.
 
 ## Quick start
 
@@ -116,6 +119,8 @@ See [the research basis](docs/RESEARCH.md), [competition scorecard](docs/SCORECA
 [Skill engineering standard](docs/SKILL_ENGINEERING.md),
 [behavior evaluation protocol](docs/SKILL_BEHAVIOR_EVAL.md), and
 [AgentTeams mapping](docs/AGENTTEAMS.md) for design rationale and remaining work.
+The executable responsibility matrix and MCP trust model are documented in
+[Agent boundaries and MCP trust model](docs/BOUNDARIES_AND_MCP.md).
 The latest model-run evidence is recorded in
 [GLM-5.2 Skill behavior evidence](docs/evidence/SKILL_BEHAVIOR_GLM52.md).
 

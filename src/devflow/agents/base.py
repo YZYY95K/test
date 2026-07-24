@@ -22,6 +22,8 @@ that the concrete subclasses can focus on their domain logic:
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -31,8 +33,10 @@ from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from devflow.event_bus import publish, subscribe
 from devflow.exceptions import AgentError, BoundaryViolationError, MCPError
+from devflow.mcp.contracts import ApprovalEvidence, MCPCallContext
 from devflow.models.trace import SpanStatus
 from devflow.observability import logger, metrics, tracer
+from devflow.skills.contracts import HandoffEnvelope, HandoffStatus
 
 #: Type alias for an async event handler callable.
 EventHandler = Callable[[dict[str, Any]], Awaitable[None]]
@@ -81,6 +85,7 @@ class AgentConfig:
     capabilities: list[str] = field(default_factory=list)
     boundaries: list[str] = field(default_factory=list)
     watches: list[str] = field(default_factory=list)
+    skills: list[str] = field(default_factory=list)
     max_consecutive_failures: int = 3
     timeout_seconds: int = 600
     max_tokens_per_invocation: int = 32000
@@ -91,7 +96,12 @@ class MCPClient(Protocol):
     """Minimal contract for an MCP (Model Context Protocol) client."""
 
     async def call_tool(
-        self, server: str, tool: str, arguments: dict[str, Any]
+        self,
+        server: str,
+        tool: str,
+        arguments: dict[str, Any],
+        *,
+        context: MCPCallContext,
     ) -> Any:
         """Invoke ``tool`` on ``server`` with ``arguments`` and return the result."""
         ...
@@ -163,6 +173,8 @@ class BaseAgent:
     _BOUNDARIES: tuple[str, ...] = ()
     #: Events this agent subscribes to (mirrors ``agents.yaml``).
     _WATCHES: tuple[str, ...] = ()
+    #: Skills this Agent is permitted to own or invoke.
+    _OWNED_SKILLS: tuple[str, ...] = ()
     #: Action tokens explicitly forbidden by this agent's boundaries. Each
     #: forbidden action maps to the boundary description it would violate.
     _FORBIDDEN_ACTIONS: dict[str, str] = {}
@@ -217,6 +229,12 @@ class BaseAgent:
         return list(self._config.watches)
 
     @property
+    def skills(self) -> list[str]:
+        """Skills this Agent is permitted to own or invoke."""
+
+        return list(self._config.skills)
+
+    @property
     def max_consecutive_failures(self) -> int:
         """Soft limit on consecutive failures before yielding to TeamLeader."""
         return self._config.max_consecutive_failures
@@ -255,6 +273,7 @@ class BaseAgent:
         events. Callers should always use this method rather than ``run``
         directly.
         """
+        normalized_input = self._unwrap_handoff(input_data)
         self._state = AgentState.RUNNING
         logger.info(
             "agent.start",
@@ -264,7 +283,7 @@ class BaseAgent:
         )
         try:
             async with self._trace_span("run"):
-                result = await self.run(input_data)
+                result = await self.run(normalized_input)
         except Exception as exc:  # noqa: BLE001 — agent boundary
             await self._record_failure(exc)
             self._state = AgentState.FAILED
@@ -286,7 +305,7 @@ class BaseAgent:
                 "agent": self.name,
                 "timestamp": _utcnow().isoformat(),
             }
-            issue_id = _extract_issue_id(input_data)
+            issue_id = _extract_issue_id(normalized_input)
             if issue_id is not None:
                 completion_payload["issue_id"] = issue_id
             await self._emit_event(
@@ -343,6 +362,67 @@ class BaseAgent:
         enriched = {"agent": self.name, **payload}
         logger.info("agent.emit_event", agent=self.name, event_type=event_type)
         await publish(event_type, enriched)
+
+    async def _emit_handoff(
+        self,
+        event_type: str,
+        *,
+        issue_id: int,
+        consumer: str,
+        skill: str,
+        artifact_type: str,
+        payload: dict[str, Any],
+        status: HandoffStatus = HandoffStatus.READY,
+    ) -> None:
+        """Publish a digest-bound typed result instead of an ambiguous payload."""
+
+        if skill not in self.skills:
+            raise BoundaryViolationError(
+                f"Agent '{self.name}' does not own hand-off Skill '{skill}'."
+            )
+        task_id = f"{issue_id}-{self.name.lower()}-{skill}"
+        envelope = HandoffEnvelope.create(
+            run_id=f"issue-{issue_id}",
+            issue_id=issue_id,
+            task_id=task_id,
+            producer=self.name,
+            consumer=consumer,
+            skill=skill,
+            artifact_type=artifact_type,
+            payload=payload,
+            status=status,
+        )
+        await self._emit_event(event_type, envelope.model_dump(mode="json"))
+
+    def _unwrap_handoff(self, input_data: Any) -> Any:
+        """Validate an AgentTeams hand-off before exposing its artifact to a worker."""
+
+        if isinstance(input_data, HandoffEnvelope):
+            envelope = input_data
+        elif isinstance(input_data, dict) and input_data.get("envelope_version") == "1.0":
+            try:
+                envelope = HandoffEnvelope.model_validate(input_data)
+            except ValueError as exc:
+                raise BoundaryViolationError(f"Invalid hand-off envelope: {exc}") from exc
+        else:
+            return input_data
+        if envelope.consumer != self.name:
+            raise BoundaryViolationError(
+                f"Hand-off consumer '{envelope.consumer}' does not match '{self.name}'."
+            )
+        if envelope.skill not in self.skills:
+            raise BoundaryViolationError(
+                f"Agent '{self.name}' does not own Skill '{envelope.skill}'."
+            )
+        if envelope.status not in {HandoffStatus.READY, HandoffStatus.RETRY}:
+            raise BoundaryViolationError(
+                f"Hand-off status '{envelope.status.value}' is not executable."
+            )
+        if not envelope.artifact.verify_integrity() or envelope.artifact.inline is None:
+            raise BoundaryViolationError("Hand-off artifact failed integrity validation.")
+        payload = envelope.artifact.inline
+        nested = payload.get("input")
+        return nested if isinstance(nested, dict) else payload
 
     # ------------------------------------------------------------------ #
     # Boundary enforcement
@@ -526,7 +606,15 @@ class BaseAgent:
     # External service helpers (MCP / vector store)
     # ------------------------------------------------------------------ #
     async def _call_mcp(
-        self, server: str, tool: str, arguments: dict[str, Any]
+        self,
+        server: str,
+        tool: str,
+        arguments: dict[str, Any],
+        *,
+        skill: str,
+        issue_id: int,
+        risk_tier: str | None = None,
+        approval: ApprovalEvidence | None = None,
     ) -> Any:
         """Invoke an MCP tool, failing closed if no client is wired.
 
@@ -540,13 +628,41 @@ class BaseAgent:
                 f"Agent '{self.name}' cannot call MCP '{server}:{tool}': "
                 "no MCP client is configured."
             )
+        serialized = json.dumps(
+            arguments,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
+        arguments_digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        run_id = f"issue-{issue_id}"
+        task_id = f"{issue_id}-{self.name.lower()}-{skill}"
+        context = MCPCallContext(
+            run_id=run_id,
+            issue_id=issue_id,
+            task_id=task_id,
+            agent=self.name,
+            skill=skill,
+            trace_id=f"{run_id}:{task_id}",
+            idempotency_key=(
+                f"{run_id}:{task_id}:{server}:{tool}:{arguments_digest[:16]}"
+            ),
+            risk_tier=risk_tier,
+            approval=approval,
+        )
         self._safe_metric(
             lambda: metrics.counter("devflow_mcp_tool_calls_total").inc(
                 labels={"server": server, "tool": tool, "status": "invoked"}
             )
         )
         try:
-            result = await self._mcp.call_tool(server, tool, arguments)
+            result = await self._mcp.call_tool(
+                server,
+                tool,
+                arguments,
+                context=context,
+            )
         except Exception as exc:  # noqa: BLE001 — MCP boundary
             self._safe_metric(
                 lambda: metrics.counter("devflow_mcp_tool_calls_total").inc(
@@ -610,6 +726,7 @@ class BaseAgent:
             capabilities=list(cls._CAPABILITIES),
             boundaries=list(cls._BOUNDARIES),
             watches=list(cls._WATCHES),
+            skills=list(cls._OWNED_SKILLS),
             max_consecutive_failures=defaults.get(
                 "max_consecutive_failures", 3
             ),
@@ -687,6 +804,8 @@ def _enrich_config_from_settings(config: AgentConfig) -> None:
             config.boundaries = list(entry["boundaries"])
         if isinstance(entry.get("watches"), list):
             config.watches = list(entry["watches"])
+        if isinstance(entry.get("depends_on_skills"), list):
+            config.skills = list(entry["depends_on_skills"])
     except Exception:  # noqa: BLE001 — settings optional at runtime
         return
 

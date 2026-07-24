@@ -241,9 +241,8 @@ agents:
       - code_review          # static analysis + style + correctness
       - security_scan        # dependency & secret scanning
       - approval_workflow    # enforce T1-T3 auto / T4-T5 human gate
-      - merge_management     # squash/merge once approved & CI green
     boundaries:
-      - "Cannot auto-merge T4/T5 PRs without recorded human approval"
+      - "Cannot merge any PR; it may only record review eligibility"
       - "Cannot merge when CI is red"
       - "Cannot bypass security scan findings classified critical/high"
       - "Cannot self-approve a PR it authored"
@@ -254,6 +253,7 @@ agents:
       - "human.approved"     # unblock T4/T5 after human sign-off
     depends_on_skills:
       - "pr-reviewer"
+      - "experience-distiller"
 
 # =============================================================================
 # Cross-cutting relationships

@@ -36,9 +36,14 @@ invoke the Skill and block on `approval.required`.
 
 ## Boundaries
 
-Do not bypass CI, dismiss blocking findings, auto-approve T4/T5, merge without
-policy evidence, or expose credentials. PR creation and merge are separate
-audited actions.
+Do not bypass CI, dismiss blocking findings, auto-approve T4/T5, merge any PR,
+or expose credentials. Emit review eligibility and PR evidence; repository
+policy or a human-owned release process retains merge authority.
+
+## Tool boundary
+
+Use only `github:create_pull_request` and `github:add_review`. Do not receive a
+merge or rollback capability; TeamLeader owns any separately approved rollback.
 
 Read [the contract](references/contract.yaml) for approval transitions and
 failure routes. Read [examples](references/examples.md) before issuing a

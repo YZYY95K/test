@@ -6,7 +6,17 @@ from pathlib import Path
 
 import yaml
 
-from devflow.skills.catalog import load_catalog, validate_collaboration
+from devflow.agents.coder_agent import CoderAgent
+from devflow.agents.locator_agent import LocatorAgent
+from devflow.agents.reviewer_agent import ReviewerAgent
+from devflow.agents.tester_agent import TesterAgent as DevFlowTesterAgent
+from devflow.agents.triage_agent import TriageAgent
+from devflow.skills.catalog import (
+    load_catalog,
+    validate_agent_alignment,
+    validate_collaboration,
+    validate_mcp_alignment,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,5 +72,26 @@ def test_skill_contract_graph_has_no_violations() -> None:
 
     assert len(catalog) == 6
     assert validate_collaboration(catalog) == []
+    assert validate_agent_alignment(catalog, ROOT / "config" / "agents.yaml") == []
+    assert validate_mcp_alignment(catalog, ROOT / "config" / "mcp_servers.yaml") == []
     assert all(len(contract.forbidden_actions) >= 3 for contract in catalog.values())
     assert all(len(contract.verification) >= 3 for contract in catalog.values())
+
+
+def test_runtime_agent_skill_ownership_matches_contracts() -> None:
+    catalog = load_catalog(ROOT / "skills")
+    runtime_owners = {
+        agent.name: set(agent.skills)
+        for agent in (
+            TriageAgent(),
+            LocatorAgent(),
+            CoderAgent(),
+            DevFlowTesterAgent(),
+            ReviewerAgent(),
+        )
+    }
+    contract_owners: dict[str, set[str]] = {}
+    for name, contract in catalog.items():
+        contract_owners.setdefault(contract.owner, set()).add(name)
+
+    assert runtime_owners == contract_owners

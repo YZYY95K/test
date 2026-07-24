@@ -24,6 +24,7 @@ output:
 dependencies:
   - Read-only terminal audit and artifact store.
   - Idempotent experience vector store with redaction scanning.
+mcp_tools: []
 allowed_actions:
   - Read immutable terminal artifacts and audit evidence.
   - Redact and abstract reviewed evidence.

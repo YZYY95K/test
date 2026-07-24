@@ -16,6 +16,7 @@ from devflow.models.review import (
 from devflow.models.test_result import TestRunResult
 from devflow.observability import logger
 from devflow.skills.base import BaseSkill
+from devflow.skills.contracts import HandoffStatus
 
 
 class ReviewerAgent(BaseAgent):
@@ -35,17 +36,17 @@ class ReviewerAgent(BaseAgent):
         "code_review",
         "security_scan",
         "approval_workflow",
-        "merge_management",
     )
     _BOUNDARIES = (
-        "Cannot auto-merge T4/T5 without human approval",
+        "Cannot merge any PR; may only record review eligibility",
         "Cannot merge when CI is red",
         "Cannot bypass high or critical security findings",
         "Cannot self-approve a PR it authored",
     )
     _WATCHES = ("test.passed", "review.requested", "security.finding", "human.approved")
+    _OWNED_SKILLS = ("pr-reviewer", "experience-distiller")
     _FORBIDDEN_ACTIONS = {
-        "auto_merge_t4_t5": "Cannot auto-merge T4/T5 without human approval",
+        "merge_pr": "Cannot merge any PR; may only record review eligibility",
         "merge_red_ci": "Cannot merge when CI is red",
         "bypass_security": "Cannot bypass high or critical security findings",
         "self_approve": "Cannot self-approve a PR it authored",
@@ -89,6 +90,9 @@ class ReviewerAgent(BaseAgent):
                             "title": patch.commit_message,
                             "body": patch.description,
                         },
+                        skill="pr-reviewer",
+                        issue_id=issue_id,
+                        risk_tier=tier.value,
                     )
                     if isinstance(response, dict):
                         pr_url = response.get("url") or response.get("html_url")
@@ -108,13 +112,29 @@ class ReviewerAgent(BaseAgent):
                 pr_url=pr_url,
                 requires_human_approval=requires_human,
             )
-            await self._emit_event(
-                (
-                    "approval.required"
-                    if decision is ReviewDecision.HUMAN_APPROVAL_REQUIRED
-                    else "review.completed"
-                ),
-                {
+            event = {
+                ReviewDecision.APPROVED: "review.approved",
+                ReviewDecision.CHANGES_REQUESTED: "review.rejected",
+                ReviewDecision.HUMAN_APPROVAL_REQUIRED: "approval.required",
+            }[decision]
+            consumer = {
+                ReviewDecision.APPROVED: "TeamLeader",
+                ReviewDecision.CHANGES_REQUESTED: "CoderAgent",
+                ReviewDecision.HUMAN_APPROVAL_REQUIRED: "HumanReviewer",
+            }[decision]
+            status = {
+                ReviewDecision.APPROVED: HandoffStatus.READY,
+                ReviewDecision.CHANGES_REQUESTED: HandoffStatus.RETRY,
+                ReviewDecision.HUMAN_APPROVAL_REQUIRED: HandoffStatus.BLOCKED,
+            }[decision]
+            await self._emit_handoff(
+                event,
+                issue_id=issue_id,
+                consumer=consumer,
+                skill="pr-reviewer",
+                artifact_type="ReviewDecision",
+                status=status,
+                payload={
                     "issue_id": issue_id,
                     "tier": tier.value,
                     "review": result.model_dump(mode="json"),

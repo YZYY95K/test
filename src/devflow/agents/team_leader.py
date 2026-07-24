@@ -24,6 +24,7 @@ from enum import Enum
 from typing import Any
 
 from devflow.agents.base import AgentIdentity, BaseAgent
+from devflow.exceptions import AgentError
 from devflow.models.issue import (
     ComplexityLevel,
     IssueClassification,
@@ -140,6 +141,7 @@ class TeamLeader(BaseAgent):
         "test.failed",
         "approval.required",
     )
+    _OWNED_SKILLS = ("team-orchestration",)
     _FORBIDDEN_ACTIONS = {
         "write_code": "Cannot write code directly",
         "approve_t4t5_without_human": (
@@ -442,6 +444,23 @@ class TeamLeader(BaseAgent):
     # ------------------------------------------------------------------ #
     # Event handlers
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _handoff_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        """Unpack only integrity-valid collaboration envelopes."""
+
+        if payload.get("envelope_version") != "1.0":
+            return payload
+        envelope = HandoffEnvelope.model_validate(payload)
+        if not envelope.artifact.verify_integrity() or envelope.artifact.inline is None:
+            raise AgentError("received a corrupted hand-off artifact")
+        return {
+            "issue_id": envelope.issue_id,
+            "producer": envelope.producer,
+            "consumer": envelope.consumer,
+            "status": envelope.status.value,
+            **envelope.artifact.inline,
+        }
+
     async def _on_issue_created(self, payload: dict[str, Any]) -> None:
         issue_data = payload.get("issue") or payload
         try:
@@ -495,6 +514,7 @@ class TeamLeader(BaseAgent):
         )
 
     async def _on_review_rejected(self, payload: dict[str, Any]) -> None:
+        payload = self._handoff_payload(payload)
         issue_id = payload.get("issue_id")
         if issue_id is None:
             return
@@ -511,6 +531,7 @@ class TeamLeader(BaseAgent):
         )
 
     async def _on_test_failed(self, payload: dict[str, Any]) -> None:
+        payload = self._handoff_payload(payload)
         issue_id = payload.get("issue_id")
         if issue_id is None:
             return
@@ -527,6 +548,7 @@ class TeamLeader(BaseAgent):
         )
 
     async def _on_approval_required(self, payload: dict[str, Any]) -> None:
+        payload = self._handoff_payload(payload)
         issue_id = payload.get("issue_id")
         if issue_id is None:
             return

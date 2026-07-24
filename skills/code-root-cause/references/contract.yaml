@@ -23,6 +23,8 @@ dependencies:
   - Read-only repository MCP capability.
   - Revision-pinned AST/RAG index.
   - Digest-addressed shared artifact storage.
+mcp_tools:
+  - github:get_file_contents
 allowed_actions:
   - Query the repository index and reviewed experience summaries.
   - Read exact repository files at the supplied revision.

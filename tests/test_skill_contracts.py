@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from devflow.agents.coder_agent import CoderAgent
+from devflow.exceptions import BoundaryViolationError
 from devflow.skills.catalog import load_catalog
 from devflow.skills.contracts import HandoffArtifact, HandoffEnvelope
 from scripts.evaluate_skills import evaluate
@@ -58,6 +60,35 @@ def test_handoff_requires_exactly_one_payload_location() -> None:
             ref="shared://artifact",
             sha256=digest,
         )
+
+
+def test_agent_accepts_only_integral_handoff_for_owned_skill() -> None:
+    envelope = HandoffEnvelope.create(
+        run_id="run-1",
+        issue_id=7,
+        task_id="7-coder",
+        producer="TeamLeader",
+        consumer="CoderAgent",
+        skill="patch-generator",
+        artifact_type="SkillInvocation",
+        payload={"input": {"issue_id": 7, "bounded": True}},
+    )
+    agent = CoderAgent()
+
+    assert agent._unwrap_handoff(envelope) == {"issue_id": 7, "bounded": True}
+
+    wrong_consumer = envelope.model_copy(update={"consumer": "ReviewerAgent"})
+    with pytest.raises(BoundaryViolationError, match="does not match"):
+        agent._unwrap_handoff(wrong_consumer)
+
+    wrong_skill = envelope.model_copy(update={"skill": "pr-reviewer"})
+    with pytest.raises(BoundaryViolationError, match="does not own Skill"):
+        agent._unwrap_handoff(wrong_skill)
+
+    assert envelope.artifact.inline is not None
+    envelope.artifact.inline["input"]["bounded"] = False
+    with pytest.raises(BoundaryViolationError, match="integrity"):
+        agent._unwrap_handoff(envelope)
 
 
 def test_each_skill_validator_accepts_contract_shape(tmp_path: Path) -> None:

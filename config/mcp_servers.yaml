@@ -18,7 +18,7 @@ servers:
   # github — Official GitHub MCP Server
   # ===========================================================================
   # Wraps the GitHub REST/GraphQL API. Used by LocatorAgent (read files),
-  # ReviewerAgent (PR lifecycle), and indirectly by TriageAgent (issue read).
+  # ReviewerAgent (PR creation/review), and TeamLeader (issue coordination).
   # Auth is a fine-grained personal access token with repo + workflow scopes.
   # ===========================================================================
   github:
@@ -42,41 +42,35 @@ servers:
     tools:
       - name: "get_file_contents"
         description: "Fetch file contents (or a directory listing) from a repo."
-        allowed_agents: ["LocatorAgent", "CoderAgent"]
+        allowed_agents: ["LocatorAgent"]
+        allowed_skills: ["code-root-cause"]
         # Read-only: safe to expose broadly.
         readonly: true
-      - name: "create_or_update_file"
-        description: "Create or update a single file via a commit."
-        allowed_agents: ["CoderAgent"]
-        readonly: false
       - name: "create_pull_request"
         description: "Open a pull request against a base branch."
         allowed_agents: ["ReviewerAgent"]
+        allowed_skills: ["pr-reviewer"]
         readonly: false
       - name: "add_review"
         description: "Submit a review (approve / request changes) on a PR."
         allowed_agents: ["ReviewerAgent"]
-        readonly: false
-      - name: "merge_pull_request"
-        description: "Merge a pull request (squash by default)."
-        allowed_agents: ["ReviewerAgent"]
+        allowed_skills: ["pr-reviewer"]
         readonly: false
       - name: "get_issue"
         description: "Fetch an issue by number."
-        allowed_agents: ["TriageAgent", "TeamLeader"]
+        allowed_agents: ["TeamLeader"]
+        allowed_skills: ["team-orchestration"]
         readonly: true
       - name: "add_issue_comment"
         description: "Post a comment on an issue (status updates)."
-        allowed_agents: ["TeamLeader", "ReviewerAgent"]
+        allowed_agents: ["TeamLeader"]
+        allowed_skills: ["team-orchestration"]
         readonly: false
       - name: "list_issues"
         description: "List issues with optional filters (state, labels)."
-        allowed_agents: ["TriageAgent", "TeamLeader"]
+        allowed_agents: ["TeamLeader"]
+        allowed_skills: ["team-orchestration"]
         readonly: true
-      - name: "create_branch"
-        description: "Create a new branch from a ref."
-        allowed_agents: ["CoderAgent", "ReviewerAgent"]
-        readonly: false
     # Rate-limit guardrails. GitHub's secondary rate limit kicks in well
     # before the documented 5000 req/h for token-authed requests; we stay
     # conservative to avoid 403s mid-pipeline.
@@ -101,6 +95,9 @@ servers:
     # HTTP transport: supports concurrent agent sessions and is easier to
     # health-check than stdio for a long-lived server.
     transport: "http"
+    # Propagate signed task identity to the DevFlow-owned server, which
+    # independently re-runs the same Agent+Skill authorization check.
+    propagate_context: true
     # Bind loopback only — the CI/CD server must not be reachable externally.
     host: "127.0.0.1"
     port: "${MCP_CICD_PORT}"
@@ -114,12 +111,30 @@ servers:
       GITHUB_REPO_OWNER: "${GITHUB_REPO_OWNER}"
       GITHUB_REPO_NAME: "${GITHUB_REPO_NAME}"
       GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      DEVFLOW_REPOSITORY_ROOT: "${DEVFLOW_REPOSITORY_ROOT}"
+      CICD_TEST_COMMAND_JSON: "${CICD_TEST_COMMAND_JSON}"
+      DEVFLOW_MCP_CONTEXT_HMAC_KEY: "${DEVFLOW_MCP_CONTEXT_HMAC_KEY}"
     tools:
+      - name: "run_tests"
+        description: >-
+          Apply a typed Patch only to a disposable checkout and execute the
+          server-owned test adapter. Agents cannot provide shell commands.
+        allowed_agents: ["TesterAgent"]
+        allowed_skills: ["test-runner"]
+        readonly: false
+        input_schema:
+          type: "object"
+          required: ["issue_id", "patch", "full_suite"]
+          properties:
+            issue_id: {type: "integer", minimum: 1}
+            patch: {type: "object"}
+            full_suite: {type: "boolean"}
       - name: "trigger_pipeline"
         description: >-
           Trigger a CI pipeline for a branch. Returns a pipeline id used by
           get_test_results / get_coverage.
         allowed_agents: ["TesterAgent"]
+        allowed_skills: ["test-runner"]
         input_schema:
           type: "object"
           required: ["branch", "suite"]
@@ -133,7 +148,8 @@ servers:
         description: >-
           Fetch pass/fail/skip counts and failure details for a pipeline.
           Supports polling via wait_seconds.
-        allowed_agents: ["TesterAgent", "ReviewerAgent"]
+        allowed_agents: ["TesterAgent"]
+        allowed_skills: ["test-runner"]
         input_schema:
           type: "object"
           required: ["pipeline_id"]
@@ -149,6 +165,7 @@ servers:
           Fetch line/branch coverage for a pipeline and the delta vs the
           baseline ref.
         allowed_agents: ["TesterAgent"]
+        allowed_skills: ["test-runner"]
         input_schema:
           type: "object"
           required: ["pipeline_id"]
@@ -159,8 +176,9 @@ servers:
       - name: "rollback_deployment"
         description: >-
           Roll back the most recent deployment to the previous known-good
-          release. Used by ReviewerAgent / TeamLeader on post-merge failure.
-        allowed_agents: ["ReviewerAgent", "TeamLeader"]
+          release. Used only by TeamLeader after human-confirmed escalation.
+        allowed_agents: ["TeamLeader"]
+        allowed_skills: ["team-orchestration"]
         input_schema:
           type: "object"
           required: ["environment"]

@@ -7,9 +7,9 @@ engineering deliverables.
 | Dimension | Weight | Current evidence | Remaining highest-value work |
 |---|---:|---|---|
 | Scenario value and replicability | 25% | End-to-end software issue resolution; explicit users, risk tiers, repeatable fixture | Add measured time/cost reduction on real repositories and 3 organization personas |
-| Multi-Agent collaboration and autonomous closure | 25% | 6 clear roles, DAG plan, structured hand-offs, failure feedback, T4/T5 human gate, AgentTeams Team manifest | Run and record the full scenario inside an installed AgentTeams Matrix room |
-| Skill engineering and ecosystem reuse | 25% | 6 self-contained v2 Skills; typed contracts, triggers/refusals, dependencies, permissions, failures, hand-offs, evidence gates, examples, validators, UI metadata, release/rollback policy; reproducible static gate; GLM-5.2 paired evaluation scored 1.000 with Skill vs 0.521 baseline, 1.000 safety, zero errors | Extend the paired evaluation to blinded repository tasks, repeated trials, and signed releases |
-| Engineering, verification, security, audit | 20% | CLI, config loader, real sandboxed regression test, JSON event report, logs/traces/metrics, credential gateway design | Implement production CI/CD MCP server, OpenTelemetry export dashboard, approval and rollback integration test |
+| Multi-Agent collaboration and autonomous closure | 25% | 6 non-interchangeable roles, DAG plan, digest-bound hand-offs that validate consumer + owned Skill, explicit READY/RETRY/BLOCKED routing, T4/T5 human gate, AgentTeams Team manifest | Run and record the full scenario inside an installed AgentTeams Matrix room |
+| Skill engineering and ecosystem reuse | 25% | 6 self-contained v2 Skills; typed contracts, triggers/refusals, exact MCP tool declarations, failures, hand-offs, evidence gates, examples, official package validation, release/rollback policy; reproducible 100/100 static gate; GLM-5.2 paired evaluation scored 1.000 with Skill vs 0.521 baseline, 1.000 safety, zero errors | Extend the paired evaluation to blinded repository tasks, repeated trials, and signed releases |
+| Engineering, verification, security, audit | 20% | CLI; default-deny Agent + Skill MCP authorization; protected path/branch and secret guards; digest-bound approval; hash-chain audit; isolated typed-patch CI/CD core with server-owned commands; logs/traces/metrics | Deploy the optional MCP HTTP adapter in a production-shaped runtime, add OpenTelemetry export dashboard, and record a live approval/rollback integration test |
 | Open/open-source contribution | 5% | Apache-2.0, README, reproducible demo, interface docs | Add contribution guide, releases, dependency SBOM, public examples |
 
 ## Mandatory checklist
@@ -22,11 +22,13 @@ engineering deliverables.
 - [x] Skills are first-class reusable artifacts.
 - [x] Skill contract graph, boundaries, release policy, and 90-point quality gate
       are executable and tested.
+- [x] Agent/Skill/MCP grants are exact-match and drift-checked; unknown or
+      mismatched capabilities fail closed before transport.
 - [x] At least two of memory, knowledge RAG, shared state, trajectory
       observability: RAG, experience memory, shared state/events, traces.
 - [x] Runnable entry point, dependencies, sample input/output, and evidence.
 - [ ] Recorded live AgentTeams run.
-- [ ] Production MCP server deployment.
+- [ ] Production-shaped MCP HTTP deployment and live provider integration.
 - [ ] Multi-repository quantitative evaluation.
 
 ## Demo acceptance criteria

@@ -40,6 +40,11 @@ Do not store raw secrets, personal data, full private files, unreviewed runs,
 or unsupported causal claims. Do not trigger new coding, testing, or merge
 work.
 
+## Tool boundary
+
+Use no operational MCP tool. Read immutable terminal evidence and write only
+through the injected idempotent, redaction-checked experience store.
+
 Read [the contract](references/contract.yaml) for storage and quarantine
 rules. Read [examples](references/examples.md) to calibrate useful abstraction
 without source leakage.

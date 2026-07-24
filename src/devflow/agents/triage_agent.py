@@ -57,6 +57,7 @@ class TriageAgent(BaseAgent):
         "issue.created",
         "issue.updated",
     )
+    _OWNED_SKILLS = ("issue-classifier",)
     _FORBIDDEN_ACTIONS = {
         "modify_issue_body": "Cannot modify issue body or title",
         "assign_above_t5": "Cannot assign complexity higher than T5",
@@ -131,9 +132,13 @@ class TriageAgent(BaseAgent):
                 duplicate_of=classification.duplicate_of,
             )
 
-            await self._emit_event(
+            await self._emit_handoff(
                 "triage.completed",
-                {
+                issue_id=issue.issue_number,
+                consumer="TeamLeader",
+                skill="issue-classifier",
+                artifact_type="ClassifiedIssue",
+                payload={
                     "issue_id": issue.issue_number,
                     "classification": classification.model_dump(mode="json"),
                     "tier": classification.complexity_level.value,

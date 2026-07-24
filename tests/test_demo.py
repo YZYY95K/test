@@ -9,6 +9,7 @@ import pytest
 
 from devflow.demo import run_demo
 from devflow.exceptions import SkillError
+from devflow.skills.contracts import HandoffEnvelope
 from devflow.skills.experience_distiller import ExperienceDistillerSkill
 
 
@@ -37,14 +38,38 @@ async def test_demo_proves_baseline_fix_and_review(tmp_path: Path) -> None:
     assert report["review"]["decision"] == "approved"
     assert report["experience"]["stored"] is True
     assert report["experience"]["provenance"]["candidate_digest"]
+    assert {entry["outcome"] for entry in report["mcp_audit"]} == {
+        "authorized",
+        "succeeded",
+    }
+    assert {
+        (entry["agent"], entry["skill"], entry["server"], entry["tool"])
+        for entry in report["mcp_audit"]
+        if entry["outcome"] == "succeeded"
+    } == {
+        ("LocatorAgent", "code-root-cause", "github", "get_file_contents"),
+        ("TesterAgent", "test-runner", "cicd", "run_tests"),
+    }
     assert {event["event_type"] for event in report["events"]} >= {
         "triage.completed",
         "locator.completed",
         "coder.patch_ready",
         "test.passed",
-        "review.completed",
+        "review.approved",
         "experience.stored",
     }
+    handoff_events = {
+        "triage.completed",
+        "locator.completed",
+        "coder.patch_ready",
+        "test.passed",
+        "review.approved",
+    }
+    for event in report["events"]:
+        if event["event_type"] not in handoff_events:
+            continue
+        envelope = HandoffEnvelope.model_validate(event["payload"])
+        assert envelope.artifact.verify_integrity()
 
 
 @pytest.mark.asyncio

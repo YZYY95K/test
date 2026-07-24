@@ -68,12 +68,13 @@ approval_workflow:
       policy: "auto_approve"
       description: >-
         Low-to-moderate risk: localized fixes, docs, single-module logic.
-        Auto-approved after tests pass and security scan is clean.
+        Review-eligible after tests pass and security scan is clean. Merge
+        remains outside Agent authority and is handled by repository policy.
       conditions:
         tests_passed: true
         no_critical_security_findings: true
         no_high_security_findings: true
-      auto_merge: true
+      auto_merge: false
     - tier: ["T4", "T5"]
       policy: "require_human_approval"
       description: >-
@@ -111,8 +112,8 @@ rollback:
   # avoid amplifying a provider outage.
   cooldown_seconds: 300
   triggers:
-    # Automatic triggers — the system rolls back without waiting for a human.
-    automatic:
+    # Detectors request approval; they never execute rollback on their own.
+    detect_and_request_approval:
       - "deployment.health_check_failed"
       - "error_rate_spike"          # error rate > threshold post-deploy
       - "test.regression_on_main"   # a previously-passing test fails on main
@@ -157,25 +158,18 @@ credential_isolation:
     TeamLeader:
       - "github:read_issue"
       - "github:add_issue_comment"
-    TriageAgent:
-      - "github:read_issue"
-      - "github:read_labels"
+      - "cicd:rollback"
+    TriageAgent: []
     LocatorAgent:
       - "github:read_file"
-    CoderAgent:
-      - "github:read_file"
-      - "github:write_file"          # scoped to feature branches only
-      - "github:create_branch"
+    CoderAgent: []                    # candidate artifact only; no provider token
     TesterAgent:
       - "cicd:trigger_pipeline"
       - "cicd:read_results"
       - "cicd:read_coverage"
     ReviewerAgent:
-      - "github:read_file"
       - "github:create_pr"
       - "github:review_pr"
-      - "github:merge_pr"
-      - "cicd:rollback"
   # Branch protection: write capabilities are only valid on non-default
   # branches. The runtime rejects any write_file targeting main/master.
   branch_protection:
