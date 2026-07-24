@@ -114,6 +114,8 @@ See [the research basis](docs/RESEARCH.md), [competition scorecard](docs/SCORECA
 [Skill engineering standard](docs/SKILL_ENGINEERING.md),
 [behavior evaluation protocol](docs/SKILL_BEHAVIOR_EVAL.md), and
 [AgentTeams mapping](docs/AGENTTEAMS.md) for design rationale and remaining work.
+The latest model-run evidence is recorded in
+[GLM-5.2 Skill behavior evidence](docs/evidence/SKILL_BEHAVIOR_GLM52.md).
 
 ## Security
 
