@@ -32,10 +32,12 @@ records contain argument digests rather than secret values.
 
 ## Audit integrity
 
-The JSONL MCP audit log is a keyed SHA-256 hash chain. On startup the full
+The JSONL MCP audit log is a SHA-256 hash chain. On startup the full
 existing chain is verified, including sequence, predecessor digest, record
-digest, and HMAC. A single modified historical record makes the log fail
-closed. `verify_audit_chain` is also available for offline evidence checks.
+digest, and link continuity. A single modified historical record makes the log
+fail closed unless an attacker can rewrite the whole evidence store; production
+deployments must therefore ship the log to append-only external storage.
+`verify_audit_chain` is also available for offline evidence checks.
 
 ## Credential broker
 
