@@ -12,4 +12,5 @@ dist/
 htmlcov/
 .coverage
 logs/
-
+outputs/*.pptx.inspect.ndjson
+outputs/*/

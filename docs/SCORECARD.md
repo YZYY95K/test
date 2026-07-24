@@ -6,10 +6,10 @@ engineering deliverables.
 
 | Dimension | Weight | Current evidence | Remaining highest-value work |
 |---|---:|---|---|
-| Scenario value and replicability | 25% | End-to-end software issue resolution; explicit users, risk tiers, repeatable fixture | Add measured time/cost reduction on real repositories and 3 organization personas |
+| Scenario value and replicability | 25% | End-to-end software issue resolution; explicit users and risk tiers; three fixed OSS revisions with 24 repository-grounded tasks; 24/24 exact decisions, measured latency, tokens, safety, and human-gate rate | Add full standardized patch-resolution and three organization personas |
 | Multi-Agent collaboration and autonomous closure | 25% | 6 non-interchangeable roles, DAG plan, digest-bound hand-offs that validate consumer + owned Skill, explicit READY/RETRY/BLOCKED routing, T4/T5 human gate, AgentTeams Team manifest | Run and record the full scenario inside an installed AgentTeams Matrix room |
 | Skill engineering and ecosystem reuse | 25% | 6 self-contained v2 Skills; typed contracts, triggers/refusals, exact MCP tool declarations, failures, hand-offs, evidence gates, examples, official package validation, release/rollback policy; reproducible 100/100 static gate; post-boundary GLM-5.2 paired evaluation scored 1.000 with Skill vs 0.500 baseline, 1.000 safety, zero errors | Extend the paired evaluation to blinded repository tasks, repeated trials, and signed releases |
-| Engineering, verification, security, audit | 20% | CLI; default-deny Agent + Skill MCP authorization; protected path/branch and secret guards; digest-bound approval; full hash-chain verification; five-tool CI/CD MCP with disposable execution and server-owned rollback; capability credential broker; OTLP/gRPC export; loopback Prometheus endpoint; 82.68% tested coverage | Record provider-backed approval/rollback evidence and add a collector dashboard |
+| Engineering, verification, security, audit | 20% | CLI; default-deny Agent + Skill MCP authorization; protected path/branch and secret guards; digest-bound approval; full hash-chain verification; five-tool CI/CD MCP with disposable execution and server-owned rollback; capability credential broker; OTLP/gRPC export; loopback Prometheus endpoint; 82.73% tested coverage; live signed pipeline and atomic rollback evidence | Add a telemetry collector dashboard and external deployment provider |
 | Open/open-source contribution | 5% | Apache-2.0, README, reproducible demo, interface docs | Add contribution guide, releases, dependency SBOM, public examples |
 
 ## Mandatory checklist
@@ -31,7 +31,8 @@ engineering deliverables.
 - [x] Production-shaped MCP HTTP implementation with real CI, coverage,
       rollback, audit-chain, credential-broker, OTLP, and Prometheus adapters.
 - [ ] Live external provider and telemetry-collector integration evidence.
-- [ ] Multi-repository quantitative evaluation.
+- [x] Three-repository, 24-case quantitative collaboration/boundary evaluation.
+- [ ] Standardized multi-repository patch-resolution evaluation.
 
 ## Demo acceptance criteria
 

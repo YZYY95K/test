@@ -133,6 +133,14 @@ Executable provider boundaries are mapped in
 [Infrastructure and trust boundaries](docs/INFRASTRUCTURE.md); the supplied
 server's AgentTeams compatibility audit is recorded in
 [Server runtime audit](docs/evidence/SERVER_RUNTIME_AUDIT.md).
+The quantitative evaluation design and live CI/CD evidence are in
+[Repository benchmark](docs/BENCHMARK.md) and
+[Server MCP integration evidence](docs/evidence/SERVER_INTEGRATION_921162C.md).
+The submission package includes the [Chinese introduction](docs/submission/INTRO_500_CN.md),
+[Agent Identity appendix](docs/submission/AGENT_IDENTITY_APPENDIX.md),
+[live-demo script](docs/submission/LIVE_DEMO_SCRIPT_CN.md),
+[defense Q&A](docs/submission/DEFENSE_QA_CN.md), and
+[evidence deck](outputs/devflow-agent-infra.pptx).
 
 ## Security
 
