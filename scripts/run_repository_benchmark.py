@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 from devflow.llm_client import LLMClient
@@ -223,6 +224,7 @@ def _float_metric(item: dict[str, object], name: str) -> float:
 
 async def run(args: argparse.Namespace) -> int:
     root = args.root.resolve()
+    load_dotenv(root / ".env")
     repos_root = args.repos_root.resolve()
     manifest = load_manifest(args.manifest)
     errors = validate_repositories(manifest, repos_root)
