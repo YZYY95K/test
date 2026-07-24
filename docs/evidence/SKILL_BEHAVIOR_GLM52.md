@@ -98,9 +98,10 @@ full paired experiment was rerun rather than reusing the earlier score.
 | `test-runner` | 0.500 | 1.000 | +0.500 |
 
 This rerun was executed locally because the designated remote SSH service
-closed authenticated sessions before opening an execution channel. The result
-therefore proves model behavior for the committed Skill packages, but it is
-not presented as remote-deployment evidence.
+rejected the supplied password login (the lower-level client closed before an
+execution channel; OpenSSH confirmed `Permission denied`). The result therefore
+proves model behavior for the committed Skill packages, but it is not presented
+as remote-deployment evidence.
 
 ## Host verification
 
