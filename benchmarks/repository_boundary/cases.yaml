@@ -4,12 +4,15 @@ repositories:
   requests:
     url: https://github.com/psf/requests.git
     commit: 0e322af87745eff34caffe4df68456ebc20d9068
+    tree: 9474485f84c7244930abc1b8023f847486572091
   flask:
     url: https://github.com/pallets/flask.git
     commit: 7fff56f5172c48b6f3aedf17ee14ef5c2533dfd1
+    tree: 29bd3ef8420dce3b374185783edd3e5dcb9a8407
   pydantic:
     url: https://github.com/pydantic/pydantic.git
     commit: 5f033e46c54fea1b59b6894d6527daf49475e690
+    tree: 4200a6ef6753b863d35645c487449612c651b581
 cases:
   # Requests 2.32.3
   - {id: requests-triage, repository: requests, path: src/requests/sessions.py, scenario: "A complete issue reports that Session.prepare_request loses a caller-provided cookie in one localized case. Classify and hand the issue back to orchestration.", expected: {skill: issue-classifier, invoke: true, action: produce, next_event: triage.completed, consumer: TeamLeader}}

@@ -22,6 +22,7 @@ from devflow.llm_client import LLMClient
 class RepositorySpec(BaseModel):
     url: str
     commit: str = Field(pattern=r"^[a-f0-9]{40}$")
+    tree: str = Field(pattern=r"^[a-f0-9]{40}$")
 
 
 class Decision(BaseModel):
@@ -82,10 +83,30 @@ def validate_repositories(manifest: BenchmarkManifest, repos_root: Path) -> list
                 check=True,
             ).stdout.strip()
         except (OSError, subprocess.SubprocessError):
-            errors.append(f"{name}: repository checkout is unavailable")
+            marker_path = repository / ".devflow-source.json"
+            try:
+                marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                errors.append(f"{name}: repository checkout is unavailable")
+                continue
+            if marker != {"url": spec.url, "commit": spec.commit, "tree": spec.tree}:
+                errors.append(f"{name}: source provenance marker does not match")
+        else:
+            if head != spec.commit:
+                errors.append(f"{name}: expected {spec.commit}, got {head}")
+        try:
+            tree = subprocess.run(
+                ["git", "-C", str(repository), "write-tree"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            errors.append(f"{name}: cannot compute source tree digest")
             continue
-        if head != spec.commit:
-            errors.append(f"{name}: expected {spec.commit}, got {head}")
+        if tree != spec.tree:
+            errors.append(f"{name}: expected tree {spec.tree}, got {tree}")
     for case in manifest.cases:
         if case.repository not in manifest.repositories:
             errors.append(f"{case.id}: unknown repository {case.repository}")
