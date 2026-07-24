@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from openai import AsyncOpenAI
@@ -12,6 +13,16 @@ from pydantic import BaseModel
 from devflow.exceptions import LLMError
 
 ResponseT = TypeVar("ResponseT", bound=BaseModel)
+
+
+@dataclass(frozen=True)
+class CompletionResult:
+    """One completion plus provider-reported token usage."""
+
+    content: str
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    total_tokens: int | None
 
 
 class LLMClient:
@@ -46,6 +57,25 @@ class LLMClient:
         temperature: float = 0.2,
         system: str | None = None,
     ) -> str:
+        return (
+            await self.complete_with_usage(
+                prompt,
+                model=model,
+                temperature=temperature,
+                system=system,
+            )
+        ).content
+
+    async def complete_with_usage(
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        temperature: float = 0.2,
+        system: str | None = None,
+    ) -> CompletionResult:
+        """Complete a prompt and retain the provider's usage accounting."""
+
         messages: list[dict[str, str]] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -57,7 +87,13 @@ class LLMClient:
                 messages=messages,
                 temperature=temperature,
             )
-            return response.choices[0].message.content or ""
+            usage = response.usage
+            return CompletionResult(
+                content=response.choices[0].message.content or "",
+                prompt_tokens=getattr(usage, "prompt_tokens", None),
+                completion_tokens=getattr(usage, "completion_tokens", None),
+                total_tokens=getattr(usage, "total_tokens", None),
+            )
         except Exception as exc:
             raise LLMError(f"LLM completion failed: {exc}") from exc
 

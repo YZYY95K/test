@@ -28,7 +28,10 @@ class FakeCompletions:
         if self.error:
             raise self.error
         return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=self.content))]
+            choices=[SimpleNamespace(message=SimpleNamespace(content=self.content))],
+            usage=SimpleNamespace(
+                prompt_tokens=11, completion_tokens=7, total_tokens=18
+            ),
         )
 
 
@@ -58,6 +61,12 @@ async def test_complete_builds_messages_and_wraps_provider_failure() -> None:
         {"role": "system", "content": "policy"},
         {"role": "user", "content": "task"},
     ]
+
+    measured = await client.complete_with_usage("task")
+    assert measured.content == "done"
+    assert measured.prompt_tokens == 11
+    assert measured.completion_tokens == 7
+    assert measured.total_tokens == 18
 
     failing = _client(FakeCompletions(error=RuntimeError("provider down")))
     with pytest.raises(LLMError, match="provider down"):
