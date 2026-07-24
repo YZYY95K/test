@@ -28,7 +28,12 @@ approval.
 - Default-deny MCP boundaries that authorize the exact Agent + active Skill,
   validate arguments, require digest-bound approval for dangerous operations,
   and write hash-chained audit evidence.
-- Structured logs, OpenTelemetry spans, and in-memory metrics.
+- Structured logs, batched OTLP/gRPC trace export, and a loopback-only
+  Prometheus metrics endpoint.
+- Five-tool CI/CD MCP with disposable test execution, coverage evidence,
+  digest-approved rollback, and full hash-chain audit verification.
+- Short-lived credential capability handles that keep provider secrets inside
+  trusted adapters.
 - Credential-free offline demo that applies a real candidate patch in a
   temporary repository, executes a real regression test, reviews the result,
   and writes a JSON evidence report.
@@ -68,9 +73,10 @@ Production mode uses variables from `.env.example`. Copy it to `.env` and
 provide only the credentials required by the integrations you enable.
 Install the persistent ChromaDB-backed RAG implementation with
 `python -m pip install -e ".[rag]"`; the credential-free demo does not require
-that heavier optional dependency. Live RAG also requires the configured
-`embedding-3` model to be enabled and funded for the selected API account;
-chat-model access alone does not prove embedding availability.
+that heavier optional dependency. Production semantic retrieval requires the
+configured embedding model to be enabled and funded. Set
+`EMBEDDING_PROVIDER=local-hash` only for deterministic offline/degraded
+retrieval; it is not presented as equivalent semantic quality.
 
 ## AgentTeams deployment
 
@@ -109,7 +115,7 @@ tests/             unit and end-to-end tests
 ```powershell
 .\.venv\Scripts\python -m ruff check src tests examples
 .\.venv\Scripts\python -m mypy src
-.\.venv\Scripts\python -m pytest --cov=devflow --cov-report=term-missing
+.\.venv\Scripts\python -m pytest --cov=devflow --cov-report=term --cov-fail-under=80 -q
 .\.venv\Scripts\python scripts\evaluate_skills.py
 .\.venv\Scripts\python scripts\run_behavior_evals.py --validate-only
 .\.venv\Scripts\devflow demo
@@ -123,6 +129,10 @@ The executable responsibility matrix and MCP trust model are documented in
 [Agent boundaries and MCP trust model](docs/BOUNDARIES_AND_MCP.md).
 The latest model-run evidence is recorded in
 [GLM-5.2 Skill behavior evidence](docs/evidence/SKILL_BEHAVIOR_GLM52.md).
+Executable provider boundaries are mapped in
+[Infrastructure and trust boundaries](docs/INFRASTRUCTURE.md); the supplied
+server's AgentTeams compatibility audit is recorded in
+[Server runtime audit](docs/evidence/SERVER_RUNTIME_AUDIT.md).
 
 ## Security
 

@@ -152,6 +152,18 @@ credential_isolation:
   secret_refs:
     github_token: "GITHUB_PERSONAL_ACCESS_TOKEN"
     llm_api_key: "LLM_API_KEY"
+  # Trusted adapters map a granted capability to its provider secret. Agents
+  # receive only a short-lived signed handle, never these environment values.
+  capability_secrets:
+    "github:read_issue": "GITHUB_PERSONAL_ACCESS_TOKEN"
+    "github:add_issue_comment": "GITHUB_PERSONAL_ACCESS_TOKEN"
+    "github:read_file": "GITHUB_PERSONAL_ACCESS_TOKEN"
+    "github:create_pr": "GITHUB_PERSONAL_ACCESS_TOKEN"
+    "github:review_pr": "GITHUB_PERSONAL_ACCESS_TOKEN"
+    "cicd:trigger_pipeline": "GITHUB_PERSONAL_ACCESS_TOKEN"
+    "cicd:read_results": "GITHUB_PERSONAL_ACCESS_TOKEN"
+    "cicd:read_coverage": "GITHUB_PERSONAL_ACCESS_TOKEN"
+    "cicd:rollback": "GITHUB_PERSONAL_ACCESS_TOKEN"
   # Capabilities granted per agent. An agent can only call gateway-issued
   # tokens for the scopes listed here — least privilege.
   agent_capabilities:

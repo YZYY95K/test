@@ -21,6 +21,7 @@ from devflow.mcp.policy import (
     MCPPolicy,
     MemoryAuditSink,
     PolicyEnforcedMCPClient,
+    verify_audit_chain,
 )
 from devflow.models.patch import ChangeType, FileChange, Patch
 
@@ -279,6 +280,13 @@ async def test_hash_chain_audit_log_links_entries(tmp_path: Path) -> None:
     assert lines[0]["previous_hash"] == "0" * 64
     assert lines[1]["previous_hash"] == lines[0]["entry_hash"]
     assert lines[0]["entry_hash"] != lines[1]["entry_hash"]
+    assert verify_audit_chain(tmp_path / "audit.jsonl")
+
+    lines[0]["agent"] = "TamperedAgent"
+    (tmp_path / "audit.jsonl").write_text(
+        "\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8"
+    )
+    assert not verify_audit_chain(tmp_path / "audit.jsonl")
 
 
 @pytest.mark.asyncio

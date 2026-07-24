@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import re
 from collections.abc import Mapping
@@ -96,12 +97,8 @@ class HashChainAuditLog:
         if not self.path.exists() or self.path.stat().st_size == 0:
             return "0" * 64
         try:
-            last = self.path.read_text(encoding="utf-8").splitlines()[-1]
-            parsed = json.loads(last)
-            value = parsed["entry_hash"]
-            if isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value):
-                return value
-        except (OSError, IndexError, KeyError, json.JSONDecodeError):
+            return _verify_audit_chain(self.path)
+        except (OSError, IndexError, KeyError, json.JSONDecodeError, ValueError):
             pass
         raise ConfigError(f"Audit chain is unreadable or invalid: {self.path}")
 
@@ -204,7 +201,7 @@ class MCPPolicy:
             verifier = self._approval_verifier
             if verifier is None:
                 raise MCPAuthorizationError("approval verifier is unavailable")
-            digest = _arguments_digest(arguments)
+            digest = arguments_digest(arguments)
             target = _approval_target(server, tool, arguments)
             if not verifier.verify(
                 approval,
@@ -231,6 +228,16 @@ class MCPPolicy:
                 Patch.model_validate(arguments.get("patch"))
             except Exception as exc:
                 raise MCPAuthorizationError(f"run_tests requires a valid Patch: {exc}") from exc
+        elif server == "cicd" and tool == "trigger_pipeline":
+            _require_safe_branch(arguments.get("branch"))
+            if arguments.get("suite") not in {"full", "affected", "smoke"}:
+                raise MCPAuthorizationError("pipeline suite is unsupported")
+        elif server == "cicd" and tool in {"get_test_results", "get_coverage"}:
+            pipeline_id = arguments.get("pipeline_id")
+            if not isinstance(pipeline_id, str) or not re.fullmatch(
+                r"[a-f0-9]{32}", pipeline_id
+            ):
+                raise MCPAuthorizationError("pipeline id is invalid")
 
 
 class PolicyEnforcedMCPClient:
@@ -256,7 +263,7 @@ class PolicyEnforcedMCPClient:
         *,
         context: MCPCallContext,
     ) -> Any:
-        digest = _arguments_digest(arguments)
+        digest = arguments_digest(arguments)
         try:
             grant = self._policy.authorize(context, server, tool, arguments)
         except MCPAuthorizationError as exc:
@@ -317,11 +324,38 @@ class PolicyEnforcedMCPClient:
         )
 
 
-def _arguments_digest(arguments: dict[str, Any]) -> str:
+def arguments_digest(arguments: dict[str, Any]) -> str:
     serialized = json.dumps(
         arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
     )
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _verify_audit_chain(path: Path) -> str:
+    previous = "0" * 64
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        parsed = json.loads(line)
+        claimed = parsed.pop("entry_hash")
+        if parsed.get("previous_hash") != previous:
+            raise ValueError(f"audit chain link mismatch at line {line_number}")
+        serialized = json.dumps(
+            parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        actual = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        if not isinstance(claimed, str) or not hmac.compare_digest(claimed, actual):
+            raise ValueError(f"audit chain digest mismatch at line {line_number}")
+        previous = claimed
+    return previous
+
+
+def verify_audit_chain(path: Path) -> bool:
+    """Verify every entry digest and link in an audit JSONL file."""
+
+    try:
+        _verify_audit_chain(path)
+        return True
+    except (OSError, IndexError, KeyError, json.JSONDecodeError, ValueError):
+        return False
 
 
 def _contains_secret(value: Any) -> bool:
@@ -378,4 +412,6 @@ __all__ = [
     "PolicyEnforcedMCPClient",
     "RawMCPTransport",
     "ToolGrant",
+    "arguments_digest",
+    "verify_audit_chain",
 ]

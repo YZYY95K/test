@@ -56,7 +56,7 @@ class IsolatedTestService:
         return await asyncio.to_thread(self._run_tests_sync, patch, full_suite)
 
     def _run_tests_sync(self, patch: Patch, full_suite: bool) -> TestRunResult:
-        baseline = self._execute(self.repository_root)
+        baseline = self.execute(self.repository_root)
         with tempfile.TemporaryDirectory(prefix="devflow-cicd-") as temp_dir:
             candidate = Path(temp_dir) / "repo"
             shutil.copytree(
@@ -65,7 +65,7 @@ class IsolatedTestService:
                 ignore=shutil.ignore_patterns(".git", ".devflow", "__pycache__"),
             )
             self._apply_patch(candidate, patch)
-            current = self._execute(candidate)
+            current = self.execute(candidate)
 
         baseline_passed = int(baseline.returncode == 0)
         current_passed = int(current.returncode == 0)
@@ -103,7 +103,12 @@ class IsolatedTestService:
             ),
         )
 
-    def _execute(self, repository: Path) -> CommandOutcome:
+    def execute(self, repository: Path) -> CommandOutcome:
+        """Run the server-owned command in the supplied checkout."""
+
+        resolved = repository.resolve()
+        if not resolved.is_dir():
+            raise MCPError("test execution root must be a directory")
         started = time.perf_counter()
         try:
             process = subprocess.run(

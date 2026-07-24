@@ -18,11 +18,11 @@ from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-import chromadb
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from devflow.exceptions import LLMError, SkillError
 from devflow.observability import logger, metrics, tracer
+from devflow.rag.embeddings import EmbeddingProvider, build_embedding_provider
 
 # ---------------------------------------------------------------------------
 # Public models
@@ -276,15 +276,19 @@ class CodebaseIndexer:
         )
         self._embedding_model = os.getenv("EMBEDDING_MODEL", self.EMBEDDING_MODEL)
         self._file_fetcher = file_fetcher
-        self._client: chromadb.api.ClientAPI | None = None
-        self._collection: chromadb.api.Collection | None = None
-        self._embedding_client: Any | None = None
+        self._client: Any | None = None
+        self._collection: Any | None = None
+        self._embedding_provider: EmbeddingProvider | None = None
 
     # -- lazy initialization ------------------------------------------------
 
-    def _get_chroma_client(self) -> chromadb.api.ClientAPI:
+    def _get_chroma_client(self) -> Any:
         """Lazily create the ChromaDB persistent client."""
         if self._client is None:
+            try:
+                import chromadb
+            except ImportError as exc:
+                raise SkillError('Install DevFlow with the "rag" extra for ChromaDB') from exc
             os.makedirs(self._persist_path, exist_ok=True)
             self._client = chromadb.PersistentClient(path=self._persist_path)
             logger.info(
@@ -292,7 +296,7 @@ class CodebaseIndexer:
             )
         return self._client
 
-    def _get_collection(self) -> chromadb.api.Collection:
+    def _get_collection(self) -> Any:
         """Lazily create or retrieve the codebase index collection."""
         if self._collection is None:
             client = self._get_chroma_client()
@@ -302,16 +306,14 @@ class CodebaseIndexer:
             )
         return self._collection
 
-    def _get_embedding_client(self) -> Any:
-        """Lazily create the OpenAI-compatible embeddings client."""
-        if self._embedding_client is None:
-            from openai import OpenAI
-
-            self._embedding_client = OpenAI(
+    def _get_embedding_provider(self) -> EmbeddingProvider:
+        if self._embedding_provider is None:
+            self._embedding_provider = build_embedding_provider(
                 api_key=self._embedding_api_key,
                 base_url=self._embedding_base_url,
+                model=self._embedding_model,
             )
-        return self._embedding_client
+        return self._embedding_provider
 
     # -- embedding ----------------------------------------------------------
 
@@ -333,14 +335,11 @@ class CodebaseIndexer:
         Raises:
             LLMError: If the embedding API call fails after retries.
         """
-        client = self._get_embedding_client()
         try:
-            response = client.embeddings.create(
-                model=self._embedding_model,
-                input=texts,
-            )
-            return [item.embedding for item in response.data]
+            return self._get_embedding_provider().embed(texts)
         except Exception as exc:
+            if isinstance(exc, LLMError):
+                raise
             raise LLMError(
                 f"Embedding API call failed: {exc}"
             ) from exc

@@ -31,7 +31,7 @@ jobs:
       - name: Type check
         run: mypy src scripts tests
       - name: Test
-        run: python -m pytest -q
+        run: python -m pytest --cov=devflow --cov-report=term --cov-fail-under=80 -q
       - name: Evaluate Skills
         run: python scripts/evaluate_skills.py
       - name: Validate behavioral evaluation suite
