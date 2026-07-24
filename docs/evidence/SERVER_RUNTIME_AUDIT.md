@@ -10,13 +10,25 @@ Audit date: 2026-07-24 (Asia/Shanghai)
 - The DevFlow CI/CD MCP service can bind only to loopback and expose its MCP and
   Prometheus endpoints without publishing provider credentials.
 
-## Verified AgentTeams blocker
+## Docker installation trial
 
 The supplied environment is an openEuler 24.03 restricted container, not a
-Docker/Kubernetes host. The audit found no Docker or Podman daemon, Kubernetes
-client/cluster, Node runtime, or AgentTeams CLI. Its capability set excludes
-`CAP_SYS_ADMIN`; user/network namespace creation and overlay mounts are denied.
-Systemd is offline because the container entrypoint is PID 1.
+Docker/Kubernetes host. On 2026-07-24, the openEuler repositories successfully
+installed Moby Engine and client 25.0.3 plus Docker Compose 1.22.0. A diagnostic
+daemon could start only with the `vfs` storage driver and bridge, iptables, and
+IP forwarding disabled. Docker Hub was unreachable from the server, while
+GHCR and Quay responded.
+
+The decisive local test did not depend on an external registry: a BusyBox
+root filesystem was created from installed server files and streamed to the
+daemon. Image import failed with `unshare: operation not permitted`. Direct
+user, mount, and PID namespace tests failed with the same kernel denial. The
+outer container runs with seccomp filtering, excludes `CAP_SYS_ADMIN`, denies
+mounts, and exposes no host Docker, containerd, or Podman socket. Systemd is
+offline because the container entrypoint is PID 1. The diagnostic daemon was
+stopped after the test; the installed Docker and Compose packages remain.
+
+## Verified AgentTeams blocker
 
 The official AgentTeams deployment requires Docker Engine/Desktop or a
 Kubernetes cluster. Therefore this environment cannot truthfully produce a
