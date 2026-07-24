@@ -31,7 +31,7 @@ jobs:
       - name: Type check
         run: mypy src scripts tests
       - name: Test
-        run: pytest -q
+        run: python -m pytest -q
       - name: Evaluate Skills
         run: python scripts/evaluate_skills.py
       - name: Build AgentTeams package
@@ -41,4 +41,3 @@ jobs:
           name: devflow-worker-python-${{ matrix.python-version }}
           path: dist/devflow-worker.zip
           if-no-files-found: error
-
