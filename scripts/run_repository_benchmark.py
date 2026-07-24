@@ -87,7 +87,7 @@ def _source_digest(repository: Path) -> str:
     for path in paths:
         relative = path.relative_to(repository).as_posix().encode("utf-8")
         payload = (
-            f"SYMLINK:{path.readlink()}".encode("utf-8")
+            f"SYMLINK:{path.readlink()}".encode()
             if path.is_symlink()
             else path.read_bytes()
         )
