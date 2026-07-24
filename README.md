@@ -65,7 +65,9 @@ Production mode uses variables from `.env.example`. Copy it to `.env` and
 provide only the credentials required by the integrations you enable.
 Install the persistent ChromaDB-backed RAG implementation with
 `python -m pip install -e ".[rag]"`; the credential-free demo does not require
-that heavier optional dependency.
+that heavier optional dependency. Live RAG also requires the configured
+`embedding-3` model to be enabled and funded for the selected API account;
+chat-model access alone does not prove embedding availability.
 
 ## AgentTeams deployment
 

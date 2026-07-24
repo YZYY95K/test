@@ -150,7 +150,7 @@ agents:
       vector_store:
         type: "chromadb"
         collection: "codebase_index"
-        embedding_model: "text-embedding-3-small"
+        embedding_model: "embedding-3"
 
   # ===========================================================================
   # 4. CoderAgent — Patch Generation

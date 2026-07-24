@@ -7,7 +7,7 @@ meaningful code regions rather than arbitrary line windows.
 The indexer is decoupled from the file source via a ``FileFetcher`` callable:
 the caller decides whether files come from the GitHub API, a local clone, or
 a test fixture. Embeddings are produced via an OpenAI-compatible endpoint
-(``text-embedding-3-small`` by default).
+(``embedding-3`` by default).
 """
 
 from __future__ import annotations
@@ -239,8 +239,8 @@ class CodebaseIndexer:
     """
 
     COLLECTION_NAME = "codebase_index"
-    EMBEDDING_MODEL = "text-embedding-3-small"
-    EMBEDDING_DIMENSION = 1536
+    EMBEDDING_MODEL = "embedding-3"
+    EMBEDDING_DIMENSION = 2048
 
     def __init__(
         self,
@@ -264,10 +264,17 @@ class CodebaseIndexer:
         self._persist_path = persist_path or os.getenv(
             "CHROMADB_PATH", ".devflow/chromadb"
         ) or ".devflow/chromadb"
-        self._embedding_api_key = embedding_api_key or os.getenv("LLM_API_KEY", "")
-        self._embedding_base_url = embedding_base_url or os.getenv(
-            "LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"
+        self._embedding_api_key = (
+            embedding_api_key
+            or os.getenv("EMBEDDING_API_KEY")
+            or os.getenv("LLM_API_KEY", "")
         )
+        self._embedding_base_url = (
+            embedding_base_url
+            or os.getenv("EMBEDDING_BASE_URL")
+            or os.getenv("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/")
+        )
+        self._embedding_model = os.getenv("EMBEDDING_MODEL", self.EMBEDDING_MODEL)
         self._file_fetcher = file_fetcher
         self._client: chromadb.api.ClientAPI | None = None
         self._collection: chromadb.api.Collection | None = None
@@ -329,7 +336,7 @@ class CodebaseIndexer:
         client = self._get_embedding_client()
         try:
             response = client.embeddings.create(
-                model=self.EMBEDDING_MODEL,
+                model=self._embedding_model,
                 input=texts,
             )
             return [item.embedding for item in response.data]

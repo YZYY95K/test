@@ -38,5 +38,7 @@ def test_deployment_model_is_consistent_across_runtime_manifests() -> None:
     team_models.update(worker["model"] for worker in team["spec"]["workers"])
 
     assert configured_models == {"glm-5.2"}
+    locator = next(agent for agent in settings.agents if agent["name"] == "LocatorAgent")
+    assert locator["resources"]["vector_store"]["embedding_model"] == "embedding-3"
     assert team_models == {"glm-5.2"}
     assert worker_manifest["worker"]["model"] == "glm-5.2"

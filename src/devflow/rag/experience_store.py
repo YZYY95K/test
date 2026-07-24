@@ -57,8 +57,8 @@ class ExperienceStore:
     """
 
     COLLECTION_NAME = "experience_store"
-    EMBEDDING_MODEL = "text-embedding-3-small"
-    EMBEDDING_DIMENSION = 1536
+    EMBEDDING_MODEL = "embedding-3"
+    EMBEDDING_DIMENSION = 2048
 
     #: Minimum cosine similarity (1 - distance) to consider an issue a duplicate.
     DUPLICATE_SIMILARITY_THRESHOLD = 0.88
@@ -82,10 +82,17 @@ class ExperienceStore:
         self._persist_path = persist_path or os.getenv(
             "CHROMADB_PATH", ".devflow/chromadb"
         ) or ".devflow/chromadb"
-        self._embedding_api_key = embedding_api_key or os.getenv("LLM_API_KEY", "")
-        self._embedding_base_url = embedding_base_url or os.getenv(
-            "LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"
+        self._embedding_api_key = (
+            embedding_api_key
+            or os.getenv("EMBEDDING_API_KEY")
+            or os.getenv("LLM_API_KEY", "")
         )
+        self._embedding_base_url = (
+            embedding_base_url
+            or os.getenv("EMBEDDING_BASE_URL")
+            or os.getenv("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/")
+        )
+        self._embedding_model = os.getenv("EMBEDDING_MODEL", self.EMBEDDING_MODEL)
         self._client: chromadb.api.ClientAPI | None = None
         self._collection: chromadb.api.Collection | None = None
         self._embedding_client: Any | None = None
@@ -146,7 +153,7 @@ class ExperienceStore:
         client = self._get_embedding_client()
         try:
             response = client.embeddings.create(
-                model=self.EMBEDDING_MODEL,
+                model=self._embedding_model,
                 input=text,
             )
             return list(response.data[0].embedding)
