@@ -96,7 +96,7 @@ class LocatorAgent(BaseAgent):
         "triage.completed",
         "codebase.indexed",
     )
-    _OWNED_SKILLS = ("code-root-cause",)
+    _OWNED_SKILLS = ("code-root-cause", "github-evidence")
     _FORBIDDEN_ACTIONS = {
         "write_source_files": "Cannot write or modify source files",
         "execute_code": "Cannot execute repository code",

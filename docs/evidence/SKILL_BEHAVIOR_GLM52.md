@@ -110,8 +110,8 @@ After the final evaluation, the deployed source passed on the same host:
 - 19 tests;
 - Ruff with no findings;
 - strict mypy over `src`, `scripts`, and `tests`;
-- six static Skill packages at 100/100;
-- all 12 behavior contracts valid;
+- seven static Skill packages at 100/100;
+- all 14 behavior contract schemas valid;
 - AgentTeams worker package build.
 
 The host deployment metadata and API-key environment file are both mode 600.

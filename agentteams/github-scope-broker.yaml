@@ -1,0 +1,400 @@
+# Build agentteams/github-scope-broker.Containerfile and import or publish the
+# exact immutable image index referenced below before applying this manifest.
+# Create Secret/devflow-github-scope-broker out of band with keys hmac-key and
+# github-token. This template deliberately contains no secret values.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devflow-github-scope-broker
+  namespace: agentteams-system
+data:
+  DEVFLOW_GITHUB_CAPABILITY_TTL_SECONDS: "300"
+  DEVFLOW_GITHUB_CAPABILITY_CLOCK_SKEW_SECONDS: "5"
+  DEVFLOW_GITHUB_MAX_RESPONSE_BYTES: "1500000"
+  DEVFLOW_GITHUB_MAX_CONTENT_BYTES: "1000000"
+  DEVFLOW_GITHUB_UPSTREAM_TIMEOUT_SECONDS: "15"
+  DEVFLOW_GITHUB_ALLOWED_REPOSITORIES: "YZYY95K/test"
+  DEVFLOW_GITHUB_TOKEN_REVIEW_AUDIENCE: "agentteams-controller"
+immutable: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devflow-github-scope-issuer
+  namespace: agentteams-system
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: devflow-github-content-broker
+  namespace: agentteams-system
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: devflow-github-scope-tokenreview
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: devflow-github-scope-tokenreview
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: devflow-github-scope-tokenreview
+subjects:
+  - kind: ServiceAccount
+    name: devflow-github-scope-issuer
+    namespace: agentteams-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devflow-github-scope-issuer
+  namespace: agentteams-system
+  labels:
+    app.kubernetes.io/name: devflow-github-scope-broker
+    app.kubernetes.io/component: issuer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devflow-github-scope-broker
+      app.kubernetes.io/component: issuer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devflow-github-scope-broker
+        app.kubernetes.io/component: issuer
+    spec:
+      serviceAccountName: devflow-github-scope-issuer
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: issuer
+          image: devflow/github-scope-broker@sha256:af42d610e635b5a186717e7bf8b42bb1d1a602bbacb3f874769e4ade7d788712
+          imagePullPolicy: IfNotPresent
+          args:
+            - --mode
+            - issuer
+            - --issuer-auth
+            - kubernetes-tokenreview
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8081"
+          ports:
+            - name: issuer-http
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: DEVFLOW_GITHUB_BROKER_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: devflow-github-scope-broker
+                  key: hmac-key
+            - name: DEVFLOW_GITHUB_CAPABILITY_TTL_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: devflow-github-scope-broker
+                  key: DEVFLOW_GITHUB_CAPABILITY_TTL_SECONDS
+            - name: DEVFLOW_GITHUB_CAPABILITY_CLOCK_SKEW_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: devflow-github-scope-broker
+                  key: DEVFLOW_GITHUB_CAPABILITY_CLOCK_SKEW_SECONDS
+            - name: DEVFLOW_GITHUB_ALLOWED_REPOSITORIES
+              valueFrom:
+                configMapKeyRef:
+                  name: devflow-github-scope-broker
+                  key: DEVFLOW_GITHUB_ALLOWED_REPOSITORIES
+            - name: DEVFLOW_GITHUB_TOKEN_REVIEW_AUDIENCE
+              valueFrom:
+                configMapKeyRef:
+                  name: devflow-github-scope-broker
+                  key: DEVFLOW_GITHUB_TOKEN_REVIEW_AUDIENCE
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: issuer-http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: issuer-http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tokenreview-identity
+              mountPath: /var/run/secrets/agentteams-issuer
+              readOnly: true
+      volumes:
+        - name: tokenreview-identity
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 600
+                  audience: https://kubernetes.default.svc.cluster.local
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devflow-github-content-broker
+  namespace: agentteams-system
+  labels:
+    app.kubernetes.io/name: devflow-github-scope-broker
+    app.kubernetes.io/component: content
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devflow-github-scope-broker
+      app.kubernetes.io/component: content
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devflow-github-scope-broker
+        app.kubernetes.io/component: content
+    spec:
+      serviceAccountName: devflow-github-content-broker
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: content
+          image: devflow/github-scope-broker@sha256:af42d610e635b5a186717e7bf8b42bb1d1a602bbacb3f874769e4ade7d788712
+          imagePullPolicy: IfNotPresent
+          args:
+            - --mode
+            - content
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+          ports:
+            - name: content-http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: DEVFLOW_GITHUB_BROKER_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: devflow-github-scope-broker
+                  key: hmac-key
+            - name: DEVFLOW_GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: devflow-github-scope-broker
+                  key: github-token
+            - name: DEVFLOW_GITHUB_CAPABILITY_TTL_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: devflow-github-scope-broker
+                  key: DEVFLOW_GITHUB_CAPABILITY_TTL_SECONDS
+            - name: DEVFLOW_GITHUB_CAPABILITY_CLOCK_SKEW_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: devflow-github-scope-broker
+                  key: DEVFLOW_GITHUB_CAPABILITY_CLOCK_SKEW_SECONDS
+            - name: DEVFLOW_GITHUB_MAX_RESPONSE_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: devflow-github-scope-broker
+                  key: DEVFLOW_GITHUB_MAX_RESPONSE_BYTES
+            - name: DEVFLOW_GITHUB_MAX_CONTENT_BYTES
+              valueFrom:
+                configMapKeyRef:
+                  name: devflow-github-scope-broker
+                  key: DEVFLOW_GITHUB_MAX_CONTENT_BYTES
+            - name: DEVFLOW_GITHUB_UPSTREAM_TIMEOUT_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: devflow-github-scope-broker
+                  key: DEVFLOW_GITHUB_UPSTREAM_TIMEOUT_SECONDS
+            - name: DEVFLOW_GITHUB_ALLOWED_REPOSITORIES
+              valueFrom:
+                configMapKeyRef:
+                  name: devflow-github-scope-broker
+                  key: DEVFLOW_GITHUB_ALLOWED_REPOSITORIES
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: content-http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: content-http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              cpu: 500m
+              memory: 192Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devflow-github-capability-issuer
+  namespace: agentteams-system
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: devflow-github-scope-broker
+    app.kubernetes.io/component: issuer
+  ports:
+    - name: issuer-http
+      port: 8081
+      targetPort: issuer-http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devflow-github-content-broker
+  namespace: agentteams-system
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: devflow-github-scope-broker
+    app.kubernetes.io/component: content
+  ports:
+    - name: content-http
+      port: 8080
+      targetPort: content-http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devflow-github-scope-broker-default-deny
+  namespace: agentteams-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devflow-github-scope-broker
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devflow-github-scope-issuer
+  namespace: agentteams-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devflow-github-scope-broker
+      app.kubernetes.io/component: issuer
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              agentteams.io/team: devflow-swe
+              agentteams.io/worker: devflow-lead
+              agentteams.io/role: team_leader
+      ports:
+        - protocol: TCP
+          port: 8081
+  egress:
+    # Kubernetes NetworkPolicy cannot select the apiserver Service by FQDN.
+    # The application nevertheless fixes the destination to injected
+    # KUBERNETES_SERVICE_HOST and RBAC permits only tokenreviews.create. Some
+    # CNI implementations evaluate the port after kube-proxy DNAT, so both the
+    # Service port and the standard k3s apiserver endpoint port are admitted.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devflow-github-content-broker
+  namespace: agentteams-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devflow-github-scope-broker
+      app.kubernetes.io/component: content
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: higress-gateway
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The process itself hard-codes api.github.com:443 and rejects redirects.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443

@@ -43,7 +43,7 @@ servers:
       - name: "get_file_contents"
         description: "Fetch file contents (or a directory listing) from a repo."
         allowed_agents: ["LocatorAgent"]
-        allowed_skills: ["code-root-cause"]
+        allowed_skills: ["code-root-cause", "github-evidence"]
         # Read-only: safe to expose broadly.
         readonly: true
       - name: "create_pull_request"

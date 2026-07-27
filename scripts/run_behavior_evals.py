@@ -178,7 +178,10 @@ async def run(args: argparse.Namespace) -> int:
     if errors:
         raise ValueError("; ".join(errors))
     if args.validate_only:
-        print(f"behavior-cases-valid: {len(cases)} cases, 6 Skills")
+        print(
+            f"behavior-cases-valid: {len(cases)} cases, "
+            f"{len({case.skill for case in cases})} Skills"
+        )
         return 0
 
     client = LLMClient(default_model=args.model)

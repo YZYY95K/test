@@ -26,7 +26,7 @@ tracing:
     protocol: "grpc"            # grpc for throughput; http/protobuf available
     insecure: true              # set false + set cert in prod
   service_name: "devflow"
-  service_version: "1.0.0"
+  service_version: "1.2.0"
   # Sampling: head-based for simplicity. 1.0 = all spans; lower for high volume.
   # T4/T5 issues are always sampled (forced) regardless of this rate — see
   # the span_attributes below.

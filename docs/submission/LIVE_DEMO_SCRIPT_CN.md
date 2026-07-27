@@ -1,58 +1,111 @@
-# 现场演示脚本（8 分钟）
+# 现场演示脚本（8 分钟，证据对齐版）
 
-## 0:00–0:45｜先讲边界
+本脚本只展示已经落盘或当场可复验的结果。初赛官方必交材料不包含演示视频；
+视频与现场闭环在完成后作为增强材料，不应在完成前写入报名表。
 
-打开职责矩阵：说明六个 Agent 为什么不可互换。强调 TeamLeader 只能
-编排，Coder 无 Git/MCP 权限，Tester 只执行服务端预注册命令，Reviewer
-不能合并。
+## 0:00–0:45｜对齐赛题
 
-## 0:45–2:00｜展示正常闭环
+用一页说明 DevFlow 覆盖五个评分维度。指出六角色超过“至少三个 Agent”的
+门槛，AgentTeams 是协同基点，七个 Skill 是必选工程资产；RAG、经验记忆、
+共享状态、轨迹/指标观测覆盖官方要求的“至少两项”。
 
-提交一个 T2 缺陷。依次展示分类、定位、typed patch、隔离测试、审查与
-经验沉淀的 envelope；每一步指出 producer、consumer、Skill、digest 和
-trace id。展示 canonical checkout 未改变。
+## 0:45–1:45｜职责不是角色扮演
 
-## 2:00–3:10｜展示失败返回
+打开 Agent Identity 矩阵：TeamLeader 只能编排项目、房间、任务与状态；
+Triage 分类；Locator 只读证据；Coder 只产候选补丁；Tester 隔离验证；
+Reviewer 只给审查结论。HumanReviewer 是外部授权主体，不计入六个 Agent。
+Worker 只允许自身任务的 `ack_task` / `submit_task`，不直接调用 `artifact` 或
+`filesync`；共享文件控制面由 TeamLeader 或受控任务生命周期承担。
 
-注入一个会让测试失败的候选。展示 Tester 输出失败证据并返回 Coder，
-TeamLeader 保持状态为 retry，而不是继续到 Reviewer。再次交付修复后展示
-同一 idempotency key 不会产生重复副作用。
+展示有效权限交集：`身份 ∩ Skill ∩ MCP ∩ 参数 ∩ 任务上下文 ∩ 批准`。
 
-## 3:10–4:10｜展示 MCP 默认拒绝
+## 1:45–2:45｜真实 AgentTeams 协作证据
 
-尝试三次越权：Coder 调 CI、Locator 请求路径逃逸、Reviewer 请求回滚但
-不带批准。展示三次均在 transport 前失败；打开审计记录，只显示身份、
-trace 与参数摘要，不显示 token 或原始参数。
+展示 `docs/evidence/AGENTTEAMS_LIVE_20260727.md`：一个 Leader 与五个 Worker、
+机器人到机器人交接、一个脱敏项目的两个依赖节点、Worker ack/submit、Leader
+accept、项目 completed 与 requester report 已发送。不得展示项目 ID 或房间标识。
 
-## 4:10–5:20｜展示 T4 人工门
+明确说明这是真实 Triage + Reviewer 两节点生命周期，不是六阶段软件修复。
+展示首次完成通知遇到 Matrix 启动故障后自动重试成功，说明失败由状态机和
+幂等语义处理，而不是靠重复生成结果。
 
-将同一修复标为 T4。Reviewer 即使看到绿色测试也只发
-`approval.required`。在 Team Room 由现场人员批准精确 digest，展示暂停、
-批准、恢复三种状态。若 AgentTeams 主机未就绪，必须明确跳过此段，不能
-用本地事件日志冒充 Team Room。
+## 2:45–3:45｜fresh T2 边界任务
 
-## 5:20–6:25｜展示真实回滚
+展示一次 fresh、operator-driven T2 GitHub 边界任务的脱敏摘要：项目
+`completed`、requester report `pending=false`；validator、首提、同结果幂等
+重试、不同结果冲突拒绝、冲突后读回和 Leader `effective` 全部通过。再展示
+项目 push 的 2/2 对象证明，以及 `meta.json`、`plan.md` 两次独立
+`stat exists=true`。只显示状态、计数和摘要，不显示项目 ID、房间、capability、
+连接信息或原始仓库内容。
 
-触发 staging 原子回滚：发布指针切到上一版本，健康检查通过，随后恢复；
-运行完整审计链校验。指出批准同时绑定 action、target 与 arguments digest。
+角标必须写明：“单次固定范围 T2，不是成功率统计，不是六阶段修复；stat 仅证明
+对象存在，不证明远端字节摘要。”
 
-## 6:25–7:15｜展示量化证据
+## 3:45–4:35｜边界拒绝
 
-展示服务器覆盖率、六个 Skill 质量门、三仓库 24 项基准的成功率、安全率、
-p50/p95 时延、人工介入率和 token。明确区分“路由/边界基准”与完整
-SWE-bench patch-resolution。
+展示已观察到的负例：Worker 在参数中声称 `role=leader` 并调用
+`taskflow.delegate_task`，Guard 使用进程身份覆盖不可信参数并返回
+`forbidden_tool`。再展示自动测试中的错 consumer、错摘要、错路径和未知工具
+拒绝；清楚区分“集群现场证据”与“仓库测试证据”。
 
-## 7:15–8:00｜收束
+展示 2026-07-28 的四运行面收敛记录：固定七项 DevFlow Skill 策略在控制器
+归档缓存、控制器持久 Skill 缓存、Worker 本地树和 MinIO 一致；独立检查为
+0 drift，Locator 替换后仍恰有两项预期 DevFlow Skill，六个角色 Pod 为 6/6
+Ready。屏幕同时
+保留 `completeRoleSkillBoundaryVerified=false`，明确未知/平台 Skill 与强 OS
+隔离不在这项结论内；同时显示 `strongBoundaryEnforceable=false`，说明同 UID
+仍有 TOCTOU 风险，当前不是 OS sandbox。
 
-总结三个价值：职责不会漂移、危险动作不能靠提示词越权、任何推进都有
-可追溯证据。最后给出未完成项：官方 AgentTeams Team Room 录屏需要可运行
-Docker/K8s 主机。
+## 4:35–5:25｜本地修复链（独立证据）
+
+运行固定 calculator fixture：原始测试失败，依次产生分类、定位、候选补丁、
+一次性副本测试、审查与经验记录，最后验证 canonical checkout 未改变。
+屏幕角标始终标注“本地确定性演示”，不得把这段称为 AgentTeams Team Room
+执行结果。
+
+## 5:25–6:30｜MCP 与安全工程
+
+展示 Agent/Skill/MCP 精确授权、服务端预注册 CI 命令、摘要绑定批准、哈希
+审计、短期能力凭证及凭据不进入提示词。只显示脱敏身份、trace 和摘要；不在
+终端、截图、日志或视频中展示 token、密码、房间标识和服务器地址。
+
+把 TeamHarness 的“风险来自根权限账本、来源来自持久项目状态、Matrix 私有
+邀请与完整成员集合必须读回验证、taskId 与提交摘要绑定重试/冲突”标为代码与
+测试证据。把直接 stdio/Streamable HTTP、角色×服务器配置/schema attestation、
+敏感值不进子进程 argv 和硬截止标为实现证据；随后用上一节的单次 T2 现场结果
+证明这条固定边界路径实际完成过一次，但不得外推到任意仓库或完整修复。
+
+展示已完成的 GitHub 短期能力链：固定 repo/revision/path 读取成功、object 与
+content digest 可复核、receipt response digest 重算一致；同 capability 换路径
+和 Reviewer 入口均为 403，Locator 直连 Broker 被 NetworkPolicy 阻断。画面
+只显示摘要与 HTTP 状态，不显示 capability、PAT 或 Consumer 凭据。
+
+## 6:30–7:20｜量化证据
+
+展示三个固定 revision、24 项路由/边界基准的精确决策、安全率、p50/p95
+时延与 token。展示七个 Skill 的静态质量门；同时指出 GLM-5.2 成对行为评测
+只覆盖较早的六个 Skill，`github-evidence` 不沿用该分数。覆盖率只使用最终
+分支当日重跑结果，不展示历史分支数字。
+
+## 7:20–8:00｜结论与缺口
+
+总结：职责不会漂移、越权不能靠提示词绕过、推进必须有可验证证据。最后主动
+列出尚缺项：真实六阶段修复、Tester 失败返回 Coder、T4 真人签名批准后恢复，
+以及正式比赛平台提交回执与正式视频。它们完成前不使用“全流程已验证”或
+“已经正式提交”字样；一次 T2 成功不换算为整体成功率。
+
+## T4 演示启用条件
+
+只有满足下列条件才加入正式视频：真实项目已进入 paused；未批准恢复被拒绝；
+人工对精确 action、target、arguments digest 和有效期签名；批准后同一项目
+恢复；审计链可从 pause 关联到 approval 与 resume。任一条件缺失就从视频中
+移除该段，并在缺口页如实说明。
 
 ## 演示前检查
 
-- 发布 commit、测试报告与 PPT 数字一致；
-- `.env`、终端历史、截图中无密钥；
-- MCP/metrics 仅监听 loopback；
-- staging 指针可回滚且 production 不参与演示；
-- 人工批准人、目标 release 与 patch digest 预先确认；
-- 失败路径使用固定 fixture，不临场制造不可控故障。
+- 最终 commit、PPT、代码包与证据数字一致；
+- `.env`、终端历史、截图和视频中无密钥或个人连接信息；
+- 所有运行证据标注环境、时间、commit 与证据文件；
+- 本地演示、仓库测试、真实集群证据使用不同角标；
+- 失败路径使用固定 fixture，不临场制造不可控故障；
+- 未完成项保留为未完成，不以设计图或测试替代现场记录。

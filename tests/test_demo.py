@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,9 @@ from devflow.demo import run_demo
 from devflow.exceptions import SkillError
 from devflow.skills.contracts import HandoffEnvelope
 from devflow.skills.experience_distiller import ExperienceDistillerSkill
+
+ROOT = Path(__file__).resolve().parents[1]
+SAMPLE = ROOT / "examples" / "prelim_sample"
 
 
 class RecordingStore:
@@ -28,6 +32,29 @@ class RecordingStore:
 @pytest.mark.asyncio
 async def test_demo_proves_baseline_fix_and_review(tmp_path: Path) -> None:
     report, report_path = await run_demo(tmp_path)
+
+    request = json.loads((SAMPLE / "sample_input.json").read_text(encoding="utf-8"))
+    expected = json.loads(
+        (SAMPLE / "expected_output.json").read_text(encoding="utf-8")
+    )
+    assert request["schema"] == "devflow.demo-request/v1"
+    assert request["mode"] == report["mode"]
+    assert request["scenario"] == report["scenario"]
+    for key, value in request["issue"].items():
+        assert report["issue"][key] == value
+    for dotted_path, value in expected["assertions"].items():
+        observed: Any = report
+        for part in dotted_path.split("."):
+            observed = observed[part]
+        assert observed == value
+    assert set(expected["required_events"]) <= {
+        event["event_type"] for event in report["events"]
+    }
+    assert set(expected["required_successful_tools"]) == {
+        f'{entry["server"]}:{entry["tool"]}'
+        for entry in report["mcp_audit"]
+        if entry["outcome"] == "succeeded"
+    }
 
     assert report_path.exists()
     assert report["classification"]["complexity_level"] == "T2"
@@ -76,7 +103,7 @@ async def test_demo_proves_baseline_fix_and_review(tmp_path: Path) -> None:
 async def test_distiller_blocks_secret_before_store(tmp_path: Path) -> None:
     report, _ = await run_demo(tmp_path)
     issue = dict(report["issue"])
-    issue["title"] = "leaked sk-abcdefghijklmnopqrstuvwxyz123456"
+    issue["title"] = "leaked " + "sk-" + "abcdefghijklmnopqrstuvwxyz123456"
     store = RecordingStore()
     distiller = ExperienceDistillerSkill(store=store)
 

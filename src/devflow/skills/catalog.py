@@ -46,6 +46,10 @@ def validate_collaboration(catalog: dict[str, SkillContract]) -> list[str]:
     owners = {contract.owner for contract in catalog.values()}
     allowed_consumers = owners | {"TeamLeader", "HumanReviewer"}
     produced = {contract.output.type for contract in catalog.values()}
+    # These are explicit orchestration ingress artifacts, not hidden outputs
+    # from another domain Skill. Every other input must be produced by the
+    # declared Skill graph.
+    external_inputs = {"IssueIntake", "SkillInvocation"}
 
     for contract in catalog.values():
         for handoff in contract.handoffs:
@@ -61,7 +65,7 @@ def validate_collaboration(catalog: dict[str, SkillContract]) -> list[str]:
                 violations.append(
                     f"{contract.name}: success handoff artifact must equal output type"
                 )
-        if contract.input.type not in produced and contract.name != "issue-classifier":
+        if contract.input.type not in produced | external_inputs:
             violations.append(
                 f"{contract.name}: no Skill produces input {contract.input.type}"
             )

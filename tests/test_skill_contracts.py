@@ -26,7 +26,7 @@ def test_every_skill_clears_90_point_quality_gate() -> None:
         if (skill_dir / "SKILL.md").exists()
     ]
 
-    assert len(results) == 6
+    assert len(results) == 7
     assert all(result.qualified for result in results)
     assert min(result.score for result in results) >= 90
 
@@ -95,6 +95,11 @@ def test_each_skill_validator_accepts_contract_shape(tmp_path: Path) -> None:
     catalog = load_catalog(ROOT / "skills")
 
     for name, contract in catalog.items():
+        # github-evidence has a cryptographic Broker receipt schema and is
+        # exercised with valid/tampered receipts in its dedicated policy tests;
+        # a dictionary of placeholder strings must not bypass that validator.
+        if name == "github-evidence":
+            continue
         artifact = {field: "evidence" for field in contract.output.required_fields}
         path = tmp_path / f"{name}.json"
         path.write_text(json.dumps(artifact), encoding="utf-8")
@@ -141,7 +146,7 @@ def test_skill_validator_rejects_missing_contract_fields(tmp_path: Path) -> None
 def test_behavior_suite_covers_every_skill_and_contract_route() -> None:
     cases = load_cases(ROOT / "evals" / "skill_behavior" / "cases.yaml")
 
-    assert len(cases) == 12
+    assert len(cases) == 14
     assert {case.skill for case in cases} == set(load_catalog(ROOT / "skills"))
     assert not validate_cases(ROOT, cases)
 

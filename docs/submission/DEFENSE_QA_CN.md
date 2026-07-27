@@ -4,7 +4,8 @@
 
 区别不在并发数量，而在独立身份、私有边界、失败返回、可验证交接和不同
 授权。任一 Worker 可拒绝输入并把证据返回 TeamLeader；TeamLeader 不能
-代做领域工作。
+代做领域工作。Worker 只能进行自身任务的 `ack_task` / `submit_task`，没有直接
+`artifact` / `filesync` 控制面；文件同步由 TeamLeader 或受控任务生命周期完成。
 
 ## 2. 为什么 TeamLeader 不是一个可分发 Skill？
 
@@ -39,28 +40,44 @@ provider 并做健康检查。
 
 ## 8. 凭据代理是否真的不泄露密钥？
 
-Agent 只拿到短期签名 capability handle。可信适配器在调用时复查身份、能力、
-有效期和当前授权，再从服务端环境解析密钥；handle 本身没有 secret。
+Agent 只拿短期、任务与仓库范围绑定的 capability，真实凭据只存在于服务端
+适配器。集群 E2E 已完成一次 fresh、operator-driven 的固定范围 T2 边界任务；
+项目完成且 requester report 不再 pending，validator、首提、幂等重试、冲突
+拒绝、冲突后读回与 Leader `effective` 均通过。同一 capability 换路径和
+Reviewer 入口均返回 403，Locator 直连 Broker 被 NetworkPolicy 阻断。证据不
+保存 capability、上游凭据、Consumer 凭据或原始仓库内容，也不把一次 T2
+扩写为任意仓库、总体成功率或完整修复闭环。
 
 ## 9. RAG 离线模式是不是语义检索？
 
 不是。`local-hash` 是确定性 feature hashing 降级模式，用于离线可用与测试；
 生产语义质量必须使用已开通的 embedding provider。两者在报告中明确区分。
 
-## 10. 82.73% 覆盖率是否足够？
+## 10. 为什么不直接用覆盖率证明系统可靠？
 
-它超过当前 80% CI 门且 TeamLeader/LLM/核心 RAG 达到重点覆盖，但覆盖率不等于
-正确性。项目同时保留行为评测、默认拒绝测试、真实服务器集成和人工门证据。
+覆盖率只说明哪些代码被执行，不证明职责边界正确或现场闭环真实。82.73% 是
+2026-07-24 旧分支快照，当前新增安全边界后必须重新跑最终分支，不能沿用旧数。
+最终证据还要同时包含行为评测、拒绝测试、真实服务器状态和人工门记录。
 
-## 11. 三仓库 24 项是否等于 SWE-bench？
+## 11. 三仓库 24 项是否等于完整补丁解决基准？
 
 不等于。它测量真实源码条件下的路由、边界、安全与成本。完整 issue-resolution
-必须在 Docker 标准环境运行 SWE-bench；当前受限服务器不满足前置条件。
+必须在固定、可复现的仓库环境中应用补丁并运行项目测试。当前 24 项不得表述为
+“修复 24 个缺陷”，也不得写成“SWE-bench 24/24”。
 
-## 12. 为什么没有真实 AgentTeams 录屏？
+## 12. AgentTeams 真实运行到底完成了什么？
 
-供应服务器是缺少 `CAP_SYS_ADMIN` 的受限容器，不能启动 Docker/K8s；官方
-AgentTeams 依赖其中之一。我们保留清晰阻塞证据，不用本地 event bus 冒充。
+新服务器已运行真实 AgentTeams：一个 Leader、五个 Worker，完成了机器人交接
+以及 Triage 到 Reviewer 的两节点项目生命周期，并观察到 Worker 冒充 Leader
+被拒绝。固定七项 DevFlow Skill 策略随后在控制器两级缓存、Worker 本地树和
+MinIO 四个运行面完成收敛，Locator 替换后仍只保留两项预期 DevFlow Skill，
+六个角色 Pod 为 6/6 Ready，独立检查为 0 drift。此后又完成一次 fresh、
+operator-driven 的 T2 GitHub 边界任务：项目 `completed`、requester report
+`pending=false`，并具备 validator、首提、幂等、冲突拒绝、冲突后读回、
+Leader `effective` 与文件同步 2/2 证据。它仍不是六阶段软件修复；Tester 失败
+回传 Coder、T4 真人签名批准恢复、正式平台回执和正式录屏尚未完成。一次 T2
+成功也不能用作整体成功率。早期受限服务器的 Docker 阻塞记录仍保留，但不再
+代表当前环境。
 
 ## 13. Tester 或 Reviewer 与 Coder 冲突时听谁的？
 
@@ -76,3 +93,37 @@ AgentTeams 依赖其中之一。我们保留清晰阻塞证据，不用本地 ev
 
 Agent 身份、Skill 包、typed contracts、MCP grants、评测清单和验证脚本都在
 Apache-2.0 仓库中，可替换模型、Git 提供商或 CI provider，而不改变信任模型。
+
+## 16. 为什么说有七个 Skill，行为评测表却只有六个？
+
+`github-evidence` 是后续新增的第七个 Skill，已有严格契约、独立验证器、静态
+质量门和篡改负例；2026-07-24 的 GLM-5.2 成对评测早于它，因此只覆盖六个
+Skill。我们不会把旧分数平移给新 Skill，新增行为评测完成后再更新材料。
+
+## 17. HumanReviewer 为什么不算第七个 Agent？
+
+它是系统外部的授权主体，不是自主执行 Worker。把真人审批者算成 Agent 会混淆
+责任与信任边界。参赛口径始终是六个自主 Agent，T4/T5 由外部 HumanReviewer
+提供摘要绑定批准或拒绝。
+
+## 18. 角色 Skill 已经“完全隔离”了吗？
+
+不能这样表述。现场 apply 与独立只读检查证明的是固定七项 DevFlow Skill 策略
+在控制器归档缓存、控制器持久 Skill 缓存、Worker 本地树和 MinIO 一致，即
+`devflowPolicyVerified=true`，最新独立检查为 0 drift，六个角色 Pod 为 6/6
+Ready。结果同时明确
+`completeRoleSkillBoundaryVerified=false`：内建、平台和未知 Skill 没有被扩写
+为完整边界；OpenClaw 审计也仍为 `strongBoundaryEnforceable=false`。这是经过
+验证的窄边界，不是敌对 root 或 OS 沙箱声明；同 UID 文件检查与使用之间仍存在
+TOCTOU 风险。
+
+## 19. TeamHarness 和 MCP 如何避免只信调用者自述？
+
+当前 Guard 代码与测试从根权限账本读取项目风险、从持久项目状态读取来源，
+直接查询 Matrix 以验证私有邀请规则和完整实际成员集合，并用 taskId 与提交摘要
+约束幂等/冲突。成功路径驱动直接使用 stdio 与 Streamable HTTP，敏感值不进入
+子进程 argv，同时校验角色×服务器配置/schema 并设置硬截止。一次 fresh T2
+现场任务已沿该路径完成：项目完成、报告关闭，validator、三种提交语义、冲突后
+读回与 Leader `effective` 均验证；项目 push 报告 2/2，对 `meta.json` 与
+`plan.md` 又分别执行了 `stat exists=true`。这些独立 stat 只证明对象存在，
+不证明远端字节摘要；一次 T2 也不能替代六阶段修复或总体成功率基准。

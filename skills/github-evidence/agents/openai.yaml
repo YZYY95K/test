@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Evidence"
+  short_description: "Bounded revision-pinned GitHub repository evidence"
+  default_prompt: "Use $github-evidence to collect repository evidence within the assigned capability profile."

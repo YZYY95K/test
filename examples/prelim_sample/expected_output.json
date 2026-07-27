@@ -1,0 +1,25 @@
+{
+  "schema": "devflow.demo-expectations/v1",
+  "assertions": {
+    "mode": "offline-deterministic",
+    "scenario": "calculator_bug",
+    "classification.complexity_level": "T2",
+    "located_context.root_cause.file": "calculator.py",
+    "test_result.passed": 1,
+    "test_result.baseline_comparison.baseline_passed": 0,
+    "review.decision": "approved",
+    "experience.stored": true
+  },
+  "required_events": [
+    "triage.completed",
+    "locator.completed",
+    "coder.patch_ready",
+    "test.passed",
+    "review.approved",
+    "experience.stored"
+  ],
+  "required_successful_tools": [
+    "github:get_file_contents",
+    "cicd:run_tests"
+  ]
+}

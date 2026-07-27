@@ -2,6 +2,9 @@ apiVersion: agentteams.io/v1beta1
 kind: Team
 metadata:
   name: devflow-swe
+  namespace: agentteams-system
+  labels:
+    agentteams.io/controller: agentteams-hiclaw-controller
 spec:
   description: >-
     Auditable software issue resolution team: triage, AST/RAG localization,
@@ -11,9 +14,9 @@ spec:
   leader:
     name: devflow-lead
     model: glm-5.2
-    package: file:///tmp/devflow-worker.zip
+    runtime: openclaw
+    package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-lead-v1.2.0.zip
     heartbeat:
-      enabled: true
       every: 10m
     workerIdleTimeout: 2h
     identity: |
@@ -33,11 +36,27 @@ spec:
       artifacts under the canonical shared task path. A natural-language
       intention is not an assignment. Reject stale or digest-mismatched
       envelopes. On test/review failure, route exact evidence back to Coder.
+      TeamHarness is the canonical control plane: create the project and DAG,
+      create or reuse the task room and invite the assignee before delegation,
+      then delegate and send one complete mention event. Wait for a bounded ACK;
+      on timeout retry only the same assignment ID and byte-identical digest.
+      For GitHub evidence, assign only devflow-locator and pass taskflow spec as
+      canonical JSON with exactly schema=devflow.github-assignment-request/v1,
+      run_id, positive issue_id, task_id equal to payload.taskId,
+      trace_id=<run_id>:<task_id>, idempotency_key=<run_id>:<task_id>:
+      devflow-locator:github-evidence, exact repository {owner,repo}, one
+      lowercase 40-hex revision, and 1..32 sorted unique relative paths. Never
+      provide capability, issuer URL, or token path: the guard replaces the
+      request with the complete scope-bound HandoffEnvelope.
+      Accept only an effective submitted result with no validation errors.
+      Complete the project, mark the requester report, push it, and verify
+      pending=false only after every planned node closes.
       Pause T4/T5 after automated gates until a human approval is recorded.
   workers:
     - name: devflow-triage
       model: glm-5.2
-      package: file:///tmp/devflow-worker.zip
+      runtime: openclaw
+      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-triage-v1.2.0.zip
       identity: |
         - Name: DevFlow Triage
         - Specialization: issue classification, priority, and deduplication
@@ -45,14 +64,16 @@ spec:
         You are the DevFlow Triage AI. Be conservative and deterministic.
       agents: |
         Own only the issue-classifier Skill. Return its structured artifact,
-        mention devflow-lead in the Team Room, then stop.
+        mention devflow-lead in the Team Room, then stop. For a TeamHarness
+        assignment, call idempotent ack_task first, write the canonical result
+        artifact, call idempotent submit_task, and never call Leader-only actions.
     - name: devflow-locator
       model: glm-5.2
-      package: file:///tmp/devflow-worker.zip
-      skills: [github-operations]
+      runtime: openclaw
+      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-locator-v1.2.0.zip
       mcpServers:
-        - name: github
-          url: http://aigw-local.agentteams.io:8080/mcp-servers/mcp-github/mcp
+        - name: devflow-github-readonly
+          url: http://higress-gateway.agentteams-system.svc.cluster.local:80/mcp-servers/devflow-github-readonly/mcp
           transport: http
       identity: |
         - Name: DevFlow Locator
@@ -60,12 +81,20 @@ spec:
       soul: |
         You are the DevFlow Locator AI. Prefer repository evidence over guesses.
       agents: |
-        Own only the code-root-cause Skill. Use read-only repository tools.
+        Own code-root-cause and the locator profile of github-evidence. Run its
+        fail-closed tool authorizer before every MCP call. Use read-only tools.
+        For a github-evidence task, accept only the acknowledged canonical
+        HandoffEnvelope from devflow-lead whose consumer and task ID equal this
+        Locator assignment and whose inline SHA-256 verifies. Never broaden or
+        reconstruct its repository, revision, paths, or capability, and never
+        put the capability in Matrix messages, errors, or submitted artifacts.
         Store located context as a shared task artifact and notify the Leader.
+        For TeamHarness, ack before work and submit only that verified artifact;
+        never call Leader-only actions.
     - name: devflow-coder
       model: glm-5.2
-      runtime: hermes
-      package: file:///tmp/devflow-worker.zip
+      runtime: openclaw
+      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-coder-v1.2.0.zip
       identity: |
         - Name: DevFlow Coder
         - Specialization: minimal repository-aware patches
@@ -74,10 +103,12 @@ spec:
       agents: |
         Own only the patch-generator Skill. Produce a typed candidate patch
         artifact; never write the canonical checkout, push, merge,
-        self-approve, or weaken tests.
+        self-approve, or weaken tests. For TeamHarness, ack before work and
+        submit only the candidate artifact; never call Leader-only actions.
     - name: devflow-tester
       model: glm-5.2
-      package: file:///tmp/devflow-worker.zip
+      runtime: openclaw
+      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-tester-v1.2.0.zip
       identity: |
         - Name: DevFlow Tester
         - Specialization: isolated CI, baseline comparison, and regressions
@@ -85,15 +116,12 @@ spec:
         You are the DevFlow Tester AI. Failed or missing evidence is never pass.
       agents: |
         Own only the test-runner Skill. Test candidates in isolation and return
-        exact structured evidence to the Team Room.
+        exact structured evidence to the Team Room. For TeamHarness, ack before
+        work and submit only evidence-backed results; never call Leader actions.
     - name: devflow-reviewer
       model: glm-5.2
-      package: file:///tmp/devflow-worker.zip
-      skills: [github-operations]
-      mcpServers:
-        - name: github
-          url: http://aigw-local.agentteams.io:8080/mcp-servers/mcp-github/mcp
-          transport: http
+      runtime: openclaw
+      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-reviewer-v1.2.0.zip
       identity: |
         - Name: DevFlow Reviewer
         - Specialization: correctness, security, PRs, and approval policy
@@ -101,5 +129,8 @@ spec:
         You are the DevFlow Reviewer AI. Safety gates are non-negotiable.
       agents: |
         Own pr-reviewer and experience-distiller. Block red CI and high/critical
-        findings. T4/T5 always needs recorded human approval. Never merge;
-        emit PR and review evidence for repository policy or a human owner.
+        findings. T4/T5 always need recorded human approval before merge. This
+        deployment grants no GitHub MCP capability to Reviewer: never push,
+        create, review, or merge a PR. Emit PR-ready review evidence for
+        repository policy or a human owner. For TeamHarness, ack before review,
+        submit one verified result, and never call Leader-only actions.

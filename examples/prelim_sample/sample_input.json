@@ -1,0 +1,17 @@
+{
+  "schema": "devflow.demo-request/v1",
+  "mode": "offline-deterministic",
+  "scenario": "calculator_bug",
+  "issue": {
+    "issue_number": 1,
+    "title": "calculator.add returns subtraction result",
+    "body": "Calling add(2, 3) returns -1. It should return 5.",
+    "labels": [
+      "bug",
+      "demo"
+    ],
+    "author": "devflow-demo",
+    "repo_owner": "local",
+    "repo_name": "calculator_bug"
+  }
+}

@@ -37,7 +37,8 @@ approval.
 - Credential-free offline demo that applies a real candidate patch in a
   temporary repository, executes a real regression test, reviews the result,
   and writes a JSON evidence report.
-- AgentTeams `Team` manifest and six self-contained Skill v2 packages with
+- AgentTeams `Team` manifest and six role-scoped Worker packages containing
+  only each role's self-contained Skill v2 set, with
   typed contracts, deterministic validators, UI metadata, examples, and
   release/rollback policy.
 - Paired GLM behavior evaluation that compares each Skill against a no-Skill
@@ -69,6 +70,11 @@ The demo does not need an API key or GitHub token. It:
 7. distills and stores a provenance-linked reusable experience;
 8. stores the full event and result evidence under `.devflow/runs/`.
 
+The fixed logical request and machine-checkable expected assertions are in
+[`examples/prelim_sample`](examples/prelim_sample). The report timestamp and
+content-derived digests vary by run; the acceptance fields in
+`expected_output.json` are stable and are enforced by `tests/test_demo.py`.
+
 Production mode uses variables from `.env.example`. Copy it to `.env` and
 provide only the credentials required by the integrations you enable.
 Install the persistent ChromaDB-backed RAG implementation with
@@ -86,11 +92,23 @@ DevFlow targets AgentTeams `agentteams.io/v1beta1`.
 .\.venv\Scripts\python scripts\build_agentteams_package.py
 ```
 
-Copy `dist/devflow-worker.zip` into the AgentTeams Manager/controller at
-`/tmp/devflow-worker.zip`, then apply:
+Publish the six role-scoped archives through the private in-cluster package
+Service. The versioned ConfigMap is made immutable before any Pod can consume
+it; changing package bytes therefore requires a new release version.
 
 ```bash
-agentteams-apply.sh -f agentteams/team.yaml
+kubectl create configmap devflow-worker-packages-v1-2-0 -n agentteams-system \
+  --from-file=dist/devflow-lead-v1.2.0.zip \
+  --from-file=dist/devflow-triage-v1.2.0.zip \
+  --from-file=dist/devflow-locator-v1.2.0.zip \
+  --from-file=dist/devflow-coder-v1.2.0.zip \
+  --from-file=dist/devflow-tester-v1.2.0.zip \
+  --from-file=dist/devflow-reviewer-v1.2.0.zip
+kubectl patch configmap devflow-worker-packages-v1-2-0 \
+  -n agentteams-system --type=merge -p '{"immutable":true}'
+kubectl apply -n agentteams-system -f agentteams/package-server.yaml
+kubectl rollout status -n agentteams-system deployment/devflow-package
+kubectl apply -n agentteams-system -f agentteams/team.yaml
 ```
 
 The manifest creates one Team Leader and five workers. AgentTeams supplies the
@@ -130,17 +148,15 @@ The executable responsibility matrix and MCP trust model are documented in
 The latest model-run evidence is recorded in
 [GLM-5.2 Skill behavior evidence](docs/evidence/SKILL_BEHAVIOR_GLM52.md).
 Executable provider boundaries are mapped in
-[Infrastructure and trust boundaries](docs/INFRASTRUCTURE.md); the supplied
-server's AgentTeams compatibility audit is recorded in
-[Server runtime audit](docs/evidence/SERVER_RUNTIME_AUDIT.md).
-The quantitative evaluation design and live CI/CD evidence are in
-[Repository benchmark](docs/BENCHMARK.md) and
-[Server MCP integration evidence](docs/evidence/SERVER_INTEGRATION_921162C.md).
-The submission package includes the [Chinese introduction](docs/submission/INTRO_500_CN.md),
-[Agent Identity appendix](docs/submission/AGENT_IDENTITY_APPENDIX.md),
-[live-demo script](docs/submission/LIVE_DEMO_SCRIPT_CN.md),
-[defense Q&A](docs/submission/DEFENSE_QA_CN.md), and
-[evidence deck](outputs/devflow-agent-infra.pptx).
+[Infrastructure and trust boundaries](docs/INFRASTRUCTURE.md). Current server,
+AgentTeams, MCP, failure-path, and artifact evidence is consolidated in
+[AgentTeams live evidence](docs/evidence/AGENTTEAMS_LIVE_20260727.md); the
+quantitative evaluation design is in [Repository benchmark](docs/BENCHMARK.md).
+The outer preliminary-submission archive also carries the Chinese introduction,
+Agent Identity appendix, live-demo script, defense Q&A, and the final 12-page
+PPT/PDF. Those companion artifacts deliberately live outside this nested source
+ZIP and are therefore named, rather than linked with non-resolving source-relative
+paths, here.
 
 ## Security
 

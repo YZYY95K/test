@@ -21,7 +21,7 @@ def test_config_declares_full_team_and_skills() -> None:
         "TesterAgent",
         "ReviewerAgent",
     }
-    assert len(settings.skills["skills"]) == 6
+    assert len(settings.skills["skills"]) == 7
     assert {"github", "cicd"} <= set(settings.mcp_servers["servers"])
 
 

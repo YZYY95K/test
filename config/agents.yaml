@@ -145,6 +145,7 @@ agents:
       - "codebase.indexed"   # rebuild context after re-index
     depends_on_skills:
       - "code-root-cause"
+      - "github-evidence"
     resources:
       # Vector store backing RAG. Path resolved from CHROMADB_PATH env var.
       vector_store:
