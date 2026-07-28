@@ -73,6 +73,11 @@ IssueIntake
   -> ExperiencePattern
 ```
 
+`IssueIntake` and integrity-checked `SkillInvocation` are the only external
+entry artifacts. The latter drives bounded helper work such as revision-pinned
+GitHub evidence, which returns to TeamLeader for the next typed assignment;
+it is not treated as an undeclared domain-Skill output.
+
 Every inter-agent transfer uses `HandoffEnvelope` v1 with producer, consumer,
 task identity, trace identity, idempotency key, artifact schema version, and
 SHA-256. The recipient rejects a stale, mismatched, or corrupted envelope.
@@ -105,4 +110,3 @@ Static qualification must be followed by:
 4. measuring acceptance pass rate, unsafe-action rate, retries, tokens, cost,
    latency, and hand-off defects;
 5. blocking release when safety regresses or task success fails to improve.
-

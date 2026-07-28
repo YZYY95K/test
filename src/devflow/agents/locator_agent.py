@@ -77,7 +77,7 @@ class LocatorAgent(BaseAgent):
             "over the indexed repository, producing a located-context payload "
             "for the CoderAgent."
         ),
-        model="glm-4",
+        model="glm-5.2",
         temperature=0.4,  # slightly higher to explore candidate locations
         system_prompt_ref="prompts/locator.md",
     )
@@ -96,6 +96,7 @@ class LocatorAgent(BaseAgent):
         "triage.completed",
         "codebase.indexed",
     )
+    _OWNED_SKILLS = ("code-root-cause", "github-evidence")
     _FORBIDDEN_ACTIONS = {
         "write_source_files": "Cannot write or modify source files",
         "execute_code": "Cannot execute repository code",
@@ -175,9 +176,13 @@ class LocatorAgent(BaseAgent):
                 confidence=root_cause.confidence,
                 affected=len(located.affected_files),
             )
-            await self._emit_event(
+            await self._emit_handoff(
                 "locator.completed",
-                {
+                issue_id=issue.issue_number,
+                consumer="CoderAgent",
+                skill="code-root-cause",
+                artifact_type="LocatedContext",
+                payload={
                     "issue_id": issue.issue_number,
                     "root_cause": root_cause.model_dump(mode="json"),
                     "context_payload": context_payload,
@@ -264,6 +269,8 @@ class LocatorAgent(BaseAgent):
                         "repo": issue.repo_name,
                         "path": path,
                     },
+                    skill="code-root-cause",
+                    issue_id=issue.issue_number,
                 )
                 contents[path] = _extract_content(result) or snippet.get("content", "")
             except Exception as exc:  # noqa: BLE001 — degrade to snippet

@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devflow-package
+  namespace: agentteams-system
+  labels:
+    app.kubernetes.io/name: devflow-package
+    app.kubernetes.io/part-of: devflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devflow-package
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devflow-package
+        app.kubernetes.io/part-of: devflow
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: package-server
+          image: busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/httpd", "-f", "-p", "8080", "-h", "/www"]
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /devflow-lead-v1.3.0.zip
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /devflow-lead-v1.3.0.zip
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: package
+              mountPath: /www
+              readOnly: true
+      volumes:
+        - name: package
+          configMap:
+            name: devflow-worker-packages-v1-3-0
+            defaultMode: 0444
+            items:
+              - key: devflow-lead-v1.3.0.zip
+                path: devflow-lead-v1.3.0.zip
+              - key: devflow-triage-v1.3.0.zip
+                path: devflow-triage-v1.3.0.zip
+              - key: devflow-locator-v1.3.0.zip
+                path: devflow-locator-v1.3.0.zip
+              - key: devflow-coder-v1.3.0.zip
+                path: devflow-coder-v1.3.0.zip
+              - key: devflow-tester-v1.3.0.zip
+                path: devflow-tester-v1.3.0.zip
+              - key: devflow-reviewer-v1.3.0.zip
+                path: devflow-reviewer-v1.3.0.zip
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devflow-package
+  namespace: agentteams-system
+  labels:
+    app.kubernetes.io/name: devflow-package
+    app.kubernetes.io/part-of: devflow
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: devflow-package
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devflow-package-ingress
+  namespace: agentteams-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: devflow-package
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentteams-system
+      ports:
+        - protocol: TCP
+          port: 8080

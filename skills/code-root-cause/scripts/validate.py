@@ -8,7 +8,7 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-import yaml
+from _contract import load_contract
 
 SECRET = re.compile(
     r"(ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|"
@@ -31,9 +31,7 @@ def main() -> int:
         print("usage: validate.py <input|output> <artifact.json>", file=sys.stderr)
         return 2
     root = Path(__file__).resolve().parents[1]
-    contract = yaml.safe_load(
-        (root / "references" / "contract.yaml").read_text(encoding="utf-8")
-    )
+    contract = load_contract(root / "references" / "contract.yaml")
     artifact = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
     if not isinstance(artifact, dict):
         raise ValueError("artifact root must be an object")

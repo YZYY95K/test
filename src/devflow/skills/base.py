@@ -22,6 +22,7 @@ from typing import Any, ClassVar
 
 from devflow.exceptions import SkillError
 from devflow.observability import logger, tracer
+from devflow.security.secrets import secret_kinds
 
 # ---------------------------------------------------------------------------
 # MCP tool caller abstraction
@@ -97,20 +98,6 @@ class MCPClient:
         """
         return await _DefaultMCPCaller.call(server, tool, arguments)
 
-
-# ---------------------------------------------------------------------------
-# Security patterns (mirrors config/security.yaml prompt_scrubbing.patterns)
-# ---------------------------------------------------------------------------
-
-#: Regex patterns that indicate a leaked secret. Matches are flagged by
-#: :meth:`BaseSkill._check_security` and cause the skill to fail closed.
-_SECRET_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"ghp_[A-Za-z0-9]{36}"),                     # GitHub PAT
-    re.compile(r"github_pat_[A-Za-z0-9_]{82}"),              # fine-grained PAT
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),                      # OpenAI-style key
-    re.compile(r"AKIA[0-9A-Z]{16}"),                         # AWS access key id
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),       # private key blocks
-]
 
 #: Dangerous code patterns that must not appear in generated patches.
 _DANGEROUS_PATTERNS: list[re.Pattern[str]] = [
@@ -285,22 +272,7 @@ class BaseSkill(abc.ABC):
         Returns:
             List of human-readable pattern names that matched.
         """
-        violations: list[str] = []
-
-        if isinstance(obj, str):
-            for i, pattern in enumerate(_SECRET_PATTERNS):
-                if pattern.search(obj):
-                    violations.append(f"secret_pattern_{i}")
-
-        elif isinstance(obj, dict):
-            for value in obj.values():
-                violations.extend(self._scan_for_secrets(value))
-
-        elif isinstance(obj, list):
-            for item in obj:
-                violations.extend(self._scan_for_secrets(item))
-
-        return violations
+        return secret_kinds(obj)
 
     @staticmethod
     def scan_for_dangerous_patterns(text: str) -> list[str]:

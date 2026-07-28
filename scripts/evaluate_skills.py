@@ -10,7 +10,12 @@ from typing import Any
 
 import yaml
 
-from devflow.skills.catalog import load_catalog, validate_collaboration
+from devflow.skills.catalog import (
+    load_catalog,
+    validate_agent_alignment,
+    validate_collaboration,
+    validate_mcp_alignment,
+)
 
 RUBRIC = {
     "spec_compliance": 15,
@@ -79,6 +84,8 @@ def evaluate(skill_dir: Path) -> SkillScore:
     description = str(meta.get("description", ""))
     if "Use when" not in description:
         deduct("trigger_precision", 6, "description lacks explicit Use when trigger")
+    if "## Invocation gate" not in text:
+        deduct("trigger_precision", 4, "core instructions lack a pre-tool invocation gate")
     if len(contract.invoke_when) < 2 or len(contract.refuse_when) < 2:
         deduct("trigger_precision", 4, "positive and negative triggers are incomplete")
 
@@ -100,6 +107,8 @@ def evaluate(skill_dir: Path) -> SkillScore:
 
     if "## Boundaries" not in text:
         deduct("boundary_security", 5, "boundary disclosure missing from core instructions")
+    if "## Tool boundary" not in text:
+        deduct("boundary_security", 3, "MCP/tool boundary missing from core instructions")
     if len(contract.forbidden_actions) < 3:
         deduct("boundary_security", 6, "fewer than three explicit forbidden actions")
     if len(contract.allowed_actions) < 2:
@@ -156,6 +165,12 @@ def main() -> int:
     skills_dir = args.root / "skills"
     catalog = load_catalog(skills_dir)
     graph_violations = validate_collaboration(catalog)
+    graph_violations.extend(
+        validate_agent_alignment(catalog, args.root / "config" / "agents.yaml")
+    )
+    graph_violations.extend(
+        validate_mcp_alignment(catalog, args.root / "config" / "mcp_servers.yaml")
+    )
     results = [
         evaluate(skill_dir)
         for skill_dir in sorted(skills_dir.iterdir())

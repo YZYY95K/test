@@ -14,6 +14,9 @@ skills:
   - name: code-root-cause
     owner: LocatorAgent
     contract: skills/code-root-cause/references/contract.yaml
+  - name: github-evidence
+    owner: LocatorAgent
+    contract: skills/github-evidence/references/contract.yaml
   - name: patch-generator
     owner: CoderAgent
     contract: skills/patch-generator/references/contract.yaml

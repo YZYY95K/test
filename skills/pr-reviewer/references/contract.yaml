@@ -1,6 +1,6 @@
 schema_version: "1.0"
 name: pr-reviewer
-version: "2.0.0"
+version: "2.1.0"
 owner: ReviewerAgent
 intent: Independently gate a tested candidate and create a policy-compliant PR.
 invoke_when:
@@ -25,14 +25,18 @@ dependencies:
   - Scoped GitHub PR and review MCP capabilities.
   - Versioned security scanners and config/security.yaml policy.
   - Append-only approval and audit evidence store.
+mcp_tools:
+  - github:create_pull_request
+  - github:add_review
 allowed_actions:
   - Read candidate, test, policy, and security evidence.
   - Submit a review and create a pull request through scoped tools.
-  - Merge only as a separate audited action after every policy gate passes.
+  - Record merge eligibility for a human-owned or repository-policy process.
 forbidden_actions:
   - Approve red, stale, incomplete, or mismatched test evidence.
   - Dismiss unresolved high or critical security findings.
   - Auto-approve or auto-merge T4 or T5.
+  - Merge any pull request or invoke a deployment or rollback operation.
   - Self-approve a change authored by the same agent instance.
   - Fabricate a pull-request URL or human approval record.
 handoffs:
@@ -41,7 +45,7 @@ handoffs:
     artifact_type: ReviewDecision
     event: review.approved
   - "on": failure
-    consumer: CoderAgent
+    consumer: TeamLeader
     artifact_type: ReviewDecision
     event: review.rejected
   - "on": blocked

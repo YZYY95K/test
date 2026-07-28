@@ -7,6 +7,13 @@ description: Distill a terminal reviewed run into reusable, provenance-linked ex
 
 Create a safe `ExperiencePattern`; do not reopen or reinterpret the decision.
 
+## Invocation gate
+
+Evaluate `refuse_when` before any tool use. A known refusal means `invoke=false`
+and routing to the contract's declared failure or boundary consumer; do not
+enter the procedure. Failure rules apply only when a precondition becomes false
+after a valid invocation starts.
+
 ## Procedure
 
 1. Require a terminal reviewed outcome, trace ID, artifact digests, and policy
@@ -32,6 +39,11 @@ Create a safe `ExperiencePattern`; do not reopen or reinterpret the decision.
 Do not store raw secrets, personal data, full private files, unreviewed runs,
 or unsupported causal claims. Do not trigger new coding, testing, or merge
 work.
+
+## Tool boundary
+
+Use no operational MCP tool. Read immutable terminal evidence and write only
+through the injected idempotent, redaction-checked experience store.
 
 Read [the contract](references/contract.yaml) for storage and quarantine
 rules. Read [examples](references/examples.md) to calibrate useful abstraction

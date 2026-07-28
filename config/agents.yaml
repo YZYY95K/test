@@ -12,8 +12,7 @@
 # rather than an incidental label.
 #
 # Conventions:
-#   - model "glm-4"  : served via OpenAI-compatible endpoint (LLM_BASE_URL)
-#   - model "codex"  : code-specialized model used for patch generation
+#   - model "glm-5.2": served via the OpenAI-compatible LLM_BASE_URL
 #   - temperature    : lower = deterministic orchestration, higher = creative
 #   - watches        : events this agent subscribes to via the event bus
 #   - boundaries     : hard limits the runtime enforces; violations are audited
@@ -54,7 +53,7 @@ agents:
       description: >-
         Central orchestrator that decomposes tasks, tracks state, and
         arbitrates conflicts across the agent team.
-      model: "glm-4"
+      model: "glm-5.2"
       temperature: 0.3  # low temperature for stable, reproducible planning
       system_prompt_ref: "prompts/team_leader.md"
     capabilities:
@@ -72,7 +71,8 @@ agents:
       - "issue.created"        # kick off decomposition
       - "agent.completed"      # advance state machine
       - "agent.failed"         # trigger re-plan or re-assignment
-      - "review.rejected"      # route back to CoderAgent
+      - "coder.patch_ready"    # bind an emitted candidate to its Coder route
+      - "review.rejected"      # validate and fail closed unless revision-bound
       - "test.failed"          # route back to CoderAgent with context
       - "approval.required"    # pause pipeline pending human input
     # Routing hints for the scheduler: which agents this leader dispatches to.
@@ -97,7 +97,7 @@ agents:
       description: >-
         Classifies incoming issues into T1-T5 complexity tiers, deduplicates
         against historical issues, and assigns priority.
-      model: "glm-4"
+      model: "glm-5.2"
       temperature: 0.2  # very low — classification must be deterministic
       system_prompt_ref: "prompts/triage.md"
     capabilities:
@@ -129,7 +129,7 @@ agents:
         Performs code root cause analysis and impact assessment using RAG over
         the indexed repository, producing a located-context payload for the
         CoderAgent.
-      model: "glm-4"
+      model: "glm-5.2"
       temperature: 0.4  # slightly higher to explore candidate locations
       system_prompt_ref: "prompts/locator.md"
     capabilities:
@@ -146,18 +146,19 @@ agents:
       - "codebase.indexed"   # rebuild context after re-index
     depends_on_skills:
       - "code-root-cause"
+      - "github-evidence"
     resources:
       # Vector store backing RAG. Path resolved from CHROMADB_PATH env var.
       vector_store:
         type: "chromadb"
         collection: "codebase_index"
-        embedding_model: "text-embedding-3-small"
+        embedding_model: "embedding-3"
 
   # ===========================================================================
   # 4. CoderAgent — Patch Generation
   # ===========================================================================
   # Consumes the located-context payload and produces a concrete diff. Uses a
-  # code-specialized model (codex) when available, falling back to glm-4.
+  # Uses the deployment-pinned GLM-5.2 model validated against Z.AI.
   # Output is a structured patch object, never a direct file write — the
   # ReviewerAgent/CI gate sits between patch and merge.
   # ===========================================================================
@@ -166,13 +167,12 @@ agents:
       role: "Coder Agent"
       description: >-
         Generates code-aware fix patches from located context using a
-        code-specialized model, with automatic fallback to GLM-4.
-      model: "codex"            # primary; falls back per model_fallback
+        deployment-pinned model, with an explicit same-model retry fallback.
+      model: "glm-5.2"
       temperature: 0.2          # low for syntactically stable diffs
       system_prompt_ref: "prompts/coder.md"
       model_fallback:           # ordered fallback chain
-        - "codex"
-        - "glm-4"
+        - "glm-5.2"
     capabilities:
       - patch_generation      # produce unified diff / structured patch
       - code_context_awareness # respects surrounding style & imports
@@ -182,11 +182,11 @@ agents:
       - "Cannot push directly to the default branch"
       - "Cannot run tests — that is TesterAgent's responsibility"
       - "Cannot approve its own patch"
-      - "Maximum 3 patch-generation attempts per sub-task before escalation"
+      - "One model call per canonical route; TeamLeader caps each issue at 3 calls"
     watches:
       - "locator.completed"
-      - "review.rejected"   # regenerate with reviewer feedback
-      - "test.failed"       # regenerate with failing test output
+      # Tester failures are verified and re-routed by TeamLeader; Coder never
+      # consumes the original TestEvidence event directly.
     depends_on_skills:
       - "patch-generator"
 
@@ -203,7 +203,7 @@ agents:
       description: >-
         Executes tests, compares results against the baseline, and analyses
         coverage to gate patch promotion.
-      model: "glm-4"
+      model: "glm-5.2"
       temperature: 0.1  # near-deterministic — test orchestration must be stable
       system_prompt_ref: "prompts/tester.md"
     capabilities:
@@ -223,29 +223,31 @@ agents:
       - "test-runner"
 
   # ===========================================================================
-  # 6. ReviewerAgent — Review, PR & Security Gate
+  # 6. ReviewerAgent — Review, optional PR & Security Gate
   # ===========================================================================
-  # Final autonomous gate. Creates the pull request, runs automated code
-  # review and security scanning, and applies the approval policy from
-  # security.yaml. For T4/T5 it must block pending human approval.
+  # Final autonomous gate. Runs automated code review and security scanning,
+  # and applies the approval policy from security.yaml. The portable profile
+  # may create a pull request only when an explicit GitHub write grant is
+  # installed. The current AgentTeams deployment intentionally installs no
+  # such Reviewer grant. For T4/T5 it must block pending human approval.
   # ===========================================================================
   - name: "ReviewerAgent"
     identity:
       role: "Reviewer Agent"
       description: >-
-        Creates pull requests, performs automated code review and security
-        scanning, and drives the approval workflow per the security policy.
-      model: "glm-4"
+        Performs automated code review and security scanning, records PR-ready
+        evidence, and drives the approval workflow per the security policy.
+        PR creation is optional and requires an explicit deployment grant.
+      model: "glm-5.2"
       temperature: 0.3
       system_prompt_ref: "prompts/reviewer.md"
     capabilities:
-      - pr_creation          # open PR via GitHub MCP
+      - pr_creation          # portable profile only; absent from AgentTeams deployment
       - code_review          # static analysis + style + correctness
       - security_scan        # dependency & secret scanning
       - approval_workflow    # enforce T1-T3 auto / T4-T5 human gate
-      - merge_management     # squash/merge once approved & CI green
     boundaries:
-      - "Cannot auto-merge T4/T5 PRs without recorded human approval"
+      - "Cannot merge any PR; it may only record review eligibility"
       - "Cannot merge when CI is red"
       - "Cannot bypass security scan findings classified critical/high"
       - "Cannot self-approve a PR it authored"
@@ -256,6 +258,7 @@ agents:
       - "human.approved"     # unblock T4/T5 after human sign-off
     depends_on_skills:
       - "pr-reviewer"
+      - "experience-distiller"
 
 # =============================================================================
 # Cross-cutting relationships
@@ -272,6 +275,7 @@ agents:
 #                    -> ReviewerAgent (pr-reviewer)
 #                       -> experience-distiller (post-merge, async)
 #
-# Reversal edges: review.rejected/test.failed -> CoderAgent;
-#                 human.approved -> ReviewerAgent.
+# Reversal edge: verified test.failed -> TeamLeader -> CoderAgent.
+# review.rejected fails closed for a human re-plan until a candidate-bound
+# review-remediation contract exists; human.approved -> ReviewerAgent.
 # =============================================================================

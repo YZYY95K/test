@@ -1,0 +1,51 @@
+{
+  "schema": "devflow.demo-actual/v1",
+  "captured_at": "2026-07-28T07:36:31Z",
+  "mode": "offline-deterministic",
+  "scenario": "calculator_bug",
+  "observed": {
+    "classification": "T2",
+    "root_cause_file": "calculator.py",
+    "patch_files": [
+      "calculator.py"
+    ],
+    "model_call_attempt": 1,
+    "tests": {
+      "total": 1,
+      "passed": 1,
+      "failed": 0,
+      "errors": 0,
+      "baseline_passed": 0,
+      "regression": false
+    },
+    "review_decision": "approved",
+    "experience_stored": true
+  },
+  "handoffs": {
+    "validated_count": 5,
+    "artifact_integrity": true,
+    "patch_candidate_schema": "1.2"
+  },
+  "events": [
+    "triage.completed",
+    "locator.completed",
+    "coder.patch_ready",
+    "test.passed",
+    "review.approved",
+    "experience.stored"
+  ],
+  "successful_mcp_calls": [
+    "github:get_file_contents",
+    "cicd:run_tests"
+  ],
+  "verification": {
+    "command": "python -m devflow.cli demo",
+    "acceptance_test": "python -m pytest tests/test_demo.py -q",
+    "acceptance_result": "2 passed"
+  },
+  "redaction": {
+    "contains_host_identity": false,
+    "contains_credentials": false,
+    "contains_raw_model_output": false
+  }
+}

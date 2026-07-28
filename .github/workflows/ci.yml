@@ -23,21 +23,25 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install
-        run: python -m pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev,mcp]"
       - name: Validate configuration
         run: python -m devflow.cli validate
       - name: Lint
         run: ruff check .
       - name: Type check
         run: mypy src scripts tests
-      - name: Test
-        run: python -m pytest -q
-      - name: Evaluate Skills
-        run: python scripts/evaluate_skills.py
       - name: Build AgentTeams package
         run: python scripts/build_agentteams_package.py
+      - name: Test
+        run: python -m pytest --cov=devflow --cov-report=term --cov-fail-under=80 -q
+      - name: Evaluate Skills
+        run: python scripts/evaluate_skills.py
+      - name: Validate behavioral evaluation suite
+        run: python scripts/run_behavior_evals.py --validate-only
       - uses: actions/upload-artifact@v4
         with:
-          name: devflow-worker-python-${{ matrix.python-version }}
-          path: dist/devflow-worker.zip
+          name: devflow-role-packages-v1.3.0-python-${{ matrix.python-version }}
+          path: |
+            dist/devflow-*-v1.3.0.zip
+            dist/devflow-*-v1.3.0.zip.sha256
           if-no-files-found: error

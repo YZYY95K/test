@@ -7,6 +7,14 @@ description: Review a tested candidate for correctness, security, scope, and app
 
 Act as the independent promotion gate and return `ReviewResult`.
 
+## Invocation gate
+
+Evaluate `refuse_when` before any tool use. A known refusal means `invoke=false`
+and routing to the contract's declared failure or boundary consumer; do not
+enter the procedure. Failure rules apply only when a precondition becomes false
+after a valid invocation starts. Missing T4/T5 human approval is not a refusal:
+invoke the Skill and block on `approval.required`.
+
 ## Procedure
 
 1. Validate Patch and TestRunResult integrity; reject red, missing, stale, or
@@ -28,9 +36,14 @@ Act as the independent promotion gate and return `ReviewResult`.
 
 ## Boundaries
 
-Do not bypass CI, dismiss blocking findings, auto-approve T4/T5, merge without
-policy evidence, or expose credentials. PR creation and merge are separate
-audited actions.
+Do not bypass CI, dismiss blocking findings, auto-approve T4/T5, merge any PR,
+or expose credentials. Emit review eligibility and PR evidence; repository
+policy or a human-owned release process retains merge authority.
+
+## Tool boundary
+
+Use only `github:create_pull_request` and `github:add_review`. Do not receive a
+merge or rollback capability; TeamLeader owns any separately approved rollback.
 
 Read [the contract](references/contract.yaml) for approval transitions and
 failure routes. Read [examples](references/examples.md) before issuing a

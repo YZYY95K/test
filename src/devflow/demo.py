@@ -32,6 +32,8 @@ from devflow.agents import (
 )
 from devflow.agents.locator_agent import RootCause
 from devflow.event_bus import clear, event_bus
+from devflow.mcp.context_auth import HMACContextAuthority
+from devflow.mcp.policy import MCPPolicy, MemoryAuditSink, PolicyEnforcedMCPClient
 from devflow.models.issue import (
     ComplexityLevel,
     IssueCategory,
@@ -257,7 +259,16 @@ async def run_demo(output_dir: Path | None = None) -> tuple[dict[str, Any], Path
     )
     llm = DemoLLM()
     vector_store = DemoVectorStore(repo)
-    mcp = DemoMCPClient(repo)
+    mcp_audit = MemoryAuditSink()
+    context_authority = HMACContextAuthority(
+        b"devflow-offline-demo-context-key-only"
+    )
+    mcp = PolicyEnforcedMCPClient(
+        DemoMCPClient(repo),
+        MCPPolicy.from_file(_root() / "config" / "mcp_servers.yaml"),
+        mcp_audit,
+        context_signer=context_authority,
+    )
     experience_store = DemoExperienceStore()
 
     leader = TeamLeader(llm_client=llm)
@@ -287,12 +298,14 @@ async def run_demo(output_dir: Path | None = None) -> tuple[dict[str, Any], Path
             "located_context": located.model_dump(mode="json"),
         }
     )
+    candidate = CoderAgent.build_patch_candidate(
+        issue_id=issue.issue_number,
+        tier=classification.complexity_level,
+        patch=patch,
+        located=located,
+    )
     test_result = await tester.execute(
-        {
-            "issue_id": issue.issue_number,
-            "tier": classification.complexity_level.value,
-            "patch": patch.model_dump(mode="json"),
-        }
+        candidate.model_dump(mode="json", exclude_none=True)
     )
     review = await reviewer.execute(
         {
@@ -336,6 +349,9 @@ async def run_demo(output_dir: Path | None = None) -> tuple[dict[str, Any], Path
         "test_result": test_result.model_dump(mode="json"),
         "review": review.model_dump(mode="json"),
         "experience": experience,
+        "mcp_audit": [
+            entry.model_dump(mode="json") for entry in mcp_audit.records
+        ],
         "events": [
             {
                 "event_type": record.event_type,

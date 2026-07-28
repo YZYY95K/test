@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 .venv/
 .devflow/
 .pytest_cache/
@@ -11,5 +13,12 @@ build/
 dist/
 htmlcov/
 .coverage
+coverage.json
 logs/
-
+tmp/
+.tmp/
+outputs/*.pptx.inspect.ndjson
+outputs/*/
+outputs/*.zip
+outputs/*.zip.sha256
+agentteams/systemd/

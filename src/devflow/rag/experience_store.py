@@ -12,11 +12,11 @@ import os
 from dataclasses import dataclass
 from typing import Any
 
-import chromadb
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from devflow.exceptions import LLMError, SkillError
 from devflow.observability import logger, tracer
+from devflow.rag.embeddings import EmbeddingProvider, build_embedding_provider
 
 # ---------------------------------------------------------------------------
 # Public models
@@ -57,8 +57,8 @@ class ExperienceStore:
     """
 
     COLLECTION_NAME = "experience_store"
-    EMBEDDING_MODEL = "text-embedding-3-small"
-    EMBEDDING_DIMENSION = 1536
+    EMBEDDING_MODEL = "embedding-3"
+    EMBEDDING_DIMENSION = 2048
 
     #: Minimum cosine similarity (1 - distance) to consider an issue a duplicate.
     DUPLICATE_SIMILARITY_THRESHOLD = 0.88
@@ -82,19 +82,30 @@ class ExperienceStore:
         self._persist_path = persist_path or os.getenv(
             "CHROMADB_PATH", ".devflow/chromadb"
         ) or ".devflow/chromadb"
-        self._embedding_api_key = embedding_api_key or os.getenv("LLM_API_KEY", "")
-        self._embedding_base_url = embedding_base_url or os.getenv(
-            "LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"
+        self._embedding_api_key = (
+            embedding_api_key
+            or os.getenv("EMBEDDING_API_KEY")
+            or os.getenv("LLM_API_KEY", "")
         )
-        self._client: chromadb.api.ClientAPI | None = None
-        self._collection: chromadb.api.Collection | None = None
-        self._embedding_client: Any | None = None
+        self._embedding_base_url = (
+            embedding_base_url
+            or os.getenv("EMBEDDING_BASE_URL")
+            or os.getenv("LLM_BASE_URL", "https://api.z.ai/api/paas/v4/")
+        )
+        self._embedding_model = os.getenv("EMBEDDING_MODEL", self.EMBEDDING_MODEL)
+        self._client: Any | None = None
+        self._collection: Any | None = None
+        self._embedding_provider: EmbeddingProvider | None = None
 
     # -- lazy initialization ------------------------------------------------
 
-    def _get_chroma_client(self) -> chromadb.api.ClientAPI:
+    def _get_chroma_client(self) -> Any:
         """Lazily create the ChromaDB persistent client."""
         if self._client is None:
+            try:
+                import chromadb
+            except ImportError as exc:
+                raise SkillError('Install DevFlow with the "rag" extra for ChromaDB') from exc
             os.makedirs(self._persist_path, exist_ok=True)
             self._client = chromadb.PersistentClient(path=self._persist_path)
             logger.info(
@@ -102,7 +113,7 @@ class ExperienceStore:
             )
         return self._client
 
-    def _get_collection(self) -> chromadb.api.Collection:
+    def _get_collection(self) -> Any:
         """Lazily create or retrieve the experience store collection."""
         if self._collection is None:
             client = self._get_chroma_client()
@@ -112,16 +123,14 @@ class ExperienceStore:
             )
         return self._collection
 
-    def _get_embedding_client(self) -> Any:
-        """Lazily create the OpenAI-compatible embeddings client."""
-        if self._embedding_client is None:
-            from openai import OpenAI
-
-            self._embedding_client = OpenAI(
+    def _get_embedding_provider(self) -> EmbeddingProvider:
+        if self._embedding_provider is None:
+            self._embedding_provider = build_embedding_provider(
                 api_key=self._embedding_api_key,
                 base_url=self._embedding_base_url,
+                model=self._embedding_model,
             )
-        return self._embedding_client
+        return self._embedding_provider
 
     # -- embedding ----------------------------------------------------------
 
@@ -143,14 +152,11 @@ class ExperienceStore:
         Raises:
             LLMError: If the embedding API call fails after retries.
         """
-        client = self._get_embedding_client()
         try:
-            response = client.embeddings.create(
-                model=self.EMBEDDING_MODEL,
-                input=text,
-            )
-            return list(response.data[0].embedding)
+            return self._get_embedding_provider().embed([text])[0]
         except Exception as exc:
+            if isinstance(exc, LLMError):
+                raise
             raise LLMError(f"Embedding API call failed: {exc}") from exc
 
     # -- public API ---------------------------------------------------------

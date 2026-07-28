@@ -1,0 +1,153 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: devflow-higress-redis
+  namespace: agentteams-system
+  labels:
+    app: devflow-higress-redis
+    app.kubernetes.io/name: devflow-higress-redis
+    app.kubernetes.io/part-of: devflow
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devflow-higress-redis
+  namespace: agentteams-system
+  labels:
+    app: devflow-higress-redis
+    app.kubernetes.io/name: devflow-higress-redis
+    app.kubernetes.io/part-of: devflow
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: devflow-higress-redis
+  template:
+    metadata:
+      labels:
+        app: devflow-higress-redis
+        app.kubernetes.io/name: devflow-higress-redis
+        app.kubernetes.io/part-of: devflow
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis
+          image: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/redis-stack-server:7.4.0-v3@sha256:a8d64e9f5bc99dc83f2a807a93f44d59efab0d2c4f09cff03f01b8753842e0cc
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: REDIS_ARGS
+              value: >-
+                --appendonly yes --appendfsync everysec --dir /data
+                --protected-mode no --bind 0.0.0.0 --port 6379
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - test "$(redis-cli -h 127.0.0.1 -p 6379 ping)" = PONG
+            failureThreshold: 30
+            periodSeconds: 2
+            timeoutSeconds: 1
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - test "$(redis-cli -h 127.0.0.1 -p 6379 ping)" = PONG
+            failureThreshold: 3
+            periodSeconds: 5
+            timeoutSeconds: 1
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - test "$(redis-cli -h 127.0.0.1 -p 6379 ping)" = PONG
+            failureThreshold: 3
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: devflow-higress-redis
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devflow-higress-redis
+  namespace: agentteams-system
+  labels:
+    app: devflow-higress-redis
+    app.kubernetes.io/name: devflow-higress-redis
+    app.kubernetes.io/part-of: devflow
+spec:
+  type: ClusterIP
+  selector:
+    app: devflow-higress-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: devflow-higress-redis
+  namespace: agentteams-system
+spec:
+  podSelector:
+    matchLabels:
+      app: devflow-higress-redis
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: higress-gateway
+      ports:
+        - protocol: TCP
+          port: 6379
+  egress: []

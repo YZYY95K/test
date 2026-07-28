@@ -21,7 +21,10 @@ that the concrete subclasses can focus on their domain logic:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import hashlib
+import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -29,10 +32,19 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Protocol, TypeVar, runtime_checkable
 
-from devflow.event_bus import publish, subscribe
+from pydantic import ValidationError
+
+from devflow.event_bus import publish, subscribe, unsubscribe
 from devflow.exceptions import AgentError, BoundaryViolationError, MCPError
+from devflow.mcp.contracts import ApprovalEvidence, MCPCallContext
+from devflow.models.agent_event import (
+    AgentFailureEvent,
+    FailureErrorCode,
+    FailureRetryDomain,
+)
 from devflow.models.trace import SpanStatus
 from devflow.observability import logger, metrics, tracer
+from devflow.skills.contracts import HandoffEnvelope, HandoffStatus
 
 #: Type alias for an async event handler callable.
 EventHandler = Callable[[dict[str, Any]], Awaitable[None]]
@@ -64,7 +76,7 @@ class AgentIdentity:
     model: str
     temperature: float = 0.3
     system_prompt_ref: str | None = None
-    #: Ordered fallback chain for the underlying model (e.g. codex -> glm-4).
+    #: Ordered fallback chain for the underlying model.
     model_fallback: tuple[str, ...] = ()
 
 
@@ -81,6 +93,7 @@ class AgentConfig:
     capabilities: list[str] = field(default_factory=list)
     boundaries: list[str] = field(default_factory=list)
     watches: list[str] = field(default_factory=list)
+    skills: list[str] = field(default_factory=list)
     max_consecutive_failures: int = 3
     timeout_seconds: int = 600
     max_tokens_per_invocation: int = 32000
@@ -91,7 +104,12 @@ class MCPClient(Protocol):
     """Minimal contract for an MCP (Model Context Protocol) client."""
 
     async def call_tool(
-        self, server: str, tool: str, arguments: dict[str, Any]
+        self,
+        server: str,
+        tool: str,
+        arguments: dict[str, Any],
+        *,
+        context: MCPCallContext,
     ) -> Any:
         """Invoke ``tool`` on ``server`` with ``arguments`` and return the result."""
         ...
@@ -140,6 +158,38 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _canonical_digest(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True)
+class _ExecutionCorrelation:
+    """Correlation recovered from one integrity-valid HandoffEnvelope."""
+
+    issue_id: int
+    run_id: str
+    task_id: str
+    trace_id: str
+    idempotency_key: str
+    execution_attempt: int
+    handoff_sha256: str
+
+
+@dataclass
+class _ExecutionReplay:
+    """One in-process completion slot for an immutable execution claim."""
+
+    done: asyncio.Event
+    succeeded: bool = False
+    result: Any = None
+
+
 class BaseAgent:
     """Abstract base class for every DevFlow agent.
 
@@ -155,7 +205,7 @@ class BaseAgent:
     _IDENTITY: AgentIdentity = AgentIdentity(
         role="Agent",
         description="Unspecified DevFlow agent.",
-        model="glm-4",
+        model="glm-5.2",
     )
     #: Capabilities this agent owns (mirrors ``agents.yaml``).
     _CAPABILITIES: tuple[str, ...] = ()
@@ -163,6 +213,11 @@ class BaseAgent:
     _BOUNDARIES: tuple[str, ...] = ()
     #: Events this agent subscribes to (mirrors ``agents.yaml``).
     _WATCHES: tuple[str, ...] = ()
+    #: Skills this Agent is permitted to own or invoke.
+    _OWNED_SKILLS: tuple[str, ...] = ()
+    #: Optional exact producers permitted to invoke each owned Skill through a
+    #: HandoffEnvelope. Subclasses set this when ownership alone is too broad.
+    _HANDOFF_PRODUCERS: dict[str, frozenset[str]] = {}
     #: Action tokens explicitly forbidden by this agent's boundaries. Each
     #: forbidden action maps to the boundary description it would violate.
     _FORBIDDEN_ACTIONS: dict[str, str] = {}
@@ -182,6 +237,14 @@ class BaseAgent:
         self._vector_store: VectorStore | None = vector_store
         self._consecutive_failures: int = 0
         self._event_handlers: dict[str, EventHandler] = {}
+        # Stable wrapper identities make subscription idempotent and reversible.
+        # They are attached only by the explicit runtime composition root.
+        self._event_subscriptions: dict[str, EventHandler] = {}
+        # A canonical hand-off is an immutable execution claim. Re-delivery to
+        # this worker instance is audited without repeating side effects.
+        self._claimed_execution_routes: set[tuple[str, int]] = set()
+        self._execution_replays: dict[tuple[str, int], _ExecutionReplay] = {}
+        self._claimed_coder_generations: set[tuple[int, int]] = set()
 
     # ------------------------------------------------------------------ #
     # Public properties
@@ -217,6 +280,12 @@ class BaseAgent:
         return list(self._config.watches)
 
     @property
+    def skills(self) -> list[str]:
+        """Skills this Agent is permitted to own or invoke."""
+
+        return list(self._config.skills)
+
+    @property
     def max_consecutive_failures(self) -> int:
         """Soft limit on consecutive failures before yielding to TeamLeader."""
         return self._config.max_consecutive_failures
@@ -230,9 +299,7 @@ class BaseAgent:
                 resolved from the runtime.
         """
         if self._llm is None:
-            raise AgentError(
-                f"Agent '{self.name}' has no LLM client configured."
-            )
+            raise AgentError(f"Agent '{self.name}' has no LLM client configured.")
         return self._llm
 
     # ------------------------------------------------------------------ #
@@ -262,46 +329,189 @@ class BaseAgent:
             role=self.identity.role,
             model=self.identity.model,
         )
+        correlation: _ExecutionCorrelation | None = None
+        execution_replay: _ExecutionReplay | None = None
+        owns_execution_claim = False
+        run_started = False
         try:
+            # Envelope validation belongs inside the execution boundary. A
+            # malformed hand-off is audited without trusting its claimed IDs.
+            normalized_input, correlation = self._prepare_execution(input_data)
+            if correlation is not None:
+                execution_claim = (
+                    correlation.handoff_sha256,
+                    correlation.execution_attempt,
+                )
+                execution_replay = self._execution_replays.get(execution_claim)
+                if execution_replay is not None:
+                    await execution_replay.done.wait()
+                    if execution_replay.succeeded:
+                        self._record_success()
+                        self._state = AgentState.COMPLETED
+                        await self._emit_execution_duplicate(correlation)
+                        return execution_replay.result
+                    message = (
+                        "Coder generation attempt was already claimed."
+                        if self.name == "CoderAgent"
+                        else "Canonical hand-off execution was already claimed."
+                    )
+                    raise BoundaryViolationError(message)
+                if execution_claim in self._claimed_execution_routes:
+                    raise BoundaryViolationError(
+                        "Canonical hand-off execution was already claimed."
+                    )
+                execution_replay = _ExecutionReplay(done=asyncio.Event())
+                self._claimed_execution_routes.add(execution_claim)
+                self._execution_replays[execution_claim] = execution_replay
+                owns_execution_claim = True
+            if self.name == "CoderAgent" and isinstance(normalized_input, dict):
+                issue_raw = normalized_input.get("issue_id")
+                attempt_raw = normalized_input.get("model_call_attempt")
+                generation_claim: tuple[int, int] | None = None
+                if (
+                    issue_raw is not None
+                    and attempt_raw is not None
+                    and not isinstance(issue_raw, bool)
+                    and not isinstance(attempt_raw, bool)
+                ):
+                    try:
+                        generation_issue_id = int(issue_raw)
+                        generation_attempt = int(attempt_raw)
+                    except (TypeError, ValueError):
+                        pass
+                    else:
+                        if generation_issue_id >= 1 and 1 <= generation_attempt <= 3:
+                            generation_claim = (
+                                generation_issue_id,
+                                generation_attempt,
+                            )
+                if generation_claim is not None:
+                    if generation_claim in self._claimed_coder_generations:
+                        raise BoundaryViolationError(
+                            "Coder generation attempt was already claimed."
+                        )
+                    self._claimed_coder_generations.add(generation_claim)
+            run_started = True
             async with self._trace_span("run"):
-                result = await self.run(input_data)
-        except Exception as exc:  # noqa: BLE001 — agent boundary
-            await self._record_failure(exc)
+                result = await self.run(normalized_input)
+        except BaseException as exc:  # noqa: BLE001 — agent boundary
+            if owns_execution_claim and execution_replay is not None:
+                execution_replay.done.set()
+            if not isinstance(exc, Exception):
+                self._state = AgentState.FAILED
+                raise
+            retry_domain: FailureRetryDomain = "execution"
+            error_code: FailureErrorCode = "AGENT_EXECUTION_FAILED"
+            execution_retry_eligible = correlation is not None
+            if self.name == "CoderAgent":
+                retry_domain = "generation"
+                execution_retry_eligible = False
+                error_code = (
+                    "CANDIDATE_INVALID"
+                    if run_started and isinstance(exc, (AgentError, ValidationError))
+                    else "CODER_GENERATION_FAILED"
+                )
+            await self._record_failure(
+                exc,
+                retry_domain=retry_domain,
+                error_code=error_code,
+            )
             self._state = AgentState.FAILED
+            failure = AgentFailureEvent.from_error(
+                agent=self.name,
+                error=exc,
+                consecutive_failures=self._consecutive_failures,
+                retry_domain=retry_domain,
+                error_code=error_code,
+                execution_retry_eligible=execution_retry_eligible,
+                issue_id=correlation.issue_id if correlation is not None else None,
+                run_id=correlation.run_id if correlation is not None else None,
+                task_id=correlation.task_id if correlation is not None else None,
+                trace_id=correlation.trace_id if correlation is not None else None,
+                idempotency_key=(correlation.idempotency_key if correlation is not None else None),
+                execution_attempt=(
+                    correlation.execution_attempt if correlation is not None else None
+                ),
+                handoff_sha256=(correlation.handoff_sha256 if correlation is not None else None),
+            )
             await self._emit_event(
                 "agent.failed",
-                {
-                    "agent": self.name,
-                    "error": str(exc),
-                    "error_type": type(exc).__name__,
-                    "consecutive_failures": self._consecutive_failures,
-                    "timestamp": _utcnow().isoformat(),
-                },
+                failure.model_dump(mode="json"),
             )
             raise
         else:
+            if owns_execution_claim and execution_replay is not None:
+                execution_replay.result = result
+                execution_replay.succeeded = True
+                execution_replay.done.set()
             self._record_success()
             self._state = AgentState.COMPLETED
             completion_payload: dict[str, Any] = {
                 "agent": self.name,
+                "outcome": "execution_succeeded",
                 "timestamp": _utcnow().isoformat(),
             }
-            issue_id = _extract_issue_id(input_data)
+            issue_id = (
+                correlation.issue_id
+                if correlation is not None
+                else _extract_issue_id(normalized_input)
+            )
             if issue_id is not None:
                 completion_payload["issue_id"] = issue_id
+            if correlation is not None:
+                completion_payload.update(
+                    {
+                        "run_id": correlation.run_id,
+                        "task_id": correlation.task_id,
+                        "trace_id": correlation.trace_id,
+                        "idempotency_key": correlation.idempotency_key,
+                        "execution_attempt": correlation.execution_attempt,
+                        "handoff_sha256": correlation.handoff_sha256,
+                    }
+                )
             await self._emit_event(
                 "agent.completed",
                 completion_payload,
             )
             return result
 
+    async def _emit_execution_duplicate(
+        self,
+        correlation: _ExecutionCorrelation,
+    ) -> None:
+        """Audit a successful replay without exposing or re-emitting its result."""
+
+        await self._emit_event(
+            "agent.execution.duplicate",
+            {
+                "schema_version": "devflow.execution-duplicate/v1",
+                "outcome": "cached_success",
+                "idempotent": True,
+                "issue_id": correlation.issue_id,
+                "execution_attempt": correlation.execution_attempt,
+                "handoff_sha256": correlation.handoff_sha256,
+                "timestamp": _utcnow().isoformat(),
+            },
+        )
+
     # ------------------------------------------------------------------ #
     # Event handling
     # ------------------------------------------------------------------ #
     def subscribe_events(self) -> None:
-        """Register :meth:`handle_event` for every event in :attr:`watches`."""
+        """Attach stable handlers for every watched event exactly once."""
+
         for event_type in self.watches:
-            subscribe(event_type, self._make_event_handler(event_type))
+            handler = self._event_subscriptions.get(event_type)
+            if handler is None:
+                handler = self._make_event_handler(event_type)
+                self._event_subscriptions[event_type] = handler
+            subscribe(event_type, handler)
+
+    def unsubscribe_events(self) -> None:
+        """Detach all stable handlers owned by this Agent instance."""
+
+        for event_type, handler in self._event_subscriptions.items():
+            unsubscribe(event_type, handler)
 
     def _make_event_handler(self, event_type: str) -> EventHandler:
         """Create an async handler bound to a specific event type."""
@@ -326,11 +536,14 @@ class BaseAgent:
         try:
             await handler(payload)
         except Exception as exc:  # noqa: BLE001 — handler boundary
+            error_type, error_digest = self._safe_error_identity(exc)
             logger.error(
                 "agent.event.handler_failed",
                 agent=self.name,
                 event_type=event_type,
-                error=str(exc),
+                error_code="AGENT_EVENT_HANDLER_FAILED",
+                error_type=error_type,
+                error_digest=error_digest,
             )
             await self._record_failure(exc)
 
@@ -340,9 +553,129 @@ class BaseAgent:
 
     async def _emit_event(self, event_type: str, payload: dict[str, Any]) -> None:
         """Publish an event and log it for auditability."""
-        enriched = {"agent": self.name, **payload}
+        # A HandoffEnvelope is itself the complete authenticated boundary
+        # shape; adding transport metadata would make strict validation fail.
+        enriched = (
+            dict(payload)
+            if payload.get("envelope_version") == "1.0"
+            else {"agent": self.name, **payload}
+        )
         logger.info("agent.emit_event", agent=self.name, event_type=event_type)
         await publish(event_type, enriched)
+
+    async def _emit_handoff(
+        self,
+        event_type: str,
+        *,
+        issue_id: int,
+        consumer: str,
+        skill: str,
+        artifact_type: str,
+        payload: dict[str, Any],
+        artifact_schema_version: str = "1.0",
+        status: HandoffStatus = HandoffStatus.READY,
+        task_id: str | None = None,
+    ) -> None:
+        """Publish a digest-bound typed result instead of an ambiguous payload."""
+
+        if skill not in self.skills:
+            raise BoundaryViolationError(
+                f"Agent '{self.name}' does not own hand-off Skill '{skill}'."
+            )
+        handoff_task_id = task_id or f"{issue_id}-{self.name.lower()}-{skill}"
+        envelope = HandoffEnvelope.create(
+            run_id=f"issue-{issue_id}",
+            issue_id=issue_id,
+            task_id=handoff_task_id,
+            producer=self.name,
+            consumer=consumer,
+            skill=skill,
+            artifact_type=artifact_type,
+            payload=payload,
+            artifact_schema_version=artifact_schema_version,
+            status=status,
+        )
+        await self._emit_event(event_type, envelope.model_dump(mode="json"))
+
+    def _prepare_execution(self, input_data: Any) -> tuple[Any, _ExecutionCorrelation | None]:
+        """Validate input and recover only integrity-bound execution correlation."""
+
+        if isinstance(input_data, HandoffEnvelope):
+            envelope = input_data
+        elif isinstance(input_data, dict) and input_data.get("envelope_version") == "1.0":
+            try:
+                envelope = HandoffEnvelope.model_validate(input_data)
+            except ValueError as exc:
+                raise BoundaryViolationError("Invalid hand-off envelope.") from exc
+        else:
+            # Direct calls remain useful for deterministic unit/demo execution,
+            # but their caller-provided identifiers are not trusted for retry.
+            return input_data, None
+        if envelope.consumer != self.name:
+            raise BoundaryViolationError("Hand-off consumer does not match this Agent.")
+        if envelope.skill not in self.skills:
+            raise BoundaryViolationError("Agent does not own Skill from this hand-off.")
+        allowed_producers = self._HANDOFF_PRODUCERS.get(envelope.skill)
+        if allowed_producers is not None and envelope.producer not in allowed_producers:
+            raise BoundaryViolationError("Hand-off producer is not authorized.")
+        if envelope.status not in {HandoffStatus.READY, HandoffStatus.RETRY}:
+            raise BoundaryViolationError("Hand-off status is not executable.")
+        if not envelope.artifact.verify_integrity() or envelope.artifact.inline is None:
+            raise BoundaryViolationError("Hand-off artifact failed integrity validation.")
+        if (
+            envelope.trace_id != f"{envelope.run_id}:{envelope.task_id}"
+            or envelope.idempotency_key
+            != f"{envelope.run_id}:{envelope.task_id}:{envelope.consumer}:{envelope.skill}"
+        ):
+            raise BoundaryViolationError("Hand-off correlation is not canonical.")
+
+        payload = envelope.artifact.inline
+        execution_attempt = 1
+        execution_retry = payload.get("execution_retry")
+        if execution_retry is not None:
+            expected_fields = {
+                "schema_version",
+                "attempt",
+                "failure_id",
+                "root_task_id",
+            }
+            if (
+                not isinstance(execution_retry, dict)
+                or set(execution_retry) != expected_fields
+                or execution_retry.get("schema_version") != "devflow.execution-retry/v1"
+                or isinstance(execution_retry.get("attempt"), bool)
+                or not isinstance(execution_retry.get("attempt"), int)
+                or not 2 <= execution_retry["attempt"] <= self.max_consecutive_failures
+                or not isinstance(execution_retry.get("failure_id"), str)
+                or len(execution_retry["failure_id"]) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in execution_retry["failure_id"]
+                )
+                or not isinstance(execution_retry.get("root_task_id"), str)
+                or not execution_retry["root_task_id"]
+            ):
+                raise BoundaryViolationError("Execution retry metadata is invalid.")
+            execution_attempt = execution_retry["attempt"]
+
+        envelope_payload = envelope.model_dump(mode="json")
+        correlation = _ExecutionCorrelation(
+            issue_id=envelope.issue_id,
+            run_id=envelope.run_id,
+            task_id=envelope.task_id,
+            trace_id=envelope.trace_id,
+            idempotency_key=envelope.idempotency_key,
+            execution_attempt=execution_attempt,
+            handoff_sha256=_canonical_digest(envelope_payload),
+        )
+        nested = payload.get("input")
+        return (nested if isinstance(nested, dict) else payload), correlation
+
+    def _unwrap_handoff(self, input_data: Any) -> Any:
+        """Validate a hand-off and return only its executable artifact."""
+
+        normalized, _correlation = self._prepare_execution(input_data)
+        return normalized
 
     # ------------------------------------------------------------------ #
     # Boundary enforcement
@@ -387,9 +720,7 @@ class BaseAgent:
     # Observability
     # ------------------------------------------------------------------ #
     @contextlib.asynccontextmanager
-    async def _trace_span(
-        self, skill_name: str, **attributes: Any
-    ) -> AsyncIterator[None]:
+    async def _trace_span(self, skill_name: str, **attributes: Any) -> AsyncIterator[None]:
         """Trace a skill invocation with structured logging and metrics.
 
         Wraps the body in an OpenTelemetry span (when a tracer is available),
@@ -450,9 +781,7 @@ class BaseAgent:
     # ------------------------------------------------------------------ #
     # Output validation
     # ------------------------------------------------------------------ #
-    def _validate_output(
-        self, result: Any, expected_type: type[OutputT]
-    ) -> OutputT:
+    def _validate_output(self, result: Any, expected_type: type[OutputT]) -> OutputT:
         """Validate that ``result`` is an instance of ``expected_type``.
 
         Returns the validated result on success; raises :class:`AgentError`
@@ -468,6 +797,22 @@ class BaseAgent:
     # ------------------------------------------------------------------ #
     # Failure tracking
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _safe_error_identity(error: BaseException) -> tuple[str, str]:
+        """Return bounded error metadata without returning the raw message."""
+
+        error_type = type(error).__name__
+        if len(error_type) > 128 or not error_type.isascii() or not error_type.isidentifier():
+            error_type = "Exception"
+        try:
+            message = str(error)
+        except Exception:  # noqa: BLE001 - hostile exception formatter
+            message = "<unprintable>"
+        error_digest = hashlib.sha256(
+            f"{error_type}\0{message}".encode("utf-8", errors="replace")
+        ).hexdigest()
+        return error_type, error_digest
+
     def _record_success(self) -> None:
         """Reset the consecutive failure counter after a successful invocation."""
         if self._consecutive_failures:
@@ -478,14 +823,24 @@ class BaseAgent:
             )
         self._consecutive_failures = 0
 
-    async def _record_failure(self, error: BaseException) -> None:
+    async def _record_failure(
+        self,
+        error: BaseException,
+        *,
+        retry_domain: FailureRetryDomain = "execution",
+        error_code: FailureErrorCode = "AGENT_EXECUTION_FAILED",
+    ) -> None:
         """Record a failure, escalating to TeamLeader once the threshold is exceeded."""
+
         self._consecutive_failures += 1
+        error_type, error_digest = self._safe_error_identity(error)
         logger.warning(
             "agent.failure",
             agent=self.name,
-            error=str(error),
-            error_type=type(error).__name__,
+            retry_domain=retry_domain,
+            error_code=error_code,
+            error_type=error_type,
+            error_digest=error_digest,
             consecutive_failures=self._consecutive_failures,
             max=self.max_consecutive_failures,
         )
@@ -495,19 +850,33 @@ class BaseAgent:
             )
         )
         if self._consecutive_failures >= self.max_consecutive_failures:
-            await self._yield_to_leader(error)
+            await self._yield_to_leader(
+                error,
+                retry_domain=retry_domain,
+                error_code=error_code,
+            )
 
-    async def _yield_to_leader(self, error: BaseException) -> None:
+    async def _yield_to_leader(
+        self,
+        error: BaseException,
+        *,
+        retry_domain: FailureRetryDomain,
+        error_code: FailureErrorCode,
+    ) -> None:
         """Yield control to the TeamLeader after exhausting failure retries.
 
         Emits an ``agent.yield_to_leader`` event carrying enough context for the
         TeamLeader to re-plan, re-assign or escalate.
         """
         self._state = AgentState.WAITING
+        error_type, error_digest = self._safe_error_identity(error)
         logger.error(
             "agent.yield_to_leader",
             agent=self.name,
-            error=str(error),
+            retry_domain=retry_domain,
+            error_code=error_code,
+            error_type=error_type,
+            error_digest=error_digest,
             consecutive_failures=self._consecutive_failures,
         )
         await self._emit_event(
@@ -515,8 +884,10 @@ class BaseAgent:
             {
                 "agent": self.name,
                 "reason": "max_consecutive_failures_exceeded",
-                "error": str(error),
-                "error_type": type(error).__name__,
+                "retry_domain": retry_domain,
+                "error_code": error_code,
+                "error_type": error_type,
+                "error_digest": error_digest,
                 "consecutive_failures": self._consecutive_failures,
                 "timestamp": _utcnow().isoformat(),
             },
@@ -526,7 +897,15 @@ class BaseAgent:
     # External service helpers (MCP / vector store)
     # ------------------------------------------------------------------ #
     async def _call_mcp(
-        self, server: str, tool: str, arguments: dict[str, Any]
+        self,
+        server: str,
+        tool: str,
+        arguments: dict[str, Any],
+        *,
+        skill: str,
+        issue_id: int,
+        risk_tier: str | None = None,
+        approval: ApprovalEvidence | None = None,
     ) -> Any:
         """Invoke an MCP tool, failing closed if no client is wired.
 
@@ -540,22 +919,46 @@ class BaseAgent:
                 f"Agent '{self.name}' cannot call MCP '{server}:{tool}': "
                 "no MCP client is configured."
             )
+        serialized = json.dumps(
+            arguments,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
+        arguments_digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        run_id = f"issue-{issue_id}"
+        task_id = f"{issue_id}-{self.name.lower()}-{skill}"
+        context = MCPCallContext(
+            run_id=run_id,
+            issue_id=issue_id,
+            task_id=task_id,
+            agent=self.name,
+            skill=skill,
+            trace_id=f"{run_id}:{task_id}",
+            idempotency_key=(f"{run_id}:{task_id}:{server}:{tool}:{arguments_digest[:16]}"),
+            risk_tier=risk_tier,
+            approval=approval,
+        )
         self._safe_metric(
             lambda: metrics.counter("devflow_mcp_tool_calls_total").inc(
                 labels={"server": server, "tool": tool, "status": "invoked"}
             )
         )
         try:
-            result = await self._mcp.call_tool(server, tool, arguments)
+            result = await self._mcp.call_tool(
+                server,
+                tool,
+                arguments,
+                context=context,
+            )
         except Exception as exc:  # noqa: BLE001 — MCP boundary
             self._safe_metric(
                 lambda: metrics.counter("devflow_mcp_tool_calls_total").inc(
                     labels={"server": server, "tool": tool, "status": "error"}
                 )
             )
-            raise MCPError(
-                f"MCP call '{server}:{tool}' failed for '{self.name}': {exc}"
-            ) from exc
+            raise MCPError(f"MCP call '{server}:{tool}' failed for '{self.name}': {exc}") from exc
         self._safe_metric(
             lambda: metrics.counter("devflow_mcp_tool_calls_total").inc(
                 labels={"server": server, "tool": tool, "status": "ok"}
@@ -583,11 +986,14 @@ class BaseAgent:
         try:
             return await self._vector_store.query(collection, query, n_results)
         except Exception as exc:  # noqa: BLE001 — degrade gracefully
+            error_type, error_digest = self._safe_error_identity(exc)
             logger.warning(
                 "vector_store.query_failed",
                 agent=self.name,
                 collection=collection,
-                error=str(exc),
+                error_code="VECTOR_STORE_QUERY_FAILED",
+                error_type=error_type,
+                error_digest=error_digest,
             )
             return []
 
@@ -610,13 +1016,10 @@ class BaseAgent:
             capabilities=list(cls._CAPABILITIES),
             boundaries=list(cls._BOUNDARIES),
             watches=list(cls._WATCHES),
-            max_consecutive_failures=defaults.get(
-                "max_consecutive_failures", 3
-            ),
+            skills=list(cls._OWNED_SKILLS),
+            max_consecutive_failures=defaults.get("max_consecutive_failures", 3),
             timeout_seconds=defaults.get("timeout_seconds", 600),
-            max_tokens_per_invocation=defaults.get(
-                "max_tokens_per_invocation", 32000
-            ),
+            max_tokens_per_invocation=defaults.get("max_tokens_per_invocation", 32000),
         )
         _enrich_config_from_settings(config)
         return config
@@ -669,13 +1072,9 @@ def _enrich_config_from_settings(config: AgentConfig) -> None:
             fallback = identity.get("model_fallback")
             config.identity = AgentIdentity(
                 role=identity.get("role", config.identity.role),
-                description=identity.get(
-                    "description", config.identity.description
-                ),
+                description=identity.get("description", config.identity.description),
                 model=identity.get("model", config.identity.model),
-                temperature=float(
-                    identity.get("temperature", config.identity.temperature)
-                ),
+                temperature=float(identity.get("temperature", config.identity.temperature)),
                 system_prompt_ref=identity.get(
                     "system_prompt_ref", config.identity.system_prompt_ref
                 ),
@@ -687,6 +1086,8 @@ def _enrich_config_from_settings(config: AgentConfig) -> None:
             config.boundaries = list(entry["boundaries"])
         if isinstance(entry.get("watches"), list):
             config.watches = list(entry["watches"])
+        if isinstance(entry.get("depends_on_skills"), list):
+            config.skills = list(entry["depends_on_skills"])
     except Exception:  # noqa: BLE001 — settings optional at runtime
         return
 

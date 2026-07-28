@@ -9,7 +9,10 @@ actual URL and audit evidence.
 ## Failure
 
 A high-severity command-injection finding returns `changes_requested`,
-`review.rejected`, and a remediation finding addressed to CoderAgent.
+`review.rejected`, and a remediation finding addressed to TeamLeader. The
+Leader fails closed for human re-planning until review feedback is bound to the
+exact candidate by a formal retry contract; Reviewer never routes Coder
+directly.
 
 ## Boundary
 
