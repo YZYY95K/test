@@ -2554,7 +2554,7 @@ def main():
             raise ValueError("argv")
         role, workspace, tool, action = sys.argv[1:]
         allowed = {
-            "projectflow": {"resolve_project", "create_project", "plan_dag", "accept_task_result", "complete_project", "mark_requester_report_sent"},
+            "projectflow": {"resolve_project", "create_project", "plan_dag", "accept_task_result", "pause_project", "resume_project", "complete_project", "mark_requester_report_sent"},
             "taskflow": {"delegate_task", "check_task"},
             "roomflow": {"create_task_room"},
             "filesync": {"push", "stat"},

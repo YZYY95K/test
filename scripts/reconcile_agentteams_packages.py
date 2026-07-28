@@ -52,7 +52,7 @@ except ModuleNotFoundError:  # pragma: no cover - direct script execution
     )
 
 NAMESPACE = "agentteams-system"
-CONFIGMAP_NAME = "devflow-worker-packages-v1-2-0"
+CONFIGMAP_NAME = "devflow-worker-packages-v1-3-0"
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 SAFE_ARCHIVE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 MAX_CONFIGMAP_SERIALIZED_BYTES = 900_000

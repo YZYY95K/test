@@ -14,7 +14,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-PACKAGE_VERSION = "1.2.0"
+PACKAGE_VERSION = "1.3.0"
 WORKER_BASE_IMAGE = (
     "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/"
     "agentteams-worker@sha256:"

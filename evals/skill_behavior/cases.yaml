@@ -93,7 +93,7 @@ cases:
     scenario: >-
       A digest-verified PatchCandidate and trusted baseline revision are
       available. Disposable isolation succeeds and the candidate has zero
-      failures, zero errors, and no regression.
+      failures, zero errors, no regression, and an empty new-failures set.
     expected:
       invoke: true
       action: produce

@@ -8,12 +8,13 @@
 | TriageAgent | 分级、去重、优先级 | `issue-classifier` | `ClassifiedIssue`；TeamHarness `ack_task` / `submit_task` | 读写仓库、生成补丁、跳过去重 |
 | LocatorAgent | 固定 revision 的只读根因与影响分析 | `code-root-cause`、`github-evidence` | `LocatedContext`；经任务范围能力授权的只读 GitHub 证据 | 修改/执行代码、扩大仓库/版本/路径范围、把能力凭证写入消息或产物 |
 | CoderAgent | 最小候选修复 | `patch-generator` | 结构化 `PatchCandidate` | 写 canonical checkout、跑测试、推送、合并、自审 |
-| TesterAgent | 一次性副本验证、基线与回归判定 | `test-runner` | `TestEvidence`；服务器预注册的 CI/CD 测试/结果/覆盖率工具 | 接受 Agent 自带 shell、修改源码或测试、批准补丁 |
+| TesterAgent | 一次性副本验证、基线与回归判定 | `test-runner` | `TestEvidence`；仓库内已实现并本地测试的服务器预注册 CI/CD 测试/结果/覆盖率工具 | 接受 Agent 自带 shell、修改源码或测试、批准补丁 |
 | ReviewerAgent | 正确性与安全审查、风险识别/阻断升级、经验提炼 | `pr-reviewer`、`experience-distiller` | 审查决定、PR-ready 证据、脱敏经验；TeamHarness `ack_task` / `submit_task` | 合并、部署、回滚、签发人工批准、绕过高危发现；当前 AgentTeams 部署无 GitHub 写能力 |
 
 HumanReviewer 是六个自主 Agent 之外的外部授权主体。其职责是对 T4/T5 的
 精确动作、目标、参数摘要和有效期签名批准或拒绝；普通聊天文字和 Agent
-自述都不是有效批准。
+自述都不是有效批准。仓库代码与测试覆盖签名校验；当前服务器实证只覆盖暂停
+和无批准恢复拒绝，尚未覆盖真人签名后成功恢复。
 
 ## 交接不变量
 
@@ -21,12 +22,16 @@ HumanReviewer 是六个自主 Agent 之外的外部授权主体。其职责是�
 payload 类型、SHA-256、trace 与 idempotency key。Worker 只接受发给自己的
 任务，只能 `ack_task` 和 `submit_task`；Leader 才能委派、验收、暂停、恢复和
 完成项目。Worker 没有直接 `artifact` / `filesync` 控制面；共享文件由 Leader
-或受控任务生命周期同步。测试失败或审查拒绝携带原始证据返回 Coder，不能被
-TeamLeader 改写为成功。T4/T5 必须进入 HumanReviewer，不能静默降级。
+或受控任务生命周期同步。本地运行时把测试失败或审查拒绝转换成结构化、脱敏且
+有界的证据返回 Coder，不能被 TeamLeader 改写为成功；这条回路已有仓库测试，
+但尚无真实 AgentTeams 现场闭环。T4/T5 必须进入 HumanReviewer，不能静默降级。
 
-同一 assignment 的重试必须保持 ID 和字节级摘要一致；相同幂等键但不同结果
-摘要属于冲突，必须失败。大产物走共享任务路径，房间消息只传引用与摘要，减少
-上下文重复和 token 损耗。
+对 TeamHarness task-result submission，同一 assignment 的重试必须保持 ID 和
+字节级摘要一致；相同幂等键但不同结果摘要属于冲突，必须失败。Python Agent
+runtime 的 execution-route claim 则只保存在当前 TeamLeader/Worker 进程内：
+本地并发重复投递最多产生一个重试路由并分别留审计，但不能宣称跨进程、重启后
+或多副本持久 exactly-once。大产物走共享任务路径，房间消息只传引用与摘要，
+减少上下文重复和 token 损耗。
 
 ## 有效权限计算
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Patch Generator"
-  short_description: "Generate a minimal bounded candidate code patch"
-  default_prompt: "Use $patch-generator to propose a safe candidate from located context."
+  short_description: "Revise candidates from verified sanitized evidence"
+  default_prompt: "Use $patch-generator to propose a minimal candidate from verified context and sanitized bounded evidence."

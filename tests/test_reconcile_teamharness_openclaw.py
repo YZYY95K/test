@@ -37,6 +37,7 @@ from scripts.teamharness_openclaw import UPSTREAM_FILE_SHA256
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "reconcile_teamharness_openclaw.py"
+TEST_APPROVAL_DOMAIN = "d" * 64
 
 
 def _team() -> dict[str, Any]:
@@ -391,6 +392,7 @@ def test_reconcile_preflights_all_roles_then_stages_installs_and_verifies(
         kubectl="kubectl",
         agentteams_repo=repo,
         approval_public_key=_public_key_fixture(tmp_path),
+        approval_domain=TEST_APPROVAL_DOMAIN,
         devflow_repo=ROOT,
         _test_hash_policy=policy,
     )
@@ -430,6 +432,29 @@ def test_reconcile_preflights_all_roles_then_stages_installs_and_verifies(
         runtime_config = args[args.index("--runtime-config") + 1]
         assert runtime_config.endswith("/identity/runtime-config.yaml")
     assert "--approval-public-key" in leader
+    assert leader[leader.index("--approval-domain") + 1] == TEST_APPROVAL_DOMAIN
+    for _, args in install_calls:
+        if "agentteams-worker-devflow-lead" not in args:
+            assert "--approval-domain" not in args
+
+
+def test_reconcile_rejects_ambiguous_approval_domain_before_kubernetes(
+    tmp_path: Path,
+) -> None:
+    runner = _FakeRunner(_team(), _pods(), ())
+
+    with pytest.raises(ReconcileError, match="approval domain"):
+        reconcile(
+            runner,
+            kubectl="kubectl",
+            agentteams_repo=tmp_path,
+            approval_public_key=_public_key_fixture(tmp_path),
+            approval_domain="shared-domain",
+            devflow_repo=ROOT,
+            _test_hash_policy={},
+        )
+
+    assert runner.calls == []
 
 
 def test_script_never_mutates_rbac_or_contains_credentials() -> None:

@@ -7,8 +7,8 @@
 
 ```powershell
 python scripts/build_prelim_submission.py build `
-  --tag goai-prelim-2026-07-27 `
-  --output outputs/GOAI_2026_AgentInfra_DevFlow_初赛提交包_20260727.zip
+  --tag v1.3.0 `
+  --output outputs/GOAI_2026_AgentInfra_DevFlow_初赛提交包_v1.3.0_20260728.zip
 ```
 
 脚本从显式 allowlist 构建源码 ZIP，验证 PPTX/PDF 内部内容，然后生成两层清单：源码层的
@@ -20,10 +20,12 @@ python scripts/build_prelim_submission.py build `
 
 ```powershell
 python scripts/build_prelim_submission.py verify `
-  outputs/GOAI_2026_AgentInfra_DevFlow_初赛提交包_20260727.zip
+  outputs/GOAI_2026_AgentInfra_DevFlow_初赛提交包_v1.3.0_20260728.zip
 ```
 
 复验会拒绝额外文件、哈希不一致、路径逃逸、重复或 Unicode 冲突路径、链接/非常规 ZIP 元数据、
 超限内容、敏感凭据形态、公网 IP、本机用户绝对路径，以及带活动内容或嵌入对象的 PDF/PPTX。
-`docs/submission/PRELIM_SUBMISSION_CHECKLIST_CN.md`、旧 ZIP、QA 渲染目录、缓存、`.devflow/`、
+源码包显式要求纳入 `docs/evidence/LOCAL_RELEASE_CANDIDATE_20260728.md`，用于把候选版声明与
+可复验证据一起交付；缺失或未被 Git 跟踪时构建会失败。`docs/submission/PRELIM_SUBMISSION_CHECKLIST_CN.md`、
+旧 ZIP、QA 渲染目录、缓存、`.devflow/`、
 `dist/` 和 `agentteams/systemd/` 均不在 allowlist 中。

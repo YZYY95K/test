@@ -19,9 +19,10 @@ Skill 会模糊“谁能改计划”和“谁能做工作”的边界。
 
 ## 4. MCP 为什么不是配置型伪实现？
 
-五个工具可由真实 FastMCP endpoint 枚举和调用。流水线在一次性副本执行
-server-owned argv，覆盖率来自 `coverage.json`；回滚调用原子 symlink
-provider 并做健康检查。
+仓库实现的五个工具可由 FastMCP endpoint 枚举和调用，本地集成测试验证了这条
+链路。流水线在一次性副本执行 server-owned argv，覆盖率接口读取
+`coverage.json`；回滚调用原子 symlink provider 并做健康检查。这些是代码与
+本地测试证据，不是当前 AgentTeams 服务器已完成 CI/CD 或回滚现场闭环的声明。
 
 ## 5. Agent 能不能把 shell 命令藏在参数里？
 
@@ -30,8 +31,9 @@ provider 并做健康检查。
 
 ## 6. 人工批准如何防止复用？
 
-签名绑定 action、canonical target、完整参数 SHA-256、批准人和时间，并有
-有效期。改环境、release 或任一参数都会使验证失败。
+本地实现与测试中，签名绑定 action、canonical target、完整参数 SHA-256、
+批准人和时间，并有有效期；改环境、release 或任一参数都会使验证失败。当前
+服务器仅实证 T4 暂停和无批准恢复拒绝，真人签名批准后恢复仍未完成。
 
 ## 7. 审计链能否防止管理员重写全部日志？
 
@@ -55,9 +57,11 @@ Reviewer 入口均返回 403，Locator 直连 Broker 被 NetworkPolicy 阻断。
 
 ## 10. 为什么不直接用覆盖率证明系统可靠？
 
-覆盖率只说明哪些代码被执行，不证明职责边界正确或现场闭环真实。82.73% 是
-2026-07-24 旧分支快照，当前新增安全边界后必须重新跑最终分支，不能沿用旧数。
-最终证据还要同时包含行为评测、拒绝测试、真实服务器状态和人工门记录。
+覆盖率只说明哪些代码被执行，不证明职责边界正确或现场闭环真实。2026-07-28
+当前 v1.3.0 候选工作树的完整结果是 846 passed、17 skipped、84.40%
+（3,874/4,590），但尚未
+绑定最终 commit，提交前必须在冻结版本上复跑。最终证据还要同时包含行为评测、
+拒绝测试、真实服务器状态和人工门记录。
 
 ## 11. 三仓库 24 项是否等于完整补丁解决基准？
 
@@ -81,13 +85,21 @@ Leader `effective` 与文件同步 2/2 证据。它仍不是六阶段软件修�
 
 ## 13. Tester 或 Reviewer 与 Coder 冲突时听谁的？
 
-证据优先：红测返回 Coder，高危发现阻断推进，T4/T5 进入人工门。TeamLeader
-只能重排和升级，不能覆盖这些硬门。
+设计与本地运行时均坚持证据优先：红测先返回 TeamLeader，只有完整摘要验证
+通过后才以结构化、脱敏且有界的失败证据重路由 Coder。Reviewer 拒绝同样先由
+TeamLeader 校验，但当前没有候选绑定的修复契约，因此 fail-closed 并要求人工
+重规划，不把裸审查意见直接执行为补丁。T4/T5 进入人工门，TeamLeader 不能覆盖
+这些硬门。Tester→Coder 的真实 AgentTeams 现场回路仍是待办。
 
 ## 14. 如何控制成本与无限重试？
 
-每个 Agent 有调用时间、token、连续失败和重试上限；失败采用指数退避并在
-阈值后交回 TeamLeader。基准记录 provider token 与 p50/p95 时延。
+契约和配置定义调用时间、token 与 attempt 上限；当前本地失败恢复测试进一步
+验证 generic execution retry 的 route-level claim，以及每个 canonical Coder
+route 只授权一次模型调用。候选验证失败与 Tester 语义失败共享由 TeamLeader
+顺序签发的 issue-global 1..3 预算，不会产生第四次调用，也不会再叠加通用执行
+重试。route claim 是进程内状态，不是
+跨重启或多副本 exactly-once。基准只在 provider 返回可用数据时记录 token 与
+p50/p95 时延；不能用配置中的 exponential backoff 字段冒充已观察到的运行行为。
 
 ## 15. 开源复用价值在哪里？
 
@@ -126,4 +138,6 @@ TOCTOU 风险。
 现场任务已沿该路径完成：项目完成、报告关闭，validator、三种提交语义、冲突后
 读回与 Leader `effective` 均验证；项目 push 报告 2/2，对 `meta.json` 与
 `plan.md` 又分别执行了 `stat exists=true`。这些独立 stat 只证明对象存在，
-不证明远端字节摘要；一次 T2 也不能替代六阶段修复或总体成功率基准。
+不证明远端字节摘要；一次 T2 也不能替代六阶段修复或总体成功率基准。这里的
+持久 task-result 冲突语义也不能外推为 Python execution-route claim 的分布式
+exactly-once。

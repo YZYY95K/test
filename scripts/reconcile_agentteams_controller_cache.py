@@ -58,20 +58,20 @@ ROLE_SKILLS: dict[str, tuple[str, ...]] = {
     "devflow-reviewer": ("pr-reviewer", "experience-distiller"),
 }
 ARCHIVE_DIGESTS = {
-    "devflow-lead": "88ec2ea1a908b26ab1603467df890821417507503687c5eaf55ba772d399d769",
-    "devflow-triage": "0282da4fa9bdf3cc6e111c159cffbfafa4ae090e63f9398ad16ac9b986b398ba",
-    "devflow-locator": "aedd5c4cedfd359c6810059458ccb48f4ec6a26a41e0e014ef22f09a8b20cebc",
-    "devflow-coder": "5d7a7f8db0239ecb1ffdea2acd2022669372ca3aec797d7cd3283df835c9aabc",
-    "devflow-tester": "d7c72fd365a60abe032282f56b9487f78b40f648a16782d2c3012fe7d32b59e1",
-    "devflow-reviewer": "463a7de6f42653aa22dfd0a60b9fac531ad1c32b09a57cb39ee45fa0908a4f96",
+    "devflow-lead": "5ec6e76a43a6b4a5cf55fd0321f82be2f81b294c75081c18a139ec32c5757661",
+    "devflow-triage": "bcb84afa4004a1b1c208a83bee8fdc7ef8bdea289b740b909677e2f152ca02da",
+    "devflow-locator": "2d59b7d1533165009596167bc6470a0ba473895c835a390e083e967cddd2ff53",
+    "devflow-coder": "5425868754f5539eb5568fdfb5900d7fa0bcee6f724f92cf26bb2a289ac3de7f",
+    "devflow-tester": "68ad37e009c5485230dc38065c2095d751d6298943ebe88bbc471040b2488de2",
+    "devflow-reviewer": "6e2c4a4a76b9860e1931275d820cff3f961133257567d6eed417ae7cf896e947",
 }
 ARCHIVE_SIZES = {
     "devflow-lead": 2163,
-    "devflow-triage": 14599,
-    "devflow-locator": 56419,
-    "devflow-coder": 15008,
-    "devflow-tester": 15048,
-    "devflow-reviewer": 28074,
+    "devflow-triage": 14595,
+    "devflow-locator": 56415,
+    "devflow-coder": 54690,
+    "devflow-tester": 49237,
+    "devflow-reviewer": 28232,
 }
 ALL_FIXED_SKILLS = tuple(sorted({skill for skills in ROLE_SKILLS.values() for skill in skills}))
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -511,7 +511,7 @@ audit_role() {
 }
 audit_archive() {
   role=$1; expected_size=$2; expected_sum=$3
-  path=/tmp/import/$role-v1.2.0.zip
+  path=/tmp/import/$role-v1.3.0.zip
   [ -f "$path" ] && [ ! -L "$path" ] || fail; reject_mounts "$path"
   [ "$(stat -c %u "$path")" = 0 ] && [ "$(stat -c %g "$path")" = 0 ] || fail
   [ "$(stat -c %a "$path")" = 644 ] && [ "$(stat -c %h "$path")" = 1 ] || fail
@@ -522,12 +522,12 @@ audit_archive() {
 }
 meta_dir /tmp/import; reject_mounts /tmp/import; import_dev=$(stat -c %d /tmp/import) || fail
 : > "$tmp/archives"; : > "$tmp/rolemeta"
-audit_archive devflow-lead 2163 88ec2ea1a908b26ab1603467df890821417507503687c5eaf55ba772d399d769
-audit_archive devflow-triage 14599 0282da4fa9bdf3cc6e111c159cffbfafa4ae090e63f9398ad16ac9b986b398ba
-audit_archive devflow-locator 56419 aedd5c4cedfd359c6810059458ccb48f4ec6a26a41e0e014ef22f09a8b20cebc
-audit_archive devflow-coder 15008 5d7a7f8db0239ecb1ffdea2acd2022669372ca3aec797d7cd3283df835c9aabc
-audit_archive devflow-tester 15048 d7c72fd365a60abe032282f56b9487f78b40f648a16782d2c3012fe7d32b59e1
-audit_archive devflow-reviewer 28074 463a7de6f42653aa22dfd0a60b9fac531ad1c32b09a57cb39ee45fa0908a4f96
+audit_archive devflow-lead 2163 5ec6e76a43a6b4a5cf55fd0321f82be2f81b294c75081c18a139ec32c5757661
+audit_archive devflow-triage 14595 bcb84afa4004a1b1c208a83bee8fdc7ef8bdea289b740b909677e2f152ca02da
+audit_archive devflow-locator 56415 2d59b7d1533165009596167bc6470a0ba473895c835a390e083e967cddd2ff53
+audit_archive devflow-coder 54690 5425868754f5539eb5568fdfb5900d7fa0bcee6f724f92cf26bb2a289ac3de7f
+audit_archive devflow-tester 49237 68ad37e009c5485230dc38065c2095d751d6298943ebe88bbc471040b2488de2
+audit_archive devflow-reviewer 28232 6e2c4a4a76b9860e1931275d820cff3f961133257567d6eed417ae7cf896e947
 audit_role devflow-lead
 audit_role devflow-triage
 audit_role devflow-locator
@@ -757,7 +757,7 @@ else
 fi
 [ "$(stat -c %u "$tx")" = 0 ] && [ "$(stat -c %g "$tx")" = 0 ] || fail
 [ "$(stat -c %d "$tx")" = "$(stat -c %d "$base")" ] || fail
-stage="$tx/$role.new"; saved="$tx/$role.previous"; target="$base/$role-v1.2.0.zip"
+stage="$tx/$role.new"; saved="$tx/$role.previous"; target="$base/$role-v1.3.0.zip"
 [ ! -e "$stage" ] && [ ! -L "$stage" ] && [ ! -e "$saved" ] && [ ! -L "$saved" ] || fail
 cat > "$stage" || fail
 chmod 644 "$stage" || fail
@@ -800,7 +800,7 @@ case "$expected_sha" in *[!0-9a-f]*|'') fail;; esac
 [ "${#expected_sha}" -eq 64 ] || fail
 case "$txid" in *[!0-9a-f]*|'') fail;; esac
 [ "${#txid}" -eq 64 ] || fail
-archive="/tmp/import/$role-v1.2.0.zip"
+archive="/tmp/import/$role-v1.3.0.zip"
 [ -f "$archive" ] && [ ! -L "$archive" ] && [ "$(stat -c %h "$archive")" = 1 ] || fail
 [ "$(stat -c %u "$archive")" = 0 ] && [ "$(stat -c %g "$archive")" = 0 ] || fail
 [ "$(stat -c %a "$archive")" = 644 ] && [ "$(stat -c %s "$archive")" = "$expected_size" ] || fail

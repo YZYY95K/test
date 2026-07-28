@@ -21,16 +21,9 @@ from devflow.mcp.approval import ApprovalVerifier
 from devflow.mcp.context_auth import ContextSigner
 from devflow.mcp.contracts import MCPCallContext
 from devflow.models.patch import Patch
+from devflow.security.secrets import contains_secret
 
 _PROTECTED_BRANCHES = {"main", "master"}
-_SECRET_PATTERNS = (
-    re.compile(r"ghp_[A-Za-z0-9]{30,}"),
-    re.compile(r"github_pat_[A-Za-z0-9_]{40,}"),
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-)
-
-
 class RawMCPTransport(Protocol):
     """Untrusted transport invoked only after policy authorization."""
 
@@ -359,13 +352,7 @@ def verify_audit_chain(path: Path) -> bool:
 
 
 def _contains_secret(value: Any) -> bool:
-    if isinstance(value, dict):
-        return any(_contains_secret(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_contains_secret(item) for item in value)
-    if isinstance(value, str):
-        return any(pattern.search(value) for pattern in _SECRET_PATTERNS)
-    return False
+    return contains_secret(value)
 
 
 def _require_safe_branch(value: Any) -> str:

@@ -28,13 +28,13 @@ spec:
               containerPort: 8080
           readinessProbe:
             httpGet:
-              path: /devflow-lead-v1.2.0.zip
+              path: /devflow-lead-v1.3.0.zip
               port: http
             initialDelaySeconds: 1
             periodSeconds: 3
           livenessProbe:
             httpGet:
-              path: /devflow-lead-v1.2.0.zip
+              path: /devflow-lead-v1.3.0.zip
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -61,21 +61,21 @@ spec:
       volumes:
         - name: package
           configMap:
-            name: devflow-worker-packages-v1-2-0
+            name: devflow-worker-packages-v1-3-0
             defaultMode: 0444
             items:
-              - key: devflow-lead-v1.2.0.zip
-                path: devflow-lead-v1.2.0.zip
-              - key: devflow-triage-v1.2.0.zip
-                path: devflow-triage-v1.2.0.zip
-              - key: devflow-locator-v1.2.0.zip
-                path: devflow-locator-v1.2.0.zip
-              - key: devflow-coder-v1.2.0.zip
-                path: devflow-coder-v1.2.0.zip
-              - key: devflow-tester-v1.2.0.zip
-                path: devflow-tester-v1.2.0.zip
-              - key: devflow-reviewer-v1.2.0.zip
-                path: devflow-reviewer-v1.2.0.zip
+              - key: devflow-lead-v1.3.0.zip
+                path: devflow-lead-v1.3.0.zip
+              - key: devflow-triage-v1.3.0.zip
+                path: devflow-triage-v1.3.0.zip
+              - key: devflow-locator-v1.3.0.zip
+                path: devflow-locator-v1.3.0.zip
+              - key: devflow-coder-v1.3.0.zip
+                path: devflow-coder-v1.3.0.zip
+              - key: devflow-tester-v1.3.0.zip
+                path: devflow-tester-v1.3.0.zip
+              - key: devflow-reviewer-v1.3.0.zip
+                path: devflow-reviewer-v1.3.0.zip
 ---
 apiVersion: v1
 kind: Service

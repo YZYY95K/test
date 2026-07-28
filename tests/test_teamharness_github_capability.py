@@ -24,6 +24,8 @@ REVISION = "a" * 40
 TOKEN_MARKER = "token-material-must-not-escape"
 TEST_TASK_ROOM_ID = "!" + "task" + ":" + "matrix.test"
 TEST_BOUND_ROOM_ID = "!" + "bounded" + ":" + "matrix.test"
+TEST_APPROVAL_DOMAIN = "d" * 64
+TEST_POLICY_KEY_SHA256 = "e" * 64
 
 
 def _canonical(value: Any) -> bytes:
@@ -529,18 +531,19 @@ def _room_response(invites: list[str]) -> dict[str, Any]:
 
 
 def _project_binding(guard: Any) -> dict[str, Any]:
-    source = "operator-driven"
-    risk_tier = "T2"
-    return {
-        "riskTier": risk_tier,
+    binding = {
+        "riskTier": "T2",
         "createdTargetDigest": "a" * 64,
-        "source": source,
-        "bindingDigest": guard._project_binding_digest(
-            "project-7",
-            risk_tier,
-            source,
-        ),
+        "source": "operator-driven",
+        "incarnation": "b" * 64,
+        "audience": guard.APPROVAL_AUDIENCE,
+        "approvalDomain": TEST_APPROVAL_DOMAIN,
+        "policyKeySha256": TEST_POLICY_KEY_SHA256,
     }
+    binding["projectBindingDigest"] = guard._project_binding_digest(
+        "project-7", binding
+    )
+    return binding
 
 
 def test_private_room_result_is_actual_state_attestation_not_full_member_projection(
@@ -658,7 +661,16 @@ def test_create_task_room_handler_binds_project_and_verified_matrix_state(
     calls = 0
 
     monkeypatch.setattr(guard, "_load_object", lambda _path: {})
-    monkeypatch.setattr(guard, "_approval_policy", lambda _manifest: {"ledgerPath": "fixed"})
+    monkeypatch.setattr(
+        guard,
+        "_approval_policy",
+        lambda _manifest: {
+            "ledgerPath": "fixed",
+            "audience": guard.APPROVAL_AUDIENCE,
+            "approvalDomain": TEST_APPROVAL_DOMAIN,
+            "policyKeySha256": TEST_POLICY_KEY_SHA256,
+        },
+    )
 
     def verified(*_args: Any, **_kwargs: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         return binding, {"project_id": "project-7", "source": "operator-driven"}
@@ -721,7 +733,12 @@ def test_legacy_project_ledger_entry_upgrades_without_schema_break(
     ledger_path.chmod(0o600)
 
     upgraded = guard._upgrade_legacy_project_binding(
-        {"ledgerPath": str(ledger_path)},
+        {
+            "ledgerPath": str(ledger_path),
+            "audience": guard.APPROVAL_AUDIENCE,
+            "approvalDomain": TEST_APPROVAL_DOMAIN,
+            "policyKeySha256": TEST_POLICY_KEY_SHA256,
+        },
         "project-7",
         "operator-driven",
     )
@@ -730,7 +747,9 @@ def test_legacy_project_ledger_entry_upgrades_without_schema_break(
     assert persisted["schemaVersion"] == "1.0"
     assert set(persisted) == {"schemaVersion", "projects", "usedNonces"}
     assert upgraded["source"] == "operator-driven"
-    assert re.fullmatch(r"[0-9a-f]{64}", upgraded["bindingDigest"])
+    assert re.fullmatch(r"[0-9a-f]{64}", upgraded["incarnation"])
+    assert re.fullmatch(r"[0-9a-f]{64}", upgraded["projectBindingDigest"])
+    assert upgraded["approvalDomain"] == TEST_APPROVAL_DOMAIN
 
 
 def test_duplicate_or_oversized_payload_json_fails_before_upstream(

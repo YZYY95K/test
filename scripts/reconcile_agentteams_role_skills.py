@@ -5,7 +5,7 @@ identity gates as the other AgentTeams reconcilers. Check mode is read-only
 with respect to both Skill stores and uses only a private ephemeral mc config.
 Apply mode removes disallowed members of the fixed seven-Skill DevFlow set and
 replaces stale allowed trees only with the role's source-attested, digest-pinned
-v1.2.0 archive.  MinIO replacement is an explicitly non-atomic S3 tree update
+current release archive. MinIO replacement is an explicitly non-atomic S3 tree update
 protected by durable staging, backup, and phase-manifest recovery; the later
 local exchange is atomic. AgentTeams built-in and unknown Skills are never
 deletion targets.
@@ -149,12 +149,12 @@ ROLE_SKILLS: dict[str, tuple[str, ...]] = {
     "devflow-reviewer": ("pr-reviewer", "experience-distiller"),
 }
 RELEASE_ARCHIVE_DIGESTS = {
-    "devflow-lead": "88ec2ea1a908b26ab1603467df890821417507503687c5eaf55ba772d399d769",
-    "devflow-triage": "0282da4fa9bdf3cc6e111c159cffbfafa4ae090e63f9398ad16ac9b986b398ba",
-    "devflow-locator": "aedd5c4cedfd359c6810059458ccb48f4ec6a26a41e0e014ef22f09a8b20cebc",
-    "devflow-coder": "5d7a7f8db0239ecb1ffdea2acd2022669372ca3aec797d7cd3283df835c9aabc",
-    "devflow-tester": "d7c72fd365a60abe032282f56b9487f78b40f648a16782d2c3012fe7d32b59e1",
-    "devflow-reviewer": "463a7de6f42653aa22dfd0a60b9fac531ad1c32b09a57cb39ee45fa0908a4f96",
+    "devflow-lead": "5ec6e76a43a6b4a5cf55fd0321f82be2f81b294c75081c18a139ec32c5757661",
+    "devflow-triage": "bcb84afa4004a1b1c208a83bee8fdc7ef8bdea289b740b909677e2f152ca02da",
+    "devflow-locator": "2d59b7d1533165009596167bc6470a0ba473895c835a390e083e967cddd2ff53",
+    "devflow-coder": "5425868754f5539eb5568fdfb5900d7fa0bcee6f724f92cf26bb2a289ac3de7f",
+    "devflow-tester": "68ad37e009c5485230dc38065c2095d751d6298943ebe88bbc471040b2488de2",
+    "devflow-reviewer": "6e2c4a4a76b9860e1931275d820cff3f961133257567d6eed417ae7cf896e947",
 }
 ALL_DEVFLOW_SKILLS = frozenset(skill for skills in ROLE_SKILLS.values() for skill in skills)
 COMMON_SKILL_FILES = frozenset(
@@ -3906,7 +3906,7 @@ def _parser() -> argparse.ArgumentParser:
         "--dist",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "dist",
-        help="directory containing the immutable v1.2.0 role archives",
+        help=f"directory containing the immutable v{PACKAGE_VERSION} role archives",
     )
     return parser
 

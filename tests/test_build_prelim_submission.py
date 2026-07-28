@@ -62,13 +62,13 @@ def _fixture_repo(tmp_path: Path) -> tuple[Path, FakeGit]:
     for name in submission.SOURCE_REQUIRED_EXACT:
         content = "fixture\n"
         if name == "pyproject.toml":
-            content = '[project]\nname = "devflow"\nversion = "1.2.0"\n'
+            content = '[project]\nname = "devflow"\nversion = "1.3.0"\n'
         elif name.endswith(".json"):
             content = "{}\n"
         _write(root / Path(*Path(name).parts), content)
 
     required_sections = {
-        "src/devflow/__init__.py": "__version__ = '1.2.0'\n",
+        "src/devflow/__init__.py": "__version__ = '1.3.0'\n",
         "skills/demo/SKILL.md": "# Demo Skill\n",
         "config/agents.yaml": "agents: []\n",
         "agentteams/team.yaml": "apiVersion: agentteams.io/v1beta1\n",
@@ -88,12 +88,14 @@ def _fixture_repo(tmp_path: Path) -> tuple[Path, FakeGit]:
     for name in outer_text_sources:
         _write(root / Path(*Path(name).parts), "# DevFlow\n\nSanitized submission material.\n")
     _write(
-        root / "outputs/DevFlow_GOAI_2026_初赛方案_20260727.pdf",
+        root / "outputs/DevFlow_GOAI_2026_初赛方案_20260728.pdf",
         b"%PDF-1.4\n%%EOF\n",
     )
-    _write(root / "outputs/DevFlow_GOAI_2026_初赛方案_20260727.pptx", _pptx())
+    _write(root / "outputs/DevFlow_GOAI_2026_初赛方案_20260728.pptx", _pptx())
 
-    # These files prove the builder selects exact 20260727 inputs rather than outputs/**.
+    # These files prove the builder selects exact 20260728 inputs rather than outputs/**.
+    _write(root / "outputs/DevFlow_GOAI_2026_初赛方案_20260727.pdf", b"old")
+    _write(root / "outputs/DevFlow_GOAI_2026_初赛方案_20260727.pptx", b"old")
     _write(root / "outputs/GOAI_2026_AgentInfra_DevFlow_初赛提交包_20260725.zip", b"old")
     _write(root / "outputs/old.inspect.ndjson", "{}\n")
     _write(root / "outputs/.pdf-qa-20260727/page-01.png", b"qa")
@@ -113,7 +115,7 @@ def _build(root: Path, git: FakeGit, name: str = "submission.zip") -> BuildResul
     return build_submission(
         repo_root=root,
         output=Path("outputs") / name,
-        tag="goai-prelim-2026-07-27",
+        tag="v1.3.0",
         _git=git,
         _pdf_extractor=SafePdfExtractor(),
     )
@@ -134,9 +136,9 @@ def test_build_is_deterministic_and_both_manifest_layers_verify(tmp_path: Path) 
     context = verify_submission_bytes(first_data, _pdf_extractor=SafePdfExtractor())
     assert context == submission.ManifestContext(
         project="DevFlow",
-        version="1.2.0",
+        version="1.3.0",
         commit="a" * 40,
-        tag="goai-prelim-2026-07-27",
+        tag="v1.3.0",
     )
 
     outer = _entries(first_data)
@@ -155,7 +157,9 @@ def test_build_is_deterministic_and_both_manifest_layers_verify(tmp_path: Path) 
     assert submission.SOURCE_MANIFEST_NAME in source
     assert submission.SOURCE_SUMS_NAME in source
     assert "NOTICE" in source
+    assert "docs/evidence/LOCAL_RELEASE_CANDIDATE_20260728.md" in source
     assert "examples/prelim_sample/sample_input.json" in source
+    assert "examples/prelim_sample/actual_output.json" in source
 
 
 def test_only_exact_current_assets_are_selected(tmp_path: Path) -> None:
@@ -171,6 +175,29 @@ def test_only_exact_current_assets_are_selected(tmp_path: Path) -> None:
     assert ".devflow" not in flattened
     assert "dist/" not in flattened
     assert "agentteams/systemd" not in flattened
+
+
+def test_20260728_assets_are_the_only_outer_presentation_inputs() -> None:
+    presentation_sources = {
+        source
+        for source, _, kind in submission.OUTER_INPUTS
+        if kind in {"pdf", "pptx"}
+    }
+
+    assert presentation_sources == {
+        "outputs/DevFlow_GOAI_2026_初赛方案_20260728.pdf",
+        "outputs/DevFlow_GOAI_2026_初赛方案_20260728.pptx",
+    }
+
+
+def test_local_release_candidate_evidence_is_required(tmp_path: Path) -> None:
+    root, git = _fixture_repo(tmp_path)
+    evidence = "docs/evidence/LOCAL_RELEASE_CANDIDATE_20260728.md"
+    (root / evidence).unlink()
+    git.tracked = frozenset(path for path in git.tracked if path != evidence)
+
+    with pytest.raises(SubmissionBuildError, match="required source allowlist"):
+        _build(root, git)
 
 
 @pytest.mark.parametrize("name", sorted(submission.SOURCE_RUNTIME_REQUIRED))
@@ -222,7 +249,7 @@ def test_tag_must_resolve_to_head_and_be_safe(tmp_path: Path) -> None:
 
 def test_untracked_outer_input_is_rejected(tmp_path: Path) -> None:
     root, git = _fixture_repo(tmp_path)
-    missing = "outputs/DevFlow_GOAI_2026_初赛方案_20260727.pdf"
+    missing = "outputs/DevFlow_GOAI_2026_初赛方案_20260728.pdf"
     git.tracked = frozenset(git.tracked - {missing})
 
     with pytest.raises(SubmissionBuildError, match="not tracked"):

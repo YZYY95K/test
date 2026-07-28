@@ -64,6 +64,7 @@ RUNTIME_BINDING_NAME = "runtime-binding.json"
 RUNTIME_CONFIG_NAME = "runtime-config.yaml"
 ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 DNS_LABEL = re.compile(r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$")
+APPROVAL_DOMAIN = re.compile(r"^[0-9a-f]{64}$")
 REMOTE_HASH_CHECK = """
 import hashlib
 import json
@@ -852,7 +853,12 @@ mkdir -p -- "$stage/plugin" "$stage/overlay" "$stage/policy" "$stage/identity"
     )
 
 
-def _install_and_verify(runner: Runner, kubectl: str, target: Target) -> None:
+def _install_and_verify(
+    runner: Runner,
+    kubectl: str,
+    target: Target,
+    approval_domain: str,
+) -> None:
     adapter = f"{REMOTE_STAGE}/overlay/scripts/teamharness_openclaw.py"
     common = [
         "--workspace",
@@ -864,6 +870,8 @@ def _install_and_verify(runner: Runner, kubectl: str, target: Target) -> None:
         [
             "--approval-public-key",
             f"{REMOTE_STAGE}/policy/{APPROVAL_PUBLIC_KEY_NAME}",
+            "--approval-domain",
+            approval_domain,
         ]
         if target.role_name == LEADER_ROLE
         else []
@@ -904,11 +912,14 @@ def reconcile(
     kubectl: str,
     agentteams_repo: Path,
     approval_public_key: Path,
+    approval_domain: str,
     devflow_repo: Path = ROOT,
     _test_hash_policy: dict[str, str] | None = None,
 ) -> list[Target]:
     """Run discovery, source preflight, staging, installation, and verification."""
 
+    if APPROVAL_DOMAIN.fullmatch(approval_domain) is None:
+        raise ReconcileError("approval domain must be 64 lowercase hexadecimal characters")
     runner.run([kubectl, "version", "--request-timeout=10s"])
     team_text = runner.run(_kubectl(kubectl, "get", "team", TEAM_NAME, "--output", "json"))
     pods_text = runner.run(
@@ -966,7 +977,7 @@ def reconcile(
             runtime_config_sha256,
         )
     for target in targets:
-        _install_and_verify(runner, kubectl, target)
+        _install_and_verify(runner, kubectl, target, approval_domain)
     return targets
 
 
@@ -992,6 +1003,11 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help="external Ed25519 public key PEM; never pass a private key",
     )
+    parser.add_argument(
+        "--approval-domain",
+        required=True,
+        help="public, deployment-unique 64-character lowercase hexadecimal domain",
+    )
     parser.add_argument("--kubectl", default="kubectl", help="kubectl executable")
     return parser
 
@@ -1004,6 +1020,7 @@ def main(argv: list[str] | None = None) -> int:
             kubectl=args.kubectl,
             agentteams_repo=args.agentteams_repo,
             approval_public_key=args.approval_public_key,
+            approval_domain=args.approval_domain,
             devflow_repo=args.devflow_repo,
         )
     except ReconcileError as exc:

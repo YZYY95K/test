@@ -26,17 +26,17 @@ multi-agent transport.
    python scripts/build_agentteams_package.py
    ```
 
-   Version `1.2.0` deliberately gives each runtime only its owned DevFlow
+   Version `1.3.0` deliberately gives each runtime only its owned DevFlow
    Skills; built-in AgentTeams Skills are unaffected:
 
    | Runtime | DevFlow Skills | SHA-256 |
    |---|---|---|
-   | `devflow-lead` | none | `88ec2ea1a908b26ab1603467df890821417507503687c5eaf55ba772d399d769` |
-   | `devflow-triage` | `issue-classifier` | `0282da4fa9bdf3cc6e111c159cffbfafa4ae090e63f9398ad16ac9b986b398ba` |
-   | `devflow-locator` | `code-root-cause`, `github-evidence` | `aedd5c4cedfd359c6810059458ccb48f4ec6a26a41e0e014ef22f09a8b20cebc` |
-   | `devflow-coder` | `patch-generator` | `5d7a7f8db0239ecb1ffdea2acd2022669372ca3aec797d7cd3283df835c9aabc` |
-   | `devflow-tester` | `test-runner` | `d7c72fd365a60abe032282f56b9487f78b40f648a16782d2c3012fe7d32b59e1` |
-   | `devflow-reviewer` | `pr-reviewer`, `experience-distiller` | `463a7de6f42653aa22dfd0a60b9fac531ad1c32b09a57cb39ee45fa0908a4f96` |
+   | `devflow-lead` | none | `5ec6e76a43a6b4a5cf55fd0321f82be2f81b294c75081c18a139ec32c5757661` |
+   | `devflow-triage` | `issue-classifier` | `bcb84afa4004a1b1c208a83bee8fdc7ef8bdea289b740b909677e2f152ca02da` |
+   | `devflow-locator` | `code-root-cause`, `github-evidence` | `2d59b7d1533165009596167bc6470a0ba473895c835a390e083e967cddd2ff53` |
+   | `devflow-coder` | `patch-generator` | `5425868754f5539eb5568fdfb5900d7fa0bcee6f724f92cf26bb2a289ac3de7f` |
+   | `devflow-tester` | `test-runner` | `68ad37e009c5485230dc38065c2095d751d6298943ebe88bbc471040b2488de2` |
+   | `devflow-reviewer` | `pr-reviewer`, `experience-distiller` | `6e2c4a4a76b9860e1931275d820cff3f961133257567d6eed417ae7cf896e947` |
 
 3. Preflight the source-attested archives, create the immutable ConfigMap,
    and publish it on the private namespace-local package service:
@@ -51,7 +51,7 @@ multi-agent transport.
    The Service is `ClusterIP` only, the container has no service-account token,
    runs non-root with a read-only filesystem, and accepts traffic only from the
    `agentteams-system` namespace. It must not be exposed through Higress.
-   The package ConfigMap is `devflow-worker-packages-v1-2-0`. Package object
+   The package ConfigMap is `devflow-worker-packages-v1-3-0`. Package object
    names are versioned so a controller cannot silently reuse a previously
    downloaded ZIP after a Skill bundle upgrade. Reusing the version with
    different bytes fails; publish a new version instead.
@@ -136,9 +136,21 @@ The live T4 check currently proves only the fail-closed half of this contract:
 Leader created and paused a T4 project, and a resume without an external
 approval was rejected with
 `approval_denied:approval must contain exactly evidence and signature`. The
-ledger remained bound to the project and risk tier with no used nonce, and only the public
-verification key was present in the Pods. A human-signed approval and the
-subsequent approved resume have not yet been executed and must not be claimed.
+ledger remained bound to the project and risk tier with no used nonce, and only
+the public verification key was present in the Pods. Before the signed half is
+run, the hardened policy must be deployed and a fresh project prepared; the old
+target-only confirmation is intentionally obsolete. A human-signed approval
+and subsequent approved resume have not yet been executed and must not be
+claimed.
+
+Approval policy schema 1.1 binds the signature to a fixed audience, a unique
+64-hex deployment domain, the installed Ed25519 public-key digest, and a
+Guard-generated random project incarnation held in the root-only ledger. These
+facts, action, project/task identity, risk tier, and canonical target digest
+form `approvalRequestDigest`; the human confirmation names that complete
+digest. A signature from another deployment, policy key, or reincarnated
+project therefore fails before state transition even if project ID and nonce
+are copied.
 
 The current guard implementation and focused tests additionally bind three
 different authorities instead of trusting caller-supplied fields: project risk
@@ -235,7 +247,8 @@ that post-rebuild operation consistently across all Pods:
 ```bash
 python scripts/reconcile_teamharness_openclaw.py \
   --agentteams-repo /opt/AgentTeams-src \
-  --approval-public-key /operator-policy/approval-ed25519.pub
+  --approval-public-key /operator-policy/approval-ed25519.pub \
+  --approval-domain <deployment-unique-64-lowercase-hex>
 ```
 
 It requires the AgentTeams checkout at commit
@@ -245,8 +258,9 @@ copying anything, it requires exactly one active, Running and Ready OpenClaw
 Pod for each of the Leader and five Worker roles. It preflights all six
 workspaces, stages only tracked upstream plugin files plus the two DevFlow
 overlay files, verifies every staged hash, installs Leader as `leader` and all
-others as `worker`, passes the public key only to Leader installation, and
-requires the adapter's final verification in every Pod. The Ed25519 private
+others as `worker`, passes the public key and public deployment domain only to
+Leader installation, and requires the adapter's final verification in every
+Pod. The Ed25519 private
 key must remain with the external human approver and must never be copied to
 the repository, package, host staging tree, or Pod. Any missing, duplicate,
 terminating replacement without a Ready successor,
@@ -286,10 +300,10 @@ AgentTeams MinIO service, and `/usr/local/bin/mc.bin` must match the recorded
 release version and SHA-256. Every helper invocation creates a private `0700`
 configuration directory, initializes and reads back only the `agentteams`
 alias, and never consults the worker's writable `$HOME/.mc` configuration.
-Before contacting Kubernetes it validates all six `dist/*-v1.2.0.zip` files,
+Before contacting Kubernetes it validates all six `dist/*-v1.3.0.zip` files,
 their sidecars, canonical ZIP and internal manifests, exact per-file hashes,
 the current release source reconstruction, and six version-pinned outer ZIP
-hashes. Changing source while retaining version `1.2.0` therefore fails; a
+hashes. Changing source while retaining version `1.3.0` therefore fails; a
 different release requires a version and pinned-digest update.
 Its JSON result exposes only the fixed known-Skill sets, counts, and
 `needsApply`; it does not return Skill contents, MinIO configuration, or
@@ -341,7 +355,7 @@ release overlay is:
   `scripts/reconcile_teamharness_openclaw.py`;
 - `agentteams/worker-package/`;
 - all seven directories under `skills/` named by the fixed policy; and
-- all six `dist/devflow-*-v1.2.0.zip` files and their `.sha256` sidecars.
+- all six `dist/devflow-*-v1.3.0.zip` files and their `.sha256` sidecars.
 
 Keep their repository-relative layout. Package loading reconstructs the
 release from the source root derived from the package reconciler's own path;

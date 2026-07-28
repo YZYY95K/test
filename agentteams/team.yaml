@@ -15,7 +15,7 @@ spec:
     name: devflow-lead
     model: glm-5.2
     runtime: openclaw
-    package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-lead-v1.2.0.zip
+    package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-lead-v1.3.0.zip
     heartbeat:
       every: 10m
     workerIdleTimeout: 2h
@@ -35,7 +35,10 @@ spec:
       Send assignments as HandoffEnvelope v1 in the Team Room and store large
       artifacts under the canonical shared task path. A natural-language
       intention is not an assignment. Reject stale or digest-mismatched
-      envelopes. On test/review failure, route exact evidence back to Coder.
+      envelopes. On test failure, route exact sanitized evidence through
+      TeamLeader to Coder. On review failure, require a typed
+      Reviewer-to-TeamLeader decision and fail closed for human re-planning
+      until a candidate-bound remediation contract exists.
       TeamHarness is the canonical control plane: create the project and DAG,
       create or reuse the task room and invite the assignee before delegation,
       then delegate and send one complete mention event. Wait for a bounded ACK;
@@ -56,7 +59,7 @@ spec:
     - name: devflow-triage
       model: glm-5.2
       runtime: openclaw
-      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-triage-v1.2.0.zip
+      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-triage-v1.3.0.zip
       identity: |
         - Name: DevFlow Triage
         - Specialization: issue classification, priority, and deduplication
@@ -70,7 +73,7 @@ spec:
     - name: devflow-locator
       model: glm-5.2
       runtime: openclaw
-      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-locator-v1.2.0.zip
+      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-locator-v1.3.0.zip
       mcpServers:
         - name: devflow-github-readonly
           url: http://higress-gateway.agentteams-system.svc.cluster.local:80/mcp-servers/devflow-github-readonly/mcp
@@ -94,7 +97,7 @@ spec:
     - name: devflow-coder
       model: glm-5.2
       runtime: openclaw
-      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-coder-v1.2.0.zip
+      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-coder-v1.3.0.zip
       identity: |
         - Name: DevFlow Coder
         - Specialization: minimal repository-aware patches
@@ -108,7 +111,7 @@ spec:
     - name: devflow-tester
       model: glm-5.2
       runtime: openclaw
-      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-tester-v1.2.0.zip
+      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-tester-v1.3.0.zip
       identity: |
         - Name: DevFlow Tester
         - Specialization: isolated CI, baseline comparison, and regressions
@@ -121,7 +124,7 @@ spec:
     - name: devflow-reviewer
       model: glm-5.2
       runtime: openclaw
-      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-reviewer-v1.2.0.zip
+      package: http://devflow-package.agentteams-system.svc.cluster.local:8080/devflow-reviewer-v1.3.0.zip
       identity: |
         - Name: DevFlow Reviewer
         - Specialization: correctness, security, PRs, and approval policy

@@ -13,7 +13,7 @@ an explicit grant. Every unspecified combination is denied.
 | TriageAgent | `issue-classifier` | new or materially changed issue | `ClassifiedIssue` for TeamLeader | none | no repository read/write, patching, or tier above T5 |
 | LocatorAgent | `code-root-cause`, `github-evidence` | classified task with fixed revision/scope | `LocatedContext` or digest-bound repository evidence | `github:get_file_contents` only | no source modification, code execution, test execution, or scope expansion |
 | CoderAgent | `patch-generator` | located context or retry evidence | `PatchCandidate` for TesterAgent | none | no canonical file write, test execution, PR operation, review, or approval |
-| TesterAgent | `test-runner` | patch candidate | `TestEvidence` for ReviewerAgent, or bounded retry for CoderAgent | isolated CI/CD test tools only | no agent-supplied shell command, canonical checkout mutation, review, or merge |
+| TesterAgent | `test-runner` | patch candidate | `TestEvidence` for ReviewerAgent, or bounded failure evidence mediated by TeamLeader | isolated CI/CD test tools only | no agent-supplied shell command, canonical checkout mutation, direct Coder routing, review, or merge |
 | ReviewerAgent | `pr-reviewer`, `experience-distiller` | passing test evidence | review decision, PR-ready record, or human-gate escalation | no GitHub write in the current AgentTeams deployment | no merge, deployment, rollback, test execution, or self-authored approval |
 | Human reviewer | approval authority, not an Agent | T4/T5 evidence bundle | digest-bound approval or rejection | no ambient MCP grant | approval cannot be inferred from chat text or supplied by an Agent |
 
@@ -54,10 +54,48 @@ SHA-256 digest. Before an Agent executes, the runtime verifies:
 4. the payload digest is intact;
 5. the artifact is inline and typed at the receiving stage.
 
-A failed review returns a retry envelope to CoderAgent. Failed tests do the
-same. A T4/T5 review emits a blocked envelope for `HumanReviewer`; it is not
-silently converted into success. Duplicate delivery is safe because the
-envelope carries a deterministic idempotency key.
+In the portable Python runtime, failed tests return through TeamLeader
+mediation. The result is sanitized first; TeamLeader verifies one digest over
+the complete sanitized result and forwards only bounded
+`TestFailureEvidence`, never the raw result or a raw-result digest. Local tests
+exercise the automatic Coder-to-Tester-to-Leader-to-Coder loop. A failed
+review is deliberately different: Reviewer addresses a typed decision to
+TeamLeader, which validates it and fails closed for human re-planning until a
+formal retry contract binds review feedback to the exact candidate. No bare
+review dictionary is executable.
+
+Generic execution failures carry a canonical route claim
+`(handoff_sha256, execution_attempt)`. One TeamLeader instance claims that
+route before its first asynchronous yield, audits every distinct failure
+event, and emits at most one retry route. Coder failures instead stay in the
+generation domain. Every canonical Coder route leases exactly one
+`model_call_attempt`; TeamLeader issues ordinals 1 through 3 sequentially and
+never a fourth. Candidate-validation failures and semantic test retries consume
+the same issue-global budget, so their worst case is three model calls rather
+than two stacked three-attempt loops. `PatchCandidate` 1.2 echoes the ordinal
+and binds it to the exact retained source route.
+
+These claims remain process-local memory. The local scheduler asks TeamLeader
+to claim an exact route before dispatch, so duplicate delivery cannot repeat a
+model-call lease even if the Worker instance changes inside that Leader
+runtime; BaseAgent also caches direct successful redelivery. A deterministic
+idempotency key is correlation material, not by itself a durable exactly-once
+guarantee. The repository tests do not claim state survival across process
+restart, multiple TeamLeader replicas, or broker redelivery after Leader state
+loss.
+
+A T4/T5 review emits a blocked envelope for `HumanReviewer`; it is not
+silently converted into success. Repository code and tests cover the gate and
+approval validation. Live evidence currently covers pause and rejection of an
+unapproved resume, but not a human signature followed by successful resume.
+
+Coder accepts `patch-generator` envelopes only from TeamLeader, requires exact
+initial/retry input fields, and binds a retry to the previous candidate. Before
+calling the model it redacts supported credential shapes from issue and located
+context. Before emitting a candidate it enforces repository-relative paths,
+the Locator-derived file allowlist, change-type/diff-header consistency,
+Python syntax for Python outputs, dangerous-pattern denial, and a whole-artifact
+secret scan.
 
 The guarded TeamHarness path independently binds collaboration state. Project
 risk is read from the root-owned ledger, source is read from persistent project
@@ -149,16 +187,19 @@ HandoffEnvelope
   -> DevFlow-owned server repeats authorization
 ```
 
-The policy wrapper authorizes before the transport is reachable. It rejects
+The portable MCP policy wrapper, as exercised by repository tests, authorizes
+before the transport is reachable. It rejects
 unknown tools, wrong Agent/Skill pairs, protected-branch writes, repository
 path escapes, secret-shaped arguments, malformed patches, and dangerous calls
-without matching approval evidence. Human approvals are signed outside the
-Agent boundary with a server-held HMAC key and bind the action, canonical
+without matching approval evidence. Its local approval authority signs outside
+the Agent boundary with a server-held HMAC key and binds the action, canonical
 target, arguments digest, approver, and timestamp. Invalid, expired, modified,
-or unverifiable evidence fails closed. Calls to a DevFlow-owned MCP server
-also carry an HMAC-signed context, so a local caller cannot forge its Agent or
-Skill identity; the server rejects unsigned or modified context. Audit entries contain identity, trace
-and argument digests, but never raw credentials or raw arguments.
+or unverifiable evidence fails closed in those tests; this is not evidence that
+the live AgentTeams T4 approval/resume has occurred. Calls to a DevFlow-owned
+MCP server also carry an HMAC-signed context, so a local caller cannot forge
+its Agent or Skill identity; the server rejects unsigned or modified context.
+Audit entries contain identity, trace and argument digests, but never raw
+credentials or raw arguments.
 
 The hardened AgentTeams success driver does not pass sensitive MCP inputs on a
 child command line. TeamHarness uses direct pinned stdio JSON-RPC and Locator
@@ -169,11 +210,13 @@ the host deadline, bounds captured diagnostics, and performs cleanup. The
 operator-driven T2 run above completed through this path; it is not a claim of
 an autonomous or general six-stage success.
 
-For `cicd:run_tests`, the server owns the test command as an argument vector.
-It accepts a typed Patch, copies the repository to a disposable directory,
-checks stale original content, applies create/modify/delete operations there,
-and runs with `shell=False` and a bounded timeout. The canonical repository is
-never mutated by the test service.
+For `cicd:run_tests`, the repository implementation makes the server own the
+test command as an argument vector. Local integration tests show that it
+accepts a typed Patch, copies the repository to a disposable directory, checks
+stale original content, applies create/modify/delete operations there, and
+runs with `shell=False` and a bounded timeout. Those tests verify that the
+canonical repository is not mutated; a live AgentTeams CI/CD run has not yet
+been retained as server evidence.
 
 ## Sources of truth and drift prevention
 

@@ -1,6 +1,6 @@
 schema_version: "1.0"
 name: pr-reviewer
-version: "2.0.0"
+version: "2.1.0"
 owner: ReviewerAgent
 intent: Independently gate a tested candidate and create a policy-compliant PR.
 invoke_when:
@@ -45,7 +45,7 @@ handoffs:
     artifact_type: ReviewDecision
     event: review.approved
   - "on": failure
-    consumer: CoderAgent
+    consumer: TeamLeader
     artifact_type: ReviewDecision
     event: review.rejected
   - "on": blocked

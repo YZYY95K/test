@@ -26,8 +26,9 @@ Worker 只允许自身任务的 `ack_task` / `submit_task`，不直接调用 `ar
 accept、项目 completed 与 requester report 已发送。不得展示项目 ID 或房间标识。
 
 明确说明这是真实 Triage + Reviewer 两节点生命周期，不是六阶段软件修复。
-展示首次完成通知遇到 Matrix 启动故障后自动重试成功，说明失败由状态机和
-幂等语义处理，而不是靠重复生成结果。
+展示首次完成通知遇到 Matrix 启动故障后自动重试成功，说明该通知路径由状态机
+和 TeamHarness 幂等语义处理，而不是靠重复生成结果；不得把这一点外推为所有
+Agent 执行都具备持久 exactly-once。
 
 ## 2:45–3:45｜fresh T2 边界任务
 
@@ -63,11 +64,19 @@ Ready。屏幕同时
 屏幕角标始终标注“本地确定性演示”，不得把这段称为 AgentTeams Team Room
 执行结果。
 
+随后展示本地 Leader→Router→Worker 失败恢复聚焦测试：同一 canonical route
+即使并发收到不同 `failure_id`，也只产生一个 retry route 且两个结果均有审计；
+每个 canonical Coder route 只授权一次模型调用，验证失败与测试失败共享
+issue-global 1..3 预算且不产生第四次调用。Reviewer 拒绝经 TeamLeader 校验后
+fail-closed，不伪造 Coder 重试。画面必须同时标注“进程内 route claim；非跨
+重启/多副本 exactly-once”。
+
 ## 5:25–6:30｜MCP 与安全工程
 
-展示 Agent/Skill/MCP 精确授权、服务端预注册 CI 命令、摘要绑定批准、哈希
-审计、短期能力凭证及凭据不进入提示词。只显示脱敏身份、trace 和摘要；不在
-终端、截图、日志或视频中展示 token、密码、房间标识和服务器地址。
+展示 Agent/Skill/MCP 精确授权、本地实现的服务端预注册 CI 命令、摘要绑定批准、
+本地哈希审计、短期能力凭证及凭据不进入提示词。对 CI/CD、批准和审计明确标注
+“仓库代码/本地测试”；只显示脱敏身份、trace 和摘要，不在终端、截图、日志或
+视频中展示 token、密码、房间标识和服务器地址。
 
 把 TeamHarness 的“风险来自根权限账本、来源来自持久项目状态、Matrix 私有
 邀请与完整成员集合必须读回验证、taskId 与提交摘要绑定重试/冲突”标为代码与
@@ -84,8 +93,9 @@ content digest 可复核、receipt response digest 重算一致；同 capability
 
 展示三个固定 revision、24 项路由/边界基准的精确决策、安全率、p50/p95
 时延与 token。展示七个 Skill 的静态质量门；同时指出 GLM-5.2 成对行为评测
-只覆盖较早的六个 Skill，`github-evidence` 不沿用该分数。覆盖率只使用最终
-分支当日重跑结果，不展示历史分支数字。
+只覆盖较早的六个 Skill，`github-evidence` 不沿用该分数。2026-07-28 候选
+工作树的覆盖率为 84.40%（846 passed、17 skipped，3,874/4,590）；只有演示版本未再变化且
+已绑定最终 commit 后复跑一致，才把它作为最终数字展示。
 
 ## 7:20–8:00｜结论与缺口
 

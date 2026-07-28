@@ -91,6 +91,7 @@ SOURCE_DOCUMENTS = frozenset(
         "docs/SKILL_ENGINEERING.md",
         "docs/evidence/AGENTTEAMS_BETA_COMPATIBILITY.md",
         "docs/evidence/AGENTTEAMS_LIVE_20260727.md",
+        "docs/evidence/LOCAL_RELEASE_CANDIDATE_20260728.md",
         "docs/evidence/REPOSITORY_BOUNDARY_GLM52.md",
         "docs/evidence/SKILL_BEHAVIOR_GLM52.md",
         "docs/evidence/repository-boundary-glm52-v2.json",
@@ -116,6 +117,7 @@ SOURCE_REQUIRED_EXACT = SOURCE_ROOT_FILES | SOURCE_DOCUMENTS | SOURCE_RUNTIME_RE
     {
         ".github/workflows/ci.yml",
         "examples/prelim_sample/README.md",
+        "examples/prelim_sample/actual_output.json",
         "examples/prelim_sample/expected_output.json",
         "examples/prelim_sample/sample_input.json",
     }
@@ -134,8 +136,8 @@ SOURCE_REQUIRED_PREFIXES = (
 
 OUTER_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("docs/submission/INTRO_500_CN.md", "01_作品简介_500字内.md", "text"),
-    ("outputs/DevFlow_GOAI_2026_初赛方案_20260727.pdf", "02_方案_DevFlow.pdf", "pdf"),
-    ("outputs/DevFlow_GOAI_2026_初赛方案_20260727.pptx", "02_方案_DevFlow.pptx", "pptx"),
+    ("outputs/DevFlow_GOAI_2026_初赛方案_20260728.pdf", "02_方案_DevFlow.pdf", "pdf"),
+    ("outputs/DevFlow_GOAI_2026_初赛方案_20260728.pptx", "02_方案_DevFlow.pptx", "pptx"),
     (
         "docs/submission/AGENT_IDENTITY_APPENDIX.md",
         "03_Agent_Identity附录.md",

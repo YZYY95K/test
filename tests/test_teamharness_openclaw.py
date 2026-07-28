@@ -11,6 +11,8 @@ import re
 import stat
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
 
@@ -26,6 +28,7 @@ from scripts.teamharness_openclaw import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+TEST_APPROVAL_DOMAIN = hashlib.sha256(b"devflow-test-approval-domain").hexdigest()
 
 AUDITED_PLUGIN_YAML = """apiVersion: hiclaw.agentteam/v1alpha1
 kind: AgentTeamPlugin
@@ -220,6 +223,7 @@ def _fake_plugin(root: Path) -> Path:
         plugin / "mcp/server.py",
         """
 import json
+import time
 from pathlib import Path
 TOOL_NAMES = ["health", "message", "roomflow", "filesync", "artifact", "projectflow", "taskflow"]
 def list_tools():
@@ -261,7 +265,11 @@ def handle_request(request):
         if action == "pause_project":
             project["status"] = "paused"
         elif action == "resume_project":
-            project["status"] = "active"
+            delay = payload.get("_fixtureResumeDelaySeconds", 0)
+            if delay:
+                time.sleep(float(delay))
+            if not payload.get("_fixtureKeepPaused"):
+                project["status"] = "active"
         elif action == "complete_project":
             project["status"] = "completed"
         projects[project_id] = project
@@ -325,6 +333,9 @@ def _install_fake(
     runtime: Path,
     *,
     replace: bool = False,
+    approval_domain: str = TEST_APPROVAL_DOMAIN,
+    approval_key_root: Path | None = None,
+    approval_state_root: Path | None = None,
 ) -> dict[str, Any]:
     runtime_name_match = re.search(r"(?m)^  runtimeName: ([^\n]+)$", runtime.read_text(encoding="utf-8"))
     assert runtime_name_match is not None
@@ -334,11 +345,14 @@ def _install_fake(
     )
     approval_args: dict[str, Any] = {}
     if role == "leader":
-        _private_key, public_key, openssl_path = _approval_key_fixture(plugin.parent)
+        key_root = approval_key_root or plugin.parent
+        state_root = approval_state_root or plugin.parent
+        _private_key, public_key, openssl_path = _approval_key_fixture(key_root)
         approval_args = {
             "approval_public_key": public_key,
-            "_test_policy_path": plugin.parent / "approval-policy/public.pem",
-            "_test_ledger_path": plugin.parent / "approval-state/ledger.json",
+            "approval_domain": approval_domain,
+            "_test_policy_path": state_root / "approval-policy/public.pem",
+            "_test_ledger_path": state_root / "approval-state/ledger.json",
             "_test_openssl_path": openssl_path,
         }
     return install(
@@ -393,6 +407,26 @@ def test_install_is_role_scoped_and_credential_free(tmp_path: Path) -> None:
         "teamName": "devflow-swe",
     }
     assert all(check.ok for check in _verify_fake(plugin, workspace, "worker"))
+
+
+@pytest.mark.parametrize("approval_domain", ["", "A" * 64, "0" * 63, "g" * 64])
+def test_leader_install_requires_strict_lowercase_approval_domain(
+    tmp_path: Path,
+    approval_domain: str,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "workspace"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader"))
+
+    with pytest.raises(ValueError, match="approval domain"):
+        _install_fake(
+            plugin,
+            workspace,
+            "leader",
+            runtime,
+            approval_domain=approval_domain,
+        )
 
 
 def test_install_rejects_runtime_name_to_pod_binding_mismatch(
@@ -669,15 +703,50 @@ def _signed_approval(
     issued_delta: int = -5,
     expires_delta: int = 300,
     evidence_updates: dict[str, Any] | None = None,
+    approval_key_root: Path | None = None,
 ) -> dict[str, Any]:
     action = str(arguments["action"])
     payload = cast(dict[str, Any], arguments["payload"])
-    now = dt.datetime.now(tz=dt.timezone.utc).replace(microsecond=0)
-    evidence: dict[str, Any] = {
+    manifest = json.loads(
+        (workspace / ".teamharness/install-manifest.json").read_text(encoding="utf-8")
+    )
+    policy = cast(dict[str, Any], manifest["approvalPolicy"])
+    ledger = json.loads(Path(policy["ledgerPath"]).read_text(encoding="utf-8"))
+    project_binding = cast(dict[str, Any], ledger["projects"][payload["projectId"]])
+    target_digest = _approval_target_digest(arguments)
+    approval_request: dict[str, Any] = {
+        "schema": "devflow.agentteams.projectflow.approval-request/v1",
+        "audience": policy["audience"],
+        "approvalDomain": policy["approvalDomain"],
+        "policyKeySha256": policy["policyKeySha256"],
+        "projectBindingDigest": project_binding["projectBindingDigest"],
         "action": action,
         "projectId": payload["projectId"],
         "riskTier": risk_tier,
-        "targetDigest": _approval_target_digest(arguments),
+        "targetDigest": target_digest,
+    }
+    if action == "accept_task_result":
+        approval_request["taskId"] = payload["taskId"]
+    request_digest = hashlib.sha256(
+        json.dumps(
+            approval_request,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    now = dt.datetime.now(tz=dt.timezone.utc).replace(microsecond=0)
+    evidence: dict[str, Any] = {
+        "schemaVersion": "1.1",
+        "audience": policy["audience"],
+        "approvalDomain": policy["approvalDomain"],
+        "policyKeySha256": policy["policyKeySha256"],
+        "projectBindingDigest": project_binding["projectBindingDigest"],
+        "approvalRequestDigest": request_digest,
+        "action": action,
+        "projectId": payload["projectId"],
+        "riskTier": risk_tier,
+        "targetDigest": target_digest,
         "approvedBy": "human-reviewer@example.test",
         "issuedAt": (now + dt.timedelta(seconds=issued_delta)).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
@@ -697,7 +766,9 @@ def _signed_approval(
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    private_key, _public_key, openssl_path = _approval_key_fixture(workspace.parent)
+    private_key, _public_key, openssl_path = _approval_key_fixture(
+        approval_key_root or workspace.parent
+    )
     evidence_path = private_key.parent / "evidence.json"
     signature_path = private_key.parent / "signature.bin"
     evidence_path.write_bytes(canonical)
@@ -1107,6 +1178,12 @@ def test_project_creation_requires_explicit_immutable_risk_tier(
     assert created["result"]["project"]["binding"]["riskTierAuthority"] == (
         "root-only-approval-ledger"
     )
+    binding = created["result"]["project"]["binding"]
+    assert binding["schema"] == "devflow.project-binding/v2"
+    assert binding["audience"] == adapter.APPROVAL_AUDIENCE
+    assert binding["approvalDomain"] == TEST_APPROVAL_DOMAIN
+    assert re.fullmatch(r"[0-9a-f]{64}", binding["policyKeySha256"])
+    assert re.fullmatch(r"[0-9a-f]{64}", binding["projectBindingDigest"])
     downgraded = _project_request("complete_project", "risk-bound", riskTier="T2")
     denied = _guard_call(workspace, "worker", downgraded)
     assert _guard_payload(denied)["error"] == (
@@ -1187,7 +1264,38 @@ def test_legacy_risk_only_binding_migrates_after_successful_project_readback(
     assert upgraded["projects"]["legacy-binding"]["source"] == "operator-driven"
     assert re.fullmatch(
         r"[0-9a-f]{64}",
-        upgraded["projects"]["legacy-binding"]["bindingDigest"],
+        upgraded["projects"]["legacy-binding"]["projectBindingDigest"],
+    )
+    assert re.fullmatch(
+        r"[0-9a-f]{64}",
+        upgraded["projects"]["legacy-binding"]["incarnation"],
+    )
+
+
+def test_root_ledger_project_incarnation_tamper_fails_closed(tmp_path: Path) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "workspace"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader"))
+    manifest = _install_fake(plugin, workspace, "leader", runtime)
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "incarnation-tamper", riskTier="T4"),
+    )
+    ledger_path = Path(manifest["approvalPolicy"]["ledgerPath"])
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ledger["projects"]["incarnation-tamper"]["incarnation"] = "f" * 64
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+
+    denied = _guard_call(
+        workspace,
+        "leader",
+        _project_request("resolve_project", "incarnation-tamper"),
+    )
+
+    assert _guard_payload(denied)["error"] == (
+        "approval_denied:project_binding_invalid"
     )
 
 
@@ -1226,6 +1334,13 @@ def test_t4_resume_requires_valid_exact_scope_approval_and_rejects_replay(
         "leader",
         _project_request("create_project", "critical-resume", riskTier="T4"),
     )
+    paused = _guard_call(
+        workspace,
+        "leader",
+        _project_request("pause_project", "critical-resume"),
+    )
+    assert paused["result"]["ok"] is True
+    assert paused["result"]["project"]["status"] == "paused"
     request = _project_request("resume_project", "critical-resume")
 
     missing = _guard_call(workspace, "leader", request)
@@ -1237,9 +1352,342 @@ def test_t4_resume_requires_valid_exact_scope_approval_and_rejects_replay(
     )
     accepted = _guard_call(workspace, "leader", request)
     assert accepted["result"]["ok"] is True
+    assert accepted["result"]["project"]["status"] == "active"
 
     replay = _guard_call(workspace, "leader", request)
     assert "nonce was already used" in _guard_payload(replay)["error"]
+
+    arguments["approval"] = _signed_approval(
+        workspace,
+        arguments,
+        risk_tier="T4",
+        nonce="second_resume_nonce_1234567890",
+    )
+    second_resume = _guard_call(workspace, "leader", request)
+    assert _guard_payload(second_resume)["error"] == (
+        "approval_denied:resume_requires_paused_project"
+    )
+
+    resolved = _guard_call(
+        workspace,
+        "leader",
+        _project_request("resolve_project", "critical-resume"),
+    )
+    assert resolved["result"]["ok"] is True
+    assert resolved["result"]["project"]["status"] == "active"
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("approvalDomain", "0" * 64),
+        ("policyKeySha256", "1" * 64),
+        ("projectBindingDigest", "2" * 64),
+    ],
+)
+def test_signed_approval_rejects_domain_key_and_project_binding_tamper(
+    tmp_path: Path,
+    field: str,
+    replacement: str,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "workspace"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader"))
+    _install_fake(plugin, workspace, "leader", runtime)
+    project_id = f"scope-{field.lower()}"
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", project_id, riskTier="T4"),
+    )
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("pause_project", project_id),
+    )
+    request = _project_request("resume_project", project_id)
+    arguments = request["params"]["arguments"]
+    arguments["approval"] = _signed_approval(
+        workspace,
+        arguments,
+        risk_tier="T4",
+        evidence_updates={field: replacement},
+    )
+
+    denied = _guard_call(workspace, "leader", request)
+
+    assert "scope mismatch" in _guard_payload(denied)["error"]
+
+
+def test_old_signed_approval_schema_is_rejected_before_transition(
+    tmp_path: Path,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "workspace"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader"))
+    _install_fake(plugin, workspace, "leader", runtime)
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "old-schema", riskTier="T4"),
+    )
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("pause_project", "old-schema"),
+    )
+    request = _project_request("resume_project", "old-schema")
+    arguments = request["params"]["arguments"]
+    arguments["approval"] = _signed_approval(
+        workspace,
+        arguments,
+        risk_tier="T4",
+        evidence_updates={"schemaVersion": "1.0"},
+    )
+
+    denied = _guard_call(workspace, "leader", request)
+
+    assert "scope mismatch" in _guard_payload(denied)["error"]
+    resolved = _guard_call(
+        workspace,
+        "leader",
+        _project_request("resolve_project", "old-schema"),
+    )
+    assert resolved["result"]["project"]["status"] == "paused"
+
+
+def test_same_key_project_nonce_cannot_replay_across_approval_domains(
+    tmp_path: Path,
+) -> None:
+    shared_key_root = tmp_path / "shared-operator-key"
+    deployment_a = tmp_path / "deployment-a"
+    deployment_b = tmp_path / "deployment-b"
+    plugin_a = _fake_plugin(deployment_a)
+    plugin_b = _fake_plugin(deployment_b)
+    workspace_a = deployment_a / "workspace"
+    workspace_b = deployment_b / "workspace"
+    runtime_a = deployment_a / "runtime.yaml"
+    runtime_b = deployment_b / "runtime.yaml"
+    _write(runtime_a, _runtime_text("leader", "leader-a"))
+    _write(runtime_b, _runtime_text("leader", "leader-b"))
+    manifest_a = _install_fake(
+        plugin_a,
+        workspace_a,
+        "leader",
+        runtime_a,
+        approval_domain="a" * 64,
+        approval_key_root=shared_key_root,
+    )
+    manifest_b = _install_fake(
+        plugin_b,
+        workspace_b,
+        "leader",
+        runtime_b,
+        approval_domain="b" * 64,
+        approval_key_root=shared_key_root,
+    )
+    assert manifest_a["approvalPolicy"]["policyKeySha256"] == (
+        manifest_b["approvalPolicy"]["policyKeySha256"]
+    )
+    project_id = "cross-domain-replay"
+    for workspace in (workspace_a, workspace_b):
+        _guard_call(
+            workspace,
+            "leader",
+            _project_request("create_project", project_id, riskTier="T4"),
+        )
+        _guard_call(
+            workspace,
+            "leader",
+            _project_request("pause_project", project_id),
+        )
+
+    request_a = _project_request("resume_project", project_id)
+    approval_a = _signed_approval(
+        workspace_a,
+        request_a["params"]["arguments"],
+        risk_tier="T4",
+        nonce="same_cross_domain_nonce_12345678",
+        approval_key_root=shared_key_root,
+    )
+    replay_request = _project_request("resume_project", project_id)
+    replay_request["params"]["arguments"]["approval"] = approval_a
+
+    denied = _guard_call(workspace_b, "leader", replay_request)
+
+    assert "scope mismatch" in _guard_payload(denied)["error"]
+    resolved_b = _guard_call(
+        workspace_b,
+        "leader",
+        _project_request("resolve_project", project_id),
+    )
+    assert resolved_b["result"]["project"]["status"] == "paused"
+
+
+def test_concurrent_t4_resumes_share_one_cross_process_transition_lock(
+    tmp_path: Path,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "workspace"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader"))
+    manifest = _install_fake(plugin, workspace, "leader", runtime)
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "concurrent-resume", riskTier="T4"),
+    )
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("pause_project", "concurrent-resume"),
+    )
+
+    first = _project_request(
+        "resume_project",
+        "concurrent-resume",
+        _fixtureResumeDelaySeconds=0.5,
+    )
+    first_arguments = first["params"]["arguments"]
+    first_arguments["approval"] = _signed_approval(
+        workspace,
+        first_arguments,
+        risk_tier="T4",
+        nonce="first_concurrent_nonce_123456789",
+    )
+    second = _project_request("resume_project", "concurrent-resume")
+    second_arguments = second["params"]["arguments"]
+    second_arguments["approval"] = _signed_approval(
+        workspace,
+        second_arguments,
+        risk_tier="T4",
+        nonce="second_concurrent_nonce_12345678",
+    )
+
+    ledger_path = Path(manifest["approvalPolicy"]["ledgerPath"])
+    lock_path = ledger_path.with_name(f".{ledger_path.name}.lock")
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_result = executor.submit(_guard_call, workspace, "leader", first)
+        for _ in range(200):
+            if lock_path.is_dir():
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("resume transition lock was not acquired")
+        concurrent = _guard_call(workspace, "leader", second)
+        accepted = first_result.result(timeout=10)
+
+    assert accepted["result"]["ok"] is True
+    assert accepted["result"]["project"]["status"] == "active"
+    assert _guard_payload(concurrent)["error"] == (
+        "approval_denied:approval ledger is busy"
+    )
+
+
+def test_stale_approval_ledger_lock_is_recovered_without_manual_deletion(
+    tmp_path: Path,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "workspace"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader"))
+    manifest = _install_fake(plugin, workspace, "leader", runtime)
+    ledger_path = Path(manifest["approvalPolicy"]["ledgerPath"])
+    lock_path = ledger_path.with_name(f".{ledger_path.name}.lock")
+    lock_path.mkdir(mode=0o700)
+    (lock_path / "owner.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": "devflow.approval-ledger-lock/v1",
+                "pid": 2_147_483_647,
+                "processIdentity": "0" * 64,
+                "nonce": "1" * 64,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    created = _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "stale-lock", riskTier="T4"),
+    )
+
+    assert created["result"]["ok"] is True
+    assert not lock_path.exists()
+
+
+def test_malformed_approval_ledger_lock_fails_closed_and_is_preserved(
+    tmp_path: Path,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "workspace"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader"))
+    manifest = _install_fake(plugin, workspace, "leader", runtime)
+    ledger_path = Path(manifest["approvalPolicy"]["ledgerPath"])
+    lock_path = ledger_path.with_name(f".{ledger_path.name}.lock")
+    lock_path.mkdir(mode=0o700)
+    (lock_path / "owner.json").write_text(
+        '{"schemaVersion":"untrusted"}',
+        encoding="utf-8",
+    )
+
+    denied = _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "malformed-lock", riskTier="T4"),
+    )
+
+    assert _guard_payload(denied)["error"] == (
+        "approval_denied:approval ledger is busy"
+    )
+    assert lock_path.is_dir()
+
+
+def test_t4_resume_fails_closed_without_active_state_readback(tmp_path: Path) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "workspace"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader"))
+    _install_fake(plugin, workspace, "leader", runtime)
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "stalled-resume", riskTier="T4"),
+    )
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("pause_project", "stalled-resume"),
+    )
+    request = _project_request(
+        "resume_project",
+        "stalled-resume",
+        _fixtureKeepPaused=True,
+    )
+    arguments = request["params"]["arguments"]
+    arguments["approval"] = _signed_approval(
+        workspace,
+        arguments,
+        risk_tier="T4",
+        nonce="stalled_resume_nonce_123456789",
+    )
+
+    denied = _guard_call(workspace, "leader", request)
+
+    assert _guard_payload(denied)["error"] == (
+        "approval_denied:resume_did_not_become_active"
+    )
+    resolved = _guard_call(
+        workspace,
+        "leader",
+        _project_request("resolve_project", "stalled-resume"),
+    )
+    assert resolved["result"]["project"]["status"] == "paused"
 
 
 def test_t5_accept_binds_task_target_and_rejects_forgery_and_expiry(
@@ -1375,6 +1823,40 @@ def test_approval_public_key_tampering_breaks_verify_and_runtime_gate(
         workspace,
         "leader",
         _project_request("create_project", "tampered-key", riskTier="T4"),
+    )
+    assert _guard_payload(denied)["error"] == "approval_denied:approval_policy_invalid"
+
+
+def test_old_approval_policy_schema_is_rejected_by_verify_and_guard(
+    tmp_path: Path,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "workspace"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader"))
+    _install_fake(plugin, workspace, "leader", runtime)
+    manifest_path = workspace / ".teamharness/install-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    policy = cast(dict[str, Any], manifest["approvalPolicy"])
+    policy["schemaVersion"] = "1.0"
+    attestation_path = Path(policy["policyAttestationPath"])
+    attestation_path.chmod(0o644)
+    attestation_path.write_text(
+        json.dumps(policy, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    manifest["approvalPolicy"] = policy
+    manifest["approvalPolicySha256"] = hashlib.sha256(
+        attestation_path.read_bytes()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    checks = _verify_fake(plugin, workspace, "leader")
+    assert not next(check for check in checks if check.name == "approval-policy").ok
+    denied = _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "old-policy", riskTier="T4"),
     )
     assert _guard_payload(denied)["error"] == "approval_denied:approval_policy_invalid"
 

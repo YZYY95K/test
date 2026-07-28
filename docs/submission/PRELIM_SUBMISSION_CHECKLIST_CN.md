@@ -7,17 +7,18 @@
 ## 必交材料
 
 - [x] 作品简介正文已写入 `INTRO_500_CN.md`。
-- [x] 本地按 .NET UTF-16 `String.Length`（包含空格与段落换行）检查为 489，
+- [x] 本地按 .NET UTF-16 `String.Length`（包含空格、段落换行与文件末尾换行）检查为 487，
   小于 500；仍需以
   报名表计数器为最终标准，标题不粘贴。
 - [x] 12 页最终候选方案已生成两种格式：
-  [PPT](../../outputs/DevFlow_GOAI_2026_初赛方案_20260727.pptx)（51,885 bytes，
-  SHA-256 `ffc838971097db2d6909c901a6684f7324daaca51e060a4bd7596ef2be321e6f`）与
-  [PDF](../../outputs/DevFlow_GOAI_2026_初赛方案_20260727.pdf)（1,242,343 bytes，
-  SHA-256 `c350edda5880b23ae93f2ff045a0833e492960f793b5df32f64aefac4378db07`）。
+  [PPT](../../outputs/DevFlow_GOAI_2026_初赛方案_20260728.pptx)（51,879 bytes，
+  SHA-256 `03aca4383523193e313d360388a3c45cfb6d9f1cebfeb2909d9d12922d1e7372`）与
+  [PDF](../../outputs/DevFlow_GOAI_2026_初赛方案_20260728.pdf)（1,240,820 bytes，
+  SHA-256 `683b2a471c50dddf7a67b0576566207728ed3a20aeb094e55ee7d862d2b8c6a6`）。
   初赛只需上传其中一种，除非平台允许且团队决定同时提交。
-- [x] PPT/PDF 已完成本地逐页核对：12 页均渲染为 1920×1080 检查，未发现
-  中文乱码、截断或重叠；凭据形态扫描零命中；PDF 未加密且无表单/JavaScript。
+- [x] PPT/PDF 已完成本地逐页核对：12 页均渲染为 1280×720 检查，模板忠实度
+  与画布溢出门通过，未发现中文乱码、截断或重叠；凭据形态扫描零命中；PDF
+  未加密且无表单/JavaScript。
 - [ ] 在最终 commit/tag 冻结后再次核对材料中的版本、测试数字和仓库链接；
   当前本地 QA 不等于与尚未生成的最终代码包完成一致性校验。
 - [ ] 报名表中的项目名、团队/联系人、公开仓库 URL 等参赛者字段由提交人确认。
@@ -56,8 +57,9 @@
 - [x] 三个固定 revision、24 项边界基准：`docs/BENCHMARK.md` 及哈希绑定结果。
 - [x] 真实 AgentTeams 两节点生命周期、机器人交接与越权拒绝：
   `docs/evidence/AGENTTEAMS_LIVE_20260727.md`。
-- [x] 六个 v1.2.0 角色专属包已确定性构建，并在集群内逐一核对长度和
+- [x] 2026-07-27 的六个 v1.2.0 角色专属包已确定性构建，并在集群内逐一核对长度和
   SHA-256；六个替换 Pod Ready。包交付与运行面收敛分别留证。
+- [x] 六个 v1.3.0 候选包已在本地确定性重建并通过源码重放、摘要、大小和清单校验；尚未部署，不能继承 v1.2.0 的集群证据。
 - [x] `final4.4` 已把固定七项 DevFlow Skill 策略收敛到控制器归档缓存、控制器
   持久 Skill 缓存、Worker 本地树和 MinIO；最新独立检查为 0 drift。Locator
   替换后仍恰有 `code-root-cause` 与 `github-evidence`，六个角色 Pod 为 6/6 Ready。
@@ -88,6 +90,12 @@
   首提、同结果幂等重试、不同结果冲突拒绝、冲突后读回与 Leader `effective`
   均通过；项目文件同步证明 2/2 对象，并分别对 `meta.json`、`plan.md` 获得
   `stat exists=true`。
+- [x] 仓库本地聚焦测试验证真实 Leader→Router→Worker 执行、结构化失败事件、
+  同一 canonical execution route 并发重复/冲突的双审计与单重试，以及
+  Coder 验证失败与测试失败共享的 issue-global 三次模型调用预算；
+  `CANDIDATE_INVALID` 不触发通用 execution retry，也不会生成第四次模型调用。
+- [ ] 将上述进程内 execution-route claim 接入持久协调存储并验证重启、多副本和
+  broker redelivery；完成前不得使用“分布式 exactly-once”。
 - [x] 对这一次 T2 保留窄口径：两个 `stat` 只证明远端对象存在，不证明远端
   字节摘要；一次成功不能外推整体任务成功率，也不是六阶段软件修复。
 - [x] 安全限制继续明示：同 UID 文件操作仍有 TOCTOU 风险，当前不是 OS sandbox；
@@ -110,13 +118,14 @@
 | 边界/路由任务 | 24，不是补丁解决任务 |
 | GLM 成对 Skill 评测 | 6 个早期 Skill，不含 `github-evidence` |
 | 真实 AgentTeams 项目 | 已完成 2 个依赖节点；另有旧 Locator `FAILED` 任务；最新一次 fresh operator-driven T2 边界任务完成并验证提交、重试、冲突、读回、Leader 验收及 2/2 文件同步；均不是六阶段修复，也不构成成功率统计 |
-| 角色 Skill 策略 | 6 个确定性包已按长度/SHA-256 验证；固定七项策略在四个运行面收敛，Locator 替换后仍为预期两项；未知/平台 Skill 不在完整边界内 |
+| 角色 Skill 策略 | v1.3.0 六包已通过本地确定性/源码重放校验；2026-07-27 的 v1.2.0 包另有长度/SHA-256 和四运行面现场实证；未知/平台 Skill 不在完整边界内 |
 | GitHub MCP | 固定范围只读正例及错路径、错身份、直连阻断负例；fresh T2 已完成，项目同步 2/2，`meta.json`/`plan.md` 分别确认存在，但未证明远端字节摘要 |
+| 结构化失败回路 | 仓库本地 Leader→Router→Worker 闭环测试已通过；Reviewer 拒绝经 Leader 校验后 fail-closed；不是 AgentTeams Team Room 现场证据，route claim 未持久化 |
 | T4 真人闭环 | 已验证暂停和无批准拒绝；真人签名批准及恢复未完成 |
 | OpenClaw 强边界 | `strongBoundaryEnforceable=false`，6 项 blocker 已记录 |
 | 方案文件 | 12 页 PPT/PDF 已完成本地 QA；未等同平台提交 |
 | 正式视频 | 未完成 |
-| 当前最终覆盖率 | 待最终分支重跑，不沿用旧 82.73% |
+| 当前候选工作树覆盖率 | 2026-07-28：846 passed、17 skipped、84.40%（3,874/4,590）；尚未绑定最终 commit，提交前需再次复跑 |
 
 ## 最终提交前 30 分钟
 

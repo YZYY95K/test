@@ -119,7 +119,10 @@ class ReviewerAgent(BaseAgent):
             }[decision]
             consumer = {
                 ReviewDecision.APPROVED: "TeamLeader",
-                ReviewDecision.CHANGES_REQUESTED: "CoderAgent",
+                # Reviewer never routes remediation directly. TeamLeader
+                # validates the decision and fails closed until feedback is
+                # bound to the exact candidate by a formal retry contract.
+                ReviewDecision.CHANGES_REQUESTED: "TeamLeader",
                 ReviewDecision.HUMAN_APPROVAL_REQUIRED: "HumanReviewer",
             }[decision]
             status = {

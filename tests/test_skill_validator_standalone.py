@@ -93,9 +93,126 @@ def _github_artifact(mode: str) -> dict[str, Any]:
     return artifact
 
 
+def _patch() -> dict[str, Any]:
+    return {
+        "branch_name": "devflow/issue-7",
+        "changes": [
+            {
+                "file_path": "calculator.py",
+                "change_type": "modify",
+                "original_content": "return a - b\n",
+                "new_content": "return a + b\n",
+                "diff": (
+                    "--- a/calculator.py\n+++ b/calculator.py\n-return a - b\n+return a + b\n"
+                ),
+            }
+        ],
+        "commit_message": "Fix addition",
+        "description": "Use addition in the add helper.",
+    }
+
+
+def _patch_candidate() -> dict[str, Any]:
+    patch = _patch()
+    located = _patch_generator_input()["located_context"]
+    boundary_body = {
+        "schema_version": "1.0",
+        "located_context_digest": _canonical_digest(located),
+        "allowed_files": ["calculator.py", "tests/test_calculator.py"],
+    }
+    return {
+        "schema_version": "1.2",
+        "issue_id": 7,
+        "tier": "T2",
+        "patch": patch,
+        "candidate_digest": _canonical_digest(patch),
+        "evidence_boundary": {
+            **boundary_body,
+            "scope_digest": _canonical_digest(boundary_body),
+        },
+        "model_call_attempt": 1,
+        "retry_attempt": 1,
+    }
+
+
+def _patch_generator_input() -> dict[str, Any]:
+    return {
+        "issue_id": 7,
+        "tier": "T2",
+        "model_call_attempt": 1,
+        "issue": {
+            "issue_number": 7,
+            "title": "Addition is wrong",
+            "body": "The helper subtracts.",
+            "labels": ["bug"],
+            "state": "open",
+            "author": "reporter",
+            "created_at": "2026-07-28T12:00:00+00:00",
+            "repo_owner": "example",
+            "repo_name": "calculator",
+        },
+        "located_context": {
+            "root_cause": {
+                "summary": "The helper subtracts instead of adding.",
+                "file": "calculator.py",
+                "start_line": 1,
+                "end_line": 1,
+                "confidence": 0.99,
+            },
+            "affected_files": [],
+            "context_payload": "return a - b",
+            "related_tests": ["tests/test_calculator.py"],
+            "impact_analysis": {
+                "affected_files": ["calculator.py"],
+                "affected_modules": [],
+                "risk_level": "low",
+                "breaking_changes": False,
+                "test_files_needed": ["tests/test_calculator.py"],
+            },
+        },
+    }
+
+
+def _test_evidence() -> dict[str, Any]:
+    return {
+        "issue_id": 7,
+        "candidate_digest": _patch_candidate()["candidate_digest"],
+        "test_result": {
+            "total": 1,
+            "passed": 1,
+            "failed": 0,
+            "errors": 0,
+            "skipped": 0,
+            "duration_ms": 1,
+            "results": [
+                {
+                    "name": "tests/test_calculator.py::test_add",
+                    "status": "passed",
+                    "duration_ms": 1,
+                    "error_message": None,
+                    "traceback": None,
+                }
+            ],
+            "baseline_comparison": {
+                "baseline_passed": 0,
+                "current_passed": 1,
+                "new_failures": [],
+                "fixed_tests": ["tests/test_calculator.py::test_add"],
+                "regression": False,
+            },
+        },
+        "test_result_redacted": False,
+        "failing_tests": [],
+    }
+
+
 def _artifact(skill: str, mode: str) -> dict[str, Any]:
     if skill == "github-evidence":
         return _github_artifact(mode)
+    if skill == "patch-generator":
+        return _patch_generator_input() if mode == "input" else _patch_candidate()
+    if skill == "test-runner":
+        return _patch_candidate() if mode == "input" else _test_evidence()
     contract = yaml.safe_load(
         (ROOT / "skills" / skill / "references" / "contract.yaml").read_text(encoding="utf-8")
     )
@@ -108,10 +225,14 @@ def _run_validator(
     artifact_path: Path,
     *,
     skills_root: Path = ROOT / "skills",
+    source_path: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     validator = skills_root / skill / "scripts" / "validate.py"
+    command = [sys.executable, "-S", str(validator), mode, str(artifact_path)]
+    if source_path is not None:
+        command.append(str(source_path))
     return subprocess.run(
-        [sys.executable, "-S", str(validator), mode, str(artifact_path)],
+        command,
         cwd=artifact_path.parent,
         env=_isolated_env(),
         text=True,
@@ -141,8 +262,20 @@ def test_validator_accepts_complete_artifact_without_site_packages(
 ) -> None:
     artifact_path = tmp_path / f"{skill}-{mode}.json"
     artifact_path.write_text(json.dumps(_artifact(skill, mode)), encoding="utf-8")
+    source_path: Path | None = None
+    if skill == "patch-generator" and mode == "output":
+        source_path = tmp_path / "patch-generator-output-source.json"
+        source_path.write_text(json.dumps(_patch_generator_input()), encoding="utf-8")
+    elif skill == "test-runner" and mode == "output":
+        source_path = tmp_path / "test-runner-output-source.json"
+        source_path.write_text(json.dumps(_patch_candidate()), encoding="utf-8")
 
-    completed = _run_validator(skill, mode, artifact_path)
+    completed = _run_validator(
+        skill,
+        mode,
+        artifact_path,
+        source_path=source_path,
+    )
 
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout) == {
@@ -169,6 +302,74 @@ def test_validator_remains_fail_closed_without_site_packages(
         "input schema is invalid" if skill == "github-evidence" else "missing required fields"
     )
     assert expected_error in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        (lambda value: value.pop("model_call_attempt"), "missing required fields"),
+        (
+            lambda value: value.update(model_call_attempt=4),
+            "three-call global budget",
+        ),
+        (
+            lambda value: value.update(
+                retry_attempt=2,
+                model_call_attempt=1,
+                revision_of="a" * 64,
+            ),
+            "cannot precede retry_attempt",
+        ),
+    ],
+)
+@pytest.mark.parametrize("skill", ("patch-generator", "test-runner"))
+def test_patch_candidate_model_call_contract_fails_closed_without_site_packages(
+    tmp_path: Path,
+    skill: str,
+    mutation: Any,
+    expected: str,
+) -> None:
+    candidate = _patch_candidate()
+    mutation(candidate)
+    artifact_path = tmp_path / f"{skill}-candidate-attempt-invalid.json"
+    artifact_path.write_text(json.dumps(candidate), encoding="utf-8")
+    source_path: Path | None = None
+    mode = "input"
+    if skill == "patch-generator":
+        mode = "output"
+        source_path = tmp_path / "patch-generator-attempt-source.json"
+        source_path.write_text(json.dumps(_patch_generator_input()), encoding="utf-8")
+
+    completed = _run_validator(
+        skill,
+        mode,
+        artifact_path,
+        source_path=source_path,
+    )
+
+    assert completed.returncode == 1
+    assert expected in completed.stderr
+
+
+def test_patch_generator_binds_model_call_ordinal_to_verified_source(
+    tmp_path: Path,
+) -> None:
+    candidate = _patch_candidate()
+    candidate["model_call_attempt"] = 2
+    artifact_path = tmp_path / "patch-generator-unbound-model-call.json"
+    artifact_path.write_text(json.dumps(candidate), encoding="utf-8")
+    source_path = tmp_path / "patch-generator-call-one-source.json"
+    source_path.write_text(json.dumps(_patch_generator_input()), encoding="utf-8")
+
+    completed = _run_validator(
+        "patch-generator",
+        "output",
+        artifact_path,
+        source_path=source_path,
+    )
+
+    assert completed.returncode == 1
+    assert "model_call_attempt does not match" in completed.stderr
 
 
 def test_worker_package_contains_each_skill_local_contract_reader(tmp_path: Path) -> None:
@@ -211,10 +412,18 @@ def test_packaged_validator_executes_from_its_role_archive_without_site_packages
         for skill in skills:
             artifact_path = tmp_path / f"packaged-{role}-{skill}-{mode}.json"
             artifact_path.write_text(json.dumps(_artifact(skill, mode)), encoding="utf-8")
+            source_path: Path | None = None
+            if skill == "patch-generator" and mode == "output":
+                source_path = tmp_path / f"packaged-{role}-{skill}-source.json"
+                source_path.write_text(json.dumps(_patch_generator_input()), encoding="utf-8")
+            elif skill == "test-runner" and mode == "output":
+                source_path = tmp_path / f"packaged-{role}-{skill}-source.json"
+                source_path.write_text(json.dumps(_patch_candidate()), encoding="utf-8")
             completed = _run_validator(
                 skill,
                 mode,
                 artifact_path,
                 skills_root=extracted / "skills",
+                source_path=source_path,
             )
             assert completed.returncode == 0, completed.stderr

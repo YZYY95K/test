@@ -298,12 +298,14 @@ async def run_demo(output_dir: Path | None = None) -> tuple[dict[str, Any], Path
             "located_context": located.model_dump(mode="json"),
         }
     )
+    candidate = CoderAgent.build_patch_candidate(
+        issue_id=issue.issue_number,
+        tier=classification.complexity_level,
+        patch=patch,
+        located=located,
+    )
     test_result = await tester.execute(
-        {
-            "issue_id": issue.issue_number,
-            "tier": classification.complexity_level.value,
-            "patch": patch.model_dump(mode="json"),
-        }
+        candidate.model_dump(mode="json", exclude_none=True)
     )
     review = await reviewer.execute(
         {

@@ -95,10 +95,10 @@ def test_each_skill_validator_accepts_contract_shape(tmp_path: Path) -> None:
     catalog = load_catalog(ROOT / "skills")
 
     for name, contract in catalog.items():
-        # github-evidence has a cryptographic Broker receipt schema and is
-        # exercised with valid/tampered receipts in its dedicated policy tests;
-        # a dictionary of placeholder strings must not bypass that validator.
-        if name == "github-evidence":
+        # These validators enforce nested semantic and cryptographic shapes and
+        # are exercised with valid/tampered runtime artifacts in dedicated tests;
+        # a dictionary of placeholder strings must not bypass them.
+        if name in {"github-evidence", "patch-generator", "test-runner"}:
             continue
         artifact = {field: "evidence" for field in contract.output.required_fields}
         path = tmp_path / f"{name}.json"
@@ -123,16 +123,10 @@ def test_skill_validator_rejects_missing_contract_fields(tmp_path: Path) -> None
     path.write_text("{}", encoding="utf-8")
     process = subprocess.run(
         [
-            sys.executable,
-            str(
-                ROOT
-                / "skills"
-                / "patch-generator"
-                / "scripts"
-                / "validate.py"
-            ),
-            "output",
-            str(path),
+                sys.executable,
+                str(ROOT / "skills" / "patch-generator" / "scripts" / "validate.py"),
+                "input",
+                str(path),
         ],
         capture_output=True,
         text=True,

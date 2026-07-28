@@ -39,6 +39,8 @@ PRODUCTION_ADAPTER = PRODUCTION_EXECUTION_ROOT / "teamharness_openclaw.py"
 PRODUCTION_PLUGIN_ROOT = PRODUCTION_EXECUTION_ROOT / "plugin"
 PRODUCTION_SERVER = PRODUCTION_PLUGIN_ROOT / "mcp" / "server.py"
 PRODUCTION_PYTHON = Path("/usr/bin/python3")
+APPROVAL_AUDIENCE = "devflow.agentteams.projectflow.approval/v1"
+APPROVAL_DOMAIN_RE = re.compile(r"[0-9a-f]{64}")
 RUNTIME_BINDING_FIELDS = {
     "schemaVersion",
     "teamName",
@@ -190,6 +192,7 @@ def _validate_ed25519_public_key(path: Path, openssl_path: Path) -> None:
 
 def _install_approval_policy(
     public_key: Path,
+    approval_domain: str,
     policy_path: Path,
     ledger_path: Path,
     openssl_path: Path,
@@ -197,6 +200,11 @@ def _install_approval_policy(
     adapter_sha256: str,
     server_sha256: str,
 ) -> dict[str, Any]:
+    if (
+        not isinstance(approval_domain, str)
+        or APPROVAL_DOMAIN_RE.fullmatch(approval_domain) is None
+    ):
+        raise ValueError("approval domain must be exactly 64 lowercase hex characters")
     _validate_ed25519_public_key(public_key, openssl_path)
     policy_path.parent.mkdir(parents=True, exist_ok=True)
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
@@ -218,14 +226,18 @@ def _install_approval_policy(
     if ledger_path == PRODUCTION_APPROVAL_LEDGER and hasattr(os, "chown"):
         os.chown(ledger_path, 0, 0)
     policy_attestation_path = policy_path.with_name("approval-policy.json")
+    policy_key_sha256 = _sha256(policy_path)
     policy = {
-        "schemaVersion": "1.0",
+        "schemaVersion": "1.1",
         "algorithm": "Ed25519",
+        "audience": APPROVAL_AUDIENCE,
+        "approvalDomain": approval_domain,
         "adapterSha256": adapter_sha256,
         "guardSha256": guard_sha256,
         "policyAttestationPath": str(policy_attestation_path),
         "publicKeyPath": str(policy_path),
-        "publicKeySha256": _sha256(policy_path),
+        "publicKeySha256": policy_key_sha256,
+        "policyKeySha256": policy_key_sha256,
         "serverSha256": server_sha256,
         "ledgerPath": str(ledger_path),
         "opensslPath": str(openssl_path),
@@ -696,7 +708,7 @@ def _collaboration_block(role: str) -> str:
         body = """- Start with `projectflow.create_project` (or `create_quick_project`) and record the complete plan with `plan_dag` or `plan_loop` before delegation.
 - Every project creation must include one explicit immutable `riskTier` from T1 through T5; never infer, omit, or downgrade it later.
 - T4/T5 `resume_project`, `accept_task_result`, and `complete_project` require exact-scope, unexpired externally signed Ed25519 approval evidence. `pause_project` never requires approval. Never invent approval evidence.
-- Approval is `{evidence, signature}` only. Evidence binds action, projectId, taskId when accepting, riskTier, targetDigest, approvedBy, issuedAt, expiresAt, and nonce; targetDigest is SHA-256 of canonical JSON for the projectflow request excluding approval, role, and the guard-forced workspaceDir.
+- Approval is `{evidence, signature}` only. Schema 1.1 evidence binds the fixed audience, deployment approvalDomain, policyKeySha256, guard-generated projectBindingDigest, full approvalRequestDigest, action, projectId, taskId when accepting, riskTier, targetDigest, approvedBy, issuedAt, expiresAt, and nonce. The operator confirmation must name approvalRequestDigest, not targetDigest alone.
 - Before `taskflow.delegate_task`, create or reuse one bounded task room with `roomflow.create_task_room` and invite/include the assignee in that room.
 - For repository evidence, delegate only to `devflow-locator` and set `spec` to canonical JSON with exactly `schema=devflow.github-assignment-request/v1`, `run_id`, positive `issue_id`, the same `task_id` as the task payload, `trace_id=<run_id>:<task_id>`, `idempotency_key=<run_id>:<task_id>:devflow-locator:github-evidence`, exact `{owner,repo}` repository, a 40-character lowercase commit SHA, and 1..32 sorted unique relative `paths`. Never supply a capability, token path, or issuer URL; the guard obtains a short-lived scope-bound capability and constructs the complete HandoffEnvelope.
 - Delegate one bounded task, then send exactly one complete Matrix assignment mention with `message.send`; wait for an ACK for a bounded interval and do not split the effective instruction across messages.
@@ -760,6 +772,7 @@ def install(
     *,
     runtime_binding: Path | None = None,
     approval_public_key: Path | None = None,
+    approval_domain: str | None = None,
     shared_dir: Path | None = None,
     replace: bool = False,
     _test_hash_policy: Mapping[str, str] | None = None,
@@ -821,11 +834,14 @@ def install(
     if role == "leader":
         if approval_public_key is None:
             raise ValueError("Leader installation requires --approval-public-key")
+        if approval_domain is None:
+            raise ValueError("Leader installation requires --approval-domain")
         policy_path = _test_policy_path or PRODUCTION_APPROVAL_PUBLIC_KEY
         ledger_path = _test_ledger_path or PRODUCTION_APPROVAL_LEDGER
         openssl_path = _test_openssl_path or PRODUCTION_OPENSSL
         approval_policy = _install_approval_policy(
             approval_public_key,
+            approval_domain,
             policy_path,
             ledger_path,
             openssl_path,
@@ -833,8 +849,8 @@ def install(
             str(execution_evidence.get("adapterSha256") or _sha256(Path(__file__).resolve())),
             str(execution_evidence.get("serverSha256") or source_hashes["mcp/server.py"]),
         )
-    elif approval_public_key is not None:
-        raise ValueError("approval public keys are installed only for the Leader")
+    elif approval_public_key is not None or approval_domain is not None:
+        raise ValueError("approval policy inputs are installed only for the Leader")
     manifest = _manifest(plugin_dir)
     shared_dir = shared_dir or _default_shared_dir(workspace)
     shared_dir.mkdir(parents=True, exist_ok=True)
@@ -1095,11 +1111,14 @@ def _verify_approval_policy(
         required = {
             "schemaVersion",
             "algorithm",
+            "audience",
+            "approvalDomain",
             "adapterSha256",
             "guardSha256",
             "policyAttestationPath",
             "publicKeyPath",
             "publicKeySha256",
+            "policyKeySha256",
             "serverSha256",
             "ledgerPath",
             "opensslPath",
@@ -1118,8 +1137,11 @@ def _verify_approval_policy(
             PRODUCTION_SERVER if production_policy else workspace / ".teamharness/mcp/server.py"
         )
         if (
-            policy.get("schemaVersion") != "1.0"
+            policy.get("schemaVersion") != "1.1"
             or policy.get("algorithm") != "Ed25519"
+            or policy.get("audience") != APPROVAL_AUDIENCE
+            or not isinstance(policy.get("approvalDomain"), str)
+            or APPROVAL_DOMAIN_RE.fullmatch(str(policy.get("approvalDomain"))) is None
             or policy.get("maxApprovalLifetimeSeconds") != 900
             or policy.get("guardSha256") != _sha256(expected_guard)
             or not isinstance(policy.get("adapterSha256"), str)
@@ -1145,6 +1167,7 @@ def _verify_approval_policy(
         if (
             not isinstance(expected_hash, str)
             or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+            or policy.get("policyKeySha256") != expected_hash
             or not public_key.is_file()
             or _sha256(public_key) != expected_hash
         ):
@@ -1328,6 +1351,7 @@ def _parser() -> argparse.ArgumentParser:
     install_parser.add_argument("--runtime-config", type=Path, required=True)
     install_parser.add_argument("--runtime-binding", type=Path, required=True)
     install_parser.add_argument("--approval-public-key", type=Path)
+    install_parser.add_argument("--approval-domain")
     install_parser.add_argument("--shared-dir", type=Path)
     install_parser.add_argument("--replace", action="store_true")
     verify_parser = subparsers.add_parser("verify")
@@ -1348,6 +1372,7 @@ def main() -> int:
             approval_public_key=(
                 args.approval_public_key.resolve() if args.approval_public_key else None
             ),
+            approval_domain=args.approval_domain,
             shared_dir=args.shared_dir.resolve() if args.shared_dir else None,
             replace=args.replace,
         )

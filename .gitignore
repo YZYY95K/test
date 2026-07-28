@@ -13,7 +13,10 @@ build/
 dist/
 htmlcov/
 .coverage
+coverage.json
 logs/
+tmp/
+.tmp/
 outputs/*.pptx.inspect.ndjson
 outputs/*/
 outputs/*.zip

@@ -272,7 +272,7 @@ def test_rejects_duplicate_and_symlink_zip_entries() -> None:
 
 def test_rejects_noncanonical_trailing_zip_bytes_with_new_sidecar(tmp_path: Path) -> None:
     directory = _release(tmp_path)
-    archive_path = directory / "devflow-coder-v1.2.0.zip"
+    archive_path = directory / f"devflow-coder-v{PACKAGE_VERSION}.zip"
     data = archive_path.read_bytes() + b"trailing-data"
     archive_path.write_bytes(data)
     digest = hashlib.sha256(data).hexdigest()

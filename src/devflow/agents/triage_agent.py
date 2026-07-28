@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from devflow.agents.base import AgentIdentity, BaseAgent
+from devflow.exceptions import AgentError
 from devflow.models.issue import (
     ComplexityLevel,
     IssueCategory,
@@ -58,6 +59,7 @@ class TriageAgent(BaseAgent):
         "issue.updated",
     )
     _OWNED_SKILLS = ("issue-classifier",)
+    _HANDOFF_PRODUCERS = {"issue-classifier": frozenset({"TeamLeader"})}
     _FORBIDDEN_ACTIONS = {
         "modify_issue_body": "Cannot modify issue body or title",
         "assign_above_t5": "Cannot assign complexity higher than T5",
@@ -108,8 +110,29 @@ class TriageAgent(BaseAgent):
         Returns:
             The :class:`IssueClassification` produced for the issue.
         """
-        self._validate_output(input_data, IssueData)
-        issue: IssueData = input_data
+        if isinstance(input_data, IssueData):
+            issue = input_data
+        elif isinstance(input_data, dict):
+            issue_raw = input_data.get("issue")
+            issue_id_raw = input_data.get("issue_id")
+            if issue_raw is None or issue_id_raw is None or set(input_data) != {
+                "issue_id",
+                "issue",
+            }:
+                raise AgentError(
+                    "TriageAgent routed input requires exact issue_id and issue fields."
+                )
+            try:
+                if isinstance(issue_id_raw, bool):
+                    raise TypeError("issue_id must be an integer")
+                issue_id = int(issue_id_raw)
+                issue = IssueData.model_validate(issue_raw)
+            except (TypeError, ValueError) as exc:
+                raise AgentError(f"Invalid routed TriageAgent input: {exc}") from exc
+            if issue.issue_number != issue_id:
+                raise AgentError("Triage issue_id does not match the issue artifact.")
+        else:
+            raise AgentError("TriageAgent expects IssueData or a routed issue mapping.")
 
         async with self._trace_span(
             "issue-classifier", issue_id=issue.issue_number

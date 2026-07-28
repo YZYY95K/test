@@ -119,6 +119,25 @@ def test_package_server_team_urls_and_configmap_projection_are_one_contract() ->
     }
 
 
+def test_ci_uploads_all_versioned_role_packages_and_digest_sidecars() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["verify"]["steps"]
+    upload = next(
+        step for step in steps if step.get("uses") == "actions/upload-artifact@v4"
+    )
+
+    assert upload["with"]["name"].startswith(
+        f"devflow-role-packages-v{PACKAGE_VERSION}-python-"
+    )
+    assert set(upload["with"]["path"].splitlines()) == {
+        f"dist/devflow-*-v{PACKAGE_VERSION}.zip",
+        f"dist/devflow-*-v{PACKAGE_VERSION}.zip.sha256",
+    }
+    assert upload["with"]["if-no-files-found"] == "error"
+
+
 def test_all_declared_skills_are_distributable() -> None:
     configured = yaml.safe_load((ROOT / "config" / "skills.yaml").read_text(encoding="utf-8"))
     configured_names = {skill["name"] for skill in configured["skills"]}

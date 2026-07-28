@@ -71,7 +71,8 @@ agents:
       - "issue.created"        # kick off decomposition
       - "agent.completed"      # advance state machine
       - "agent.failed"         # trigger re-plan or re-assignment
-      - "review.rejected"      # route back to CoderAgent
+      - "coder.patch_ready"    # bind an emitted candidate to its Coder route
+      - "review.rejected"      # validate and fail closed unless revision-bound
       - "test.failed"          # route back to CoderAgent with context
       - "approval.required"    # pause pipeline pending human input
     # Routing hints for the scheduler: which agents this leader dispatches to.
@@ -181,11 +182,11 @@ agents:
       - "Cannot push directly to the default branch"
       - "Cannot run tests — that is TesterAgent's responsibility"
       - "Cannot approve its own patch"
-      - "Maximum 3 patch-generation attempts per sub-task before escalation"
+      - "One model call per canonical route; TeamLeader caps each issue at 3 calls"
     watches:
       - "locator.completed"
-      - "review.rejected"   # regenerate with reviewer feedback
-      - "test.failed"       # regenerate with failing test output
+      # Tester failures are verified and re-routed by TeamLeader; Coder never
+      # consumes the original TestEvidence event directly.
     depends_on_skills:
       - "patch-generator"
 
@@ -222,23 +223,26 @@ agents:
       - "test-runner"
 
   # ===========================================================================
-  # 6. ReviewerAgent — Review, PR & Security Gate
+  # 6. ReviewerAgent — Review, optional PR & Security Gate
   # ===========================================================================
-  # Final autonomous gate. Creates the pull request, runs automated code
-  # review and security scanning, and applies the approval policy from
-  # security.yaml. For T4/T5 it must block pending human approval.
+  # Final autonomous gate. Runs automated code review and security scanning,
+  # and applies the approval policy from security.yaml. The portable profile
+  # may create a pull request only when an explicit GitHub write grant is
+  # installed. The current AgentTeams deployment intentionally installs no
+  # such Reviewer grant. For T4/T5 it must block pending human approval.
   # ===========================================================================
   - name: "ReviewerAgent"
     identity:
       role: "Reviewer Agent"
       description: >-
-        Creates pull requests, performs automated code review and security
-        scanning, and drives the approval workflow per the security policy.
+        Performs automated code review and security scanning, records PR-ready
+        evidence, and drives the approval workflow per the security policy.
+        PR creation is optional and requires an explicit deployment grant.
       model: "glm-5.2"
       temperature: 0.3
       system_prompt_ref: "prompts/reviewer.md"
     capabilities:
-      - pr_creation          # open PR via GitHub MCP
+      - pr_creation          # portable profile only; absent from AgentTeams deployment
       - code_review          # static analysis + style + correctness
       - security_scan        # dependency & secret scanning
       - approval_workflow    # enforce T1-T3 auto / T4-T5 human gate
@@ -271,6 +275,7 @@ agents:
 #                    -> ReviewerAgent (pr-reviewer)
 #                       -> experience-distiller (post-merge, async)
 #
-# Reversal edges: review.rejected/test.failed -> CoderAgent;
-#                 human.approved -> ReviewerAgent.
+# Reversal edge: verified test.failed -> TeamLeader -> CoderAgent.
+# review.rejected fails closed for a human re-plan until a candidate-bound
+# review-remediation contract exists; human.approved -> ReviewerAgent.
 # =============================================================================

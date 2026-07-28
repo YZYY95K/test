@@ -30,11 +30,13 @@ def test_application_and_worker_release_versions_are_aligned() -> None:
             encoding="utf-8"
         )
     )
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
-    assert project_version == "1.2.0"
+    assert project_version == "1.3.0"
     assert __version__ == project_version
     assert observability_match.group(1) == project_version
     assert worker["version"] == project_version
+    assert f"## {project_version} - " in changelog
 
 
 def test_distribution_contains_the_complete_apache_license() -> None:

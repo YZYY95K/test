@@ -6,11 +6,13 @@ from __future__ import annotations
 import base64
 import binascii
 import datetime as dt
+import errno
 import hashlib
 import http.client
 import json
 import os
 import re
+import secrets
 import stat
 import subprocess
 import sys
@@ -107,6 +109,8 @@ RUNTIME_BINDING_FIELDS = {
 }
 PINNED_UPSTREAM_SERVER_SHA256 = "cb9971baae3545f440821ecf1fd18c76078962a1fe1591141cc88026bf5b684f"
 APPROVAL_ACTIONS = frozenset({"resume_project", "accept_task_result", "complete_project"})
+APPROVAL_AUDIENCE = "devflow.agentteams.projectflow.approval/v1"
+APPROVAL_REQUEST_SCHEMA = "devflow.agentteams.projectflow.approval-request/v1"
 RISK_TIERS = frozenset({"T1", "T2", "T3", "T4", "T5"})
 HIGH_RISK_TIERS = frozenset({"T4", "T5"})
 SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -128,6 +132,7 @@ CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f]")
 NONCE_RE = re.compile(r"[A-Za-z0-9_-]{22,128}")
 APPROVER_RE = re.compile(r"[A-Za-z0-9@._:/+\-]{3,128}")
 RFC3339_UTC_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 ROLES = frozenset({"leader", "worker", "remote-member", "manager"})
 
 ROLE_TOOLS = {
@@ -200,10 +205,29 @@ FILESYNC_MAX_LIST_ENTRIES = 10_000
 FILESYNC_MAX_LIST_ENTRY_BYTES = 2_048
 FILESYNC_MAX_LIST_BYTES = 1_048_576
 FILESYNC_HASH_CHUNK_BYTES = 1_048_576
-LEGACY_PROJECT_BINDING_FIELDS = frozenset({"riskTier", "createdTargetDigest"})
-PROJECT_BINDING_FIELDS = frozenset(
+RISK_ONLY_PROJECT_BINDING_FIELDS = frozenset({"riskTier", "createdTargetDigest"})
+LEGACY_PROJECT_BINDING_FIELDS = frozenset(
     {"riskTier", "createdTargetDigest", "source", "bindingDigest"}
 )
+PROJECT_BINDING_FIELDS = frozenset(
+    {
+        "riskTier",
+        "createdTargetDigest",
+        "source",
+        "incarnation",
+        "audience",
+        "approvalDomain",
+        "policyKeySha256",
+        "projectBindingDigest",
+    }
+)
+LEDGER_LOCK_OWNER_SCHEMA = "devflow.approval-ledger-lock/v1"
+LEDGER_LOCK_OWNER_FILE = "owner.json"
+LEDGER_LOCK_OWNER_FIELDS = frozenset(
+    {"schemaVersion", "pid", "processIdentity", "nonce"}
+)
+LEDGER_LOCK_NONCE_RE = re.compile(r"[0-9a-f]{64}")
+LEDGER_LOCK_MAX_OWNER_BYTES = 4_096
 
 
 def _sha256(path: Path) -> str:
@@ -341,11 +365,14 @@ def _approval_policy(manifest: dict[str, Any]) -> dict[str, Any] | None:
     required = {
         "schemaVersion",
         "algorithm",
+        "audience",
+        "approvalDomain",
         "adapterSha256",
         "guardSha256",
         "policyAttestationPath",
         "publicKeyPath",
         "publicKeySha256",
+        "policyKeySha256",
         "serverSha256",
         "ledgerPath",
         "opensslPath",
@@ -355,8 +382,11 @@ def _approval_policy(manifest: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(policy, dict) or set(policy) != required:
         return None
     if (
-        policy.get("schemaVersion") != "1.0"
+        policy.get("schemaVersion") != "1.1"
         or policy.get("algorithm") != "Ed25519"
+        or policy.get("audience") != APPROVAL_AUDIENCE
+        or not isinstance(policy.get("approvalDomain"), str)
+        or DIGEST_RE.fullmatch(str(policy.get("approvalDomain"))) is None
         or policy.get("maxApprovalLifetimeSeconds") != 900
         or policy.get("guardSha256") != _sha256(Path(__file__).resolve())
         or policy.get("serverSha256")
@@ -384,10 +414,12 @@ def _approval_policy(manifest: dict[str, Any]) -> dict[str, Any] | None:
     ledger = Path(str(policy.get("ledgerPath") or ""))
     openssl_path = Path(str(policy.get("opensslPath") or ""))
     expected_hash = policy.get("publicKeySha256")
+    policy_key_hash = policy.get("policyKeySha256")
     try:
         if (
             not isinstance(expected_hash, str)
-            or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+            or DIGEST_RE.fullmatch(expected_hash) is None
+            or policy_key_hash != expected_hash
             or not public_key.is_file()
             or _sha256(public_key) != expected_hash
             or not policy_attestation.is_file()
@@ -1134,16 +1166,174 @@ def _write_ledger(path: Path, ledger: dict[str, Any]) -> None:
             temporary.unlink()
 
 
+def _process_identity(pid: int) -> tuple[bool, str | None]:
+    """Return ``(alive, identity)`` without treating an unknown live PID as stale."""
+
+    if pid < 1:
+        return False, None
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if not process:
+                error = ctypes.get_last_error()
+                return (True, None) if error == 5 else (False, None)
+            try:
+                created = wintypes.FILETIME()
+                exited = wintypes.FILETIME()
+                kernel = wintypes.FILETIME()
+                user = wintypes.FILETIME()
+                if not ctypes.windll.kernel32.GetProcessTimes(
+                    process,
+                    ctypes.byref(created),
+                    ctypes.byref(exited),
+                    ctypes.byref(kernel),
+                    ctypes.byref(user),
+                ):
+                    return True, None
+                created_ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
+            finally:
+                ctypes.windll.kernel32.CloseHandle(process)
+            raw = f"windows\0{pid}\0{created_ticks}".encode("ascii")
+            return True, hashlib.sha256(raw).hexdigest()
+        except (AttributeError, OSError, ValueError):
+            return True, None
+
+    stat_path = Path(f"/proc/{pid}/stat")
+    try:
+        process_stat = stat_path.read_text(encoding="ascii")
+        closing = process_stat.rfind(")")
+        fields = process_stat[closing + 2 :].split()
+        start_ticks = fields[19]
+        try:
+            boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(
+                encoding="ascii"
+            ).strip()
+        except OSError:
+            boot_id = "unknown-boot"
+        raw = f"proc\0{pid}\0{boot_id}\0{start_ticks}".encode("ascii")
+        return True, hashlib.sha256(raw).hexdigest()
+    except (IndexError, OSError, UnicodeError):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False, None
+        except PermissionError:
+            return True, None
+        except OSError as exc:
+            if exc.errno == errno.ESRCH:
+                return False, None
+            return True, None
+        return True, None
+
+
+def _read_lock_owner(lock_path: Path) -> tuple[dict[str, Any], bytes] | None:
+    owner_path = lock_path / LEDGER_LOCK_OWNER_FILE
+    try:
+        metadata = owner_path.lstat()
+        if (
+            owner_path.is_symlink()
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_size > LEDGER_LOCK_MAX_OWNER_BYTES
+        ):
+            return None
+        payload = owner_path.read_bytes()
+        value = json.loads(payload)
+    except (OSError, UnicodeError, ValueError):
+        return None
+    if (
+        not isinstance(value, dict)
+        or set(value) != LEDGER_LOCK_OWNER_FIELDS
+        or value.get("schemaVersion") != LEDGER_LOCK_OWNER_SCHEMA
+        or isinstance(value.get("pid"), bool)
+        or not isinstance(value.get("pid"), int)
+        or value["pid"] < 1
+        or not isinstance(value.get("processIdentity"), str)
+        or DIGEST_RE.fullmatch(value["processIdentity"]) is None
+        or not isinstance(value.get("nonce"), str)
+        or LEDGER_LOCK_NONCE_RE.fullmatch(value["nonce"]) is None
+    ):
+        return None
+    return value, payload
+
+
+def _remove_stale_ledger_lock(lock_path: Path) -> bool:
+    """Remove only an unchanged lock whose recorded process is provably gone."""
+
+    owner = _read_lock_owner(lock_path)
+    if owner is None:
+        return False
+    value, original_payload = owner
+    alive, observed_identity = _process_identity(value["pid"])
+    if alive and (
+        observed_identity is None or observed_identity == value["processIdentity"]
+    ):
+        return False
+    owner_path = lock_path / LEDGER_LOCK_OWNER_FILE
+    try:
+        if owner_path.read_bytes() != original_payload:
+            return False
+        owner_path.unlink()
+        lock_path.rmdir()
+    except OSError:
+        return False
+    return True
+
+
 @contextmanager
 def _ledger_lock(path: Path) -> Iterator[None]:
     lock_path = path.with_name(f".{path.name}.lock")
+    acquired = False
+    for attempt in range(2):
+        try:
+            lock_path.mkdir(mode=0o700)
+            acquired = True
+            break
+        except FileExistsError as exc:
+            if attempt == 0 and _remove_stale_ledger_lock(lock_path):
+                continue
+            raise ValueError("approval ledger is busy") from exc
+    if not acquired:  # pragma: no cover - bounded loop invariant
+        raise ValueError("approval ledger is busy")
+
+    alive, identity = _process_identity(os.getpid())
+    if not alive or identity is None:
+        with suppress(OSError):
+            lock_path.rmdir()
+        raise ValueError("approval ledger lock identity is unavailable")
+    nonce = secrets.token_hex(32)
+    owner = {
+        "schemaVersion": LEDGER_LOCK_OWNER_SCHEMA,
+        "pid": os.getpid(),
+        "processIdentity": identity,
+        "nonce": nonce,
+    }
+    owner_path = lock_path / LEDGER_LOCK_OWNER_FILE
     try:
-        lock_path.mkdir(mode=0o700)
-    except FileExistsError as exc:
-        raise ValueError("approval ledger is busy") from exc
+        descriptor = os.open(
+            owner_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(_canonical_json(owner) + b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        with suppress(OSError):
+            owner_path.unlink()
+        with suppress(OSError):
+            lock_path.rmdir()
+        raise
     try:
         yield
     finally:
+        retained = _read_lock_owner(lock_path)
+        if retained is None or retained[0] != owner:
+            raise ValueError("approval ledger lock ownership was lost")
+        owner_path.unlink()
         lock_path.rmdir()
 
 
@@ -1203,22 +1393,49 @@ def _bind_project_risk(
         projects = cast(dict[str, Any], ledger["projects"])
         if project_id in projects:
             raise ValueError("project risk is already bound")
-        projects[project_id] = {
+        incarnation = secrets.token_hex(32)
+        binding = {
             "riskTier": risk_tier,
             "createdTargetDigest": target_digest,
             "source": source,
-            "bindingDigest": _project_binding_digest(project_id, risk_tier, source),
+            "incarnation": incarnation,
+            "audience": policy["audience"],
+            "approvalDomain": policy["approvalDomain"],
+            "policyKeySha256": policy["policyKeySha256"],
         }
+        binding["projectBindingDigest"] = _project_binding_digest(
+            project_id,
+            binding,
+        )
+        projects[project_id] = binding
         _write_ledger(ledger_path, ledger)
 
 
-def _project_binding_digest(project_id: str, risk_tier: str, source: str) -> str:
+def _legacy_project_binding_digest(project_id: str, risk_tier: str, source: str) -> str:
     return hashlib.sha256(
         _canonical_json(
             {
                 "projectId": project_id,
                 "riskTier": risk_tier,
                 "source": source,
+            }
+        )
+    ).hexdigest()
+
+
+def _project_binding_digest(project_id: str, binding: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        _canonical_json(
+            {
+                "schema": "devflow.project-binding/v2",
+                "audience": binding.get("audience"),
+                "approvalDomain": binding.get("approvalDomain"),
+                "policyKeySha256": binding.get("policyKeySha256"),
+                "projectId": project_id,
+                "riskTier": binding.get("riskTier"),
+                "source": binding.get("source"),
+                "createdTargetDigest": binding.get("createdTargetDigest"),
+                "incarnation": binding.get("incarnation"),
             }
         )
     ).hexdigest()
@@ -1231,6 +1448,7 @@ def _ledger_project(
     ledger = _read_ledger(Path(str(policy["ledgerPath"])))
     project = cast(dict[str, Any], ledger["projects"]).get(project_id)
     if not isinstance(project, dict) or frozenset(project) not in {
+        RISK_ONLY_PROJECT_BINDING_FIELDS,
         LEGACY_PROJECT_BINDING_FIELDS,
         PROJECT_BINDING_FIELDS,
     }:
@@ -1241,14 +1459,32 @@ def _ledger_project(
         r"[0-9a-f]{64}", target_digest
     ) is None:
         raise GuardPolicyError("project_binding_invalid")
-    legacy = frozenset(project) == LEGACY_PROJECT_BINDING_FIELDS
-    if not legacy:
+    fields = frozenset(project)
+    legacy = fields != PROJECT_BINDING_FIELDS
+    if fields == LEGACY_PROJECT_BINDING_FIELDS:
         source = project.get("source")
-        expected = _project_binding_digest(project_id, str(risk_tier), str(source or ""))
+        expected = _legacy_project_binding_digest(
+            project_id, str(risk_tier), str(source or "")
+        )
         if (
             not isinstance(source, str)
             or SOURCE_RE.fullmatch(source) is None
             or project.get("bindingDigest") != expected
+        ):
+            raise GuardPolicyError("project_binding_invalid")
+    elif fields == PROJECT_BINDING_FIELDS:
+        source = project.get("source")
+        incarnation = project.get("incarnation")
+        if (
+            not isinstance(source, str)
+            or SOURCE_RE.fullmatch(source) is None
+            or not isinstance(incarnation, str)
+            or DIGEST_RE.fullmatch(incarnation) is None
+            or project.get("audience") != policy.get("audience")
+            or project.get("approvalDomain") != policy.get("approvalDomain")
+            or project.get("policyKeySha256") != policy.get("policyKeySha256")
+            or project.get("projectBindingDigest")
+            != _project_binding_digest(project_id, project)
         ):
             raise GuardPolicyError("project_binding_invalid")
     return dict(project), legacy
@@ -1371,16 +1607,37 @@ def _upgrade_legacy_project_binding(
             if legacy or checked.get("source") != source:
                 raise GuardPolicyError("project_binding_changed")
             return checked
-        if fields != LEGACY_PROJECT_BINDING_FIELDS:
+        if fields not in {
+            RISK_ONLY_PROJECT_BINDING_FIELDS,
+            LEGACY_PROJECT_BINDING_FIELDS,
+        }:
             raise GuardPolicyError("project_binding_changed")
         risk_tier = str(current.get("riskTier") or "")
-        if risk_tier not in RISK_TIERS:
+        target_digest = current.get("createdTargetDigest")
+        if (
+            risk_tier not in RISK_TIERS
+            or not isinstance(target_digest, str)
+            or DIGEST_RE.fullmatch(target_digest) is None
+            or (
+                fields == LEGACY_PROJECT_BINDING_FIELDS
+                and (
+                    current.get("source") != source
+                    or current.get("bindingDigest")
+                    != _legacy_project_binding_digest(project_id, risk_tier, source)
+                )
+            )
+        ):
             raise GuardPolicyError("project_binding_changed")
         upgraded = {
-            **current,
+            "riskTier": risk_tier,
+            "createdTargetDigest": target_digest,
             "source": source,
-            "bindingDigest": _project_binding_digest(project_id, risk_tier, source),
+            "incarnation": secrets.token_hex(32),
+            "audience": policy["audience"],
+            "approvalDomain": policy["approvalDomain"],
+            "policyKeySha256": policy["policyKeySha256"],
         }
+        upgraded["projectBindingDigest"] = _project_binding_digest(project_id, upgraded)
         projects[project_id] = upgraded
         _write_ledger(ledger_path, ledger)
         return dict(upgraded)
@@ -1407,18 +1664,22 @@ def _verified_project_binding(
         raise GuardPolicyError("project_risk_request_mismatch")
     if requested_source is not None and requested_source != source:
         raise GuardPolicyError("project_source_request_mismatch")
-    expected_digest = _project_binding_digest(project_id, risk_tier, source)
-    if binding.get("bindingDigest") != expected_digest:
+    expected_digest = _project_binding_digest(project_id, binding)
+    if binding.get("projectBindingDigest") != expected_digest:
         raise GuardPolicyError("project_binding_invalid")
     return binding, project
 
 
 def _project_binding_attestation(binding: dict[str, Any]) -> dict[str, Any]:
     return {
-        "schema": "devflow.project-binding/v1",
+        "schema": "devflow.project-binding/v2",
+        "audience": binding["audience"],
+        "approvalDomain": binding["approvalDomain"],
+        "policyKeySha256": binding["policyKeySha256"],
         "riskTierAuthority": "root-only-approval-ledger",
         "sourceAuthority": "persistent-project-state",
-        "digest": binding["bindingDigest"],
+        "incarnationAuthority": "guard-generated-root-only-approval-ledger",
+        "projectBindingDigest": binding["projectBindingDigest"],
     }
 
 
@@ -1589,20 +1850,27 @@ def _attest_task_room_response(
     return _replace_action_payload(response, secured)
 
 
-def _validate_and_consume_approval(
+def _validate_approval(
     policy: dict[str, Any],
     arguments: dict[str, Any],
     *,
+    binding: dict[str, Any],
     action: str,
     project_id: str,
     task_id: str | None,
     risk_tier: str,
-) -> None:
+) -> tuple[dict[str, Any], str]:
     approval = arguments.get("approval")
     if not isinstance(approval, dict) or set(approval) != {"evidence", "signature"}:
         raise ValueError("approval must contain exactly evidence and signature")
     evidence = approval.get("evidence")
     expected_fields = {
+        "schemaVersion",
+        "audience",
+        "approvalDomain",
+        "policyKeySha256",
+        "projectBindingDigest",
+        "approvalRequestDigest",
         "action",
         "projectId",
         "riskTier",
@@ -1617,7 +1885,13 @@ def _validate_and_consume_approval(
     if not isinstance(evidence, dict) or set(evidence) != expected_fields:
         raise ValueError("approval evidence schema mismatch")
     if (
-        evidence.get("action") != action
+        evidence.get("schemaVersion") != "1.1"
+        or evidence.get("audience") != policy.get("audience")
+        or evidence.get("approvalDomain") != policy.get("approvalDomain")
+        or evidence.get("policyKeySha256") != policy.get("policyKeySha256")
+        or evidence.get("projectBindingDigest")
+        != binding.get("projectBindingDigest")
+        or evidence.get("action") != action
         or evidence.get("projectId") != project_id
         or evidence.get("riskTier") != risk_tier
         or (task_id is not None and evidence.get("taskId") != task_id)
@@ -1626,6 +1900,24 @@ def _validate_and_consume_approval(
     target_digest = _target_digest(arguments)
     if evidence.get("targetDigest") != target_digest:
         raise ValueError("approval targetDigest mismatch")
+    approval_request: dict[str, Any] = {
+        "schema": APPROVAL_REQUEST_SCHEMA,
+        "audience": policy["audience"],
+        "approvalDomain": policy["approvalDomain"],
+        "policyKeySha256": policy["policyKeySha256"],
+        "projectBindingDigest": binding["projectBindingDigest"],
+        "action": action,
+        "projectId": project_id,
+        "riskTier": risk_tier,
+        "targetDigest": target_digest,
+    }
+    if task_id is not None:
+        approval_request["taskId"] = task_id
+    expected_request_digest = hashlib.sha256(
+        _canonical_json(approval_request)
+    ).hexdigest()
+    if evidence.get("approvalRequestDigest") != expected_request_digest:
+        raise ValueError("approval request digest mismatch")
     approved_by = evidence.get("approvedBy")
     nonce = evidence.get("nonce")
     if not isinstance(approved_by, str) or APPROVER_RE.fullmatch(approved_by) is None:
@@ -1637,24 +1929,77 @@ def _validate_and_consume_approval(
     now = dt.datetime.now(tz=dt.timezone.utc).replace(microsecond=0)
     if issued_at > now or expires_at <= now or expires_at <= issued_at:
         raise ValueError("approval is not currently valid")
-    if (expires_at - issued_at).total_seconds() > 900:
+    if (expires_at - issued_at).total_seconds() > policy["maxApprovalLifetimeSeconds"]:
         raise ValueError("approval lifetime exceeds policy")
     signature = approval.get("signature")
     if not isinstance(signature, str) or not _verify_ed25519(
         policy, _canonical_json(evidence), signature
     ):
         raise ValueError("approval signature verification failed")
+
+    return evidence, nonce
+
+
+def _consume_approval_in_locked_ledger(
+    ledger_path: Path,
+    current: dict[str, Any],
+    *,
+    evidence: dict[str, Any],
+    nonce: str,
+    project_id: str,
+    risk_tier: str,
+    required_project_status: str | None = None,
+    project: dict[str, Any] | None = None,
+) -> None:
+    current_project = cast(dict[str, Any], current["projects"]).get(project_id)
+    if (
+        not isinstance(current_project, dict)
+        or current_project.get("riskTier") != risk_tier
+        or current_project.get("projectBindingDigest")
+        != evidence.get("projectBindingDigest")
+    ):
+        raise ValueError("project risk binding changed during approval")
+    used_nonces = cast(dict[str, Any], current["usedNonces"])
+    if nonce in used_nonces:
+        raise ValueError("approval nonce was already used")
+    if required_project_status is not None:
+        status = project.get("status") if isinstance(project, dict) else None
+        if not isinstance(status, str) or status.strip().lower() != required_project_status:
+            raise GuardPolicyError("resume_requires_paused_project")
+    used_nonces[nonce] = evidence["expiresAt"]
+    _write_ledger(ledger_path, current)
+
+
+def _validate_and_consume_approval(
+    policy: dict[str, Any],
+    arguments: dict[str, Any],
+    *,
+    binding: dict[str, Any],
+    action: str,
+    project_id: str,
+    task_id: str | None,
+    risk_tier: str,
+) -> None:
+    evidence, nonce = _validate_approval(
+        policy,
+        arguments,
+        binding=binding,
+        action=action,
+        project_id=project_id,
+        task_id=task_id,
+        risk_tier=risk_tier,
+    )
     ledger_path = Path(str(policy["ledgerPath"]))
     with _ledger_lock(ledger_path):
         current = _read_ledger(ledger_path)
-        current_project = cast(dict[str, Any], current["projects"]).get(project_id)
-        if not isinstance(current_project, dict) or current_project.get("riskTier") != risk_tier:
-            raise ValueError("project risk binding changed during approval")
-        used_nonces = cast(dict[str, Any], current["usedNonces"])
-        if nonce in used_nonces:
-            raise ValueError("approval nonce was already used")
-        used_nonces[nonce] = evidence["expiresAt"]
-        _write_ledger(ledger_path, current)
+        _consume_approval_in_locked_ledger(
+            ledger_path,
+            current,
+            evidence=evidence,
+            nonce=nonce,
+            project_id=project_id,
+            risk_tier=risk_tier,
+        )
 
 
 def _response_succeeded(response: dict[str, Any] | None) -> bool:
@@ -2802,7 +3147,7 @@ def handle_request(
 
             project_id = _bound_value(arguments, ("projectId", "project_id"), "projectId")
             try:
-                binding, _project = _verified_project_binding(
+                binding, project = _verified_project_binding(
                     policy,
                     request_id,
                     arguments,
@@ -2828,6 +3173,73 @@ def handle_request(
                     return missing_response
                 raise GuardPolicyError("unbound_project_state") from None
 
+            if action == "resume_project":
+                ledger_path = Path(str(policy["ledgerPath"]))
+                with _ledger_lock(ledger_path):
+                    # Re-read both authorities while holding the same cross-process
+                    # lock used to consume the approval and perform the transition.
+                    # The first read above also upgrades any legacy binding before
+                    # entering this non-reentrant critical section.
+                    binding, project = _verified_project_binding(
+                        policy,
+                        request_id,
+                        arguments,
+                        project_id,
+                        workspace,
+                    )
+                    risk_tier = str(binding["riskTier"])
+                    if risk_tier in HIGH_RISK_TIERS:
+                        evidence, nonce = _validate_approval(
+                            policy,
+                            arguments,
+                            binding=binding,
+                            action=action,
+                            project_id=project_id,
+                            task_id=None,
+                            risk_tier=risk_tier,
+                        )
+                        current = _read_ledger(ledger_path)
+                        _consume_approval_in_locked_ledger(
+                            ledger_path,
+                            current,
+                            evidence=evidence,
+                            nonce=nonce,
+                            project_id=project_id,
+                            risk_tier=risk_tier,
+                            required_project_status="paused",
+                            project=project,
+                        )
+                    else:
+                        if "approval" in arguments:
+                            raise GuardPolicyError("low_risk_approval_forbidden")
+                        status = project.get("status")
+                        if not isinstance(status, str) or status.strip().lower() != "paused":
+                            raise GuardPolicyError("resume_requires_paused_project")
+                    arguments.pop("approval", None)
+
+                    params["arguments"] = arguments
+                    guarded = dict(request)
+                    guarded["params"] = params
+                    response = upstream.handle_request(guarded)
+                    if not isinstance(response, dict):
+                        raise GuardPolicyError("project_action_failed")
+                    post_binding, post_project = _verified_project_binding(
+                        policy,
+                        request_id,
+                        arguments,
+                        project_id,
+                        workspace,
+                    )
+                    if post_binding != binding:
+                        raise GuardPolicyError("project_binding_changed")
+                    post_status = post_project.get("status")
+                    if (
+                        not isinstance(post_status, str)
+                        or post_status.strip().lower() != "active"
+                    ):
+                        raise GuardPolicyError("resume_did_not_become_active")
+                    return _attest_project_response(response, project_id, binding)
+
             if action in APPROVAL_ACTIONS:
                 approval_task_id = (
                     _bound_value(arguments, ("taskId", "task_id"), "taskId")
@@ -2839,6 +3251,7 @@ def handle_request(
                     _validate_and_consume_approval(
                         policy,
                         arguments,
+                        binding=binding,
                         action=action,
                         project_id=project_id,
                         task_id=approval_task_id,

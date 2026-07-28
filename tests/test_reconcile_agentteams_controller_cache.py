@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import pytest
 
+from scripts.build_agentteams_package import build_role_packages
 from scripts.reconcile_agentteams_controller_cache import (
     ALL_FIXED_SKILLS,
     ARCHIVE_DIGESTS,
@@ -31,6 +32,17 @@ from scripts.reconcile_agentteams_controller_cache import (
     reconcile_controller_authority,
 )
 from scripts.reconcile_agentteams_role_skills import load_role_releases
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(scope="module")
+def controller_releases(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, Any]:
+    release_dir = tmp_path_factory.mktemp("controller-role-releases")
+    build_role_packages(ROOT, release_dir, source_date_epoch=0)
+    return load_role_releases(release_dir)
 
 
 def _uid(name: str) -> str:
@@ -299,11 +311,12 @@ def test_helper_is_busybox_shell_only_and_has_fail_closed_guards() -> None:
     assert 'cat "$path"' not in CONTROLLER_AUDIT_HELPER
 
 
-def test_release_tree_digest_matches_the_pinned_archive_layout() -> None:
-    releases = load_role_releases(Path("dist"))
-    digests = expected_controller_skill_digests(releases)
+def test_release_tree_digest_matches_the_pinned_archive_layout(
+    controller_releases: dict[str, Any],
+) -> None:
+    digests = expected_controller_skill_digests(controller_releases)
     assert digests["devflow-coder"]["patch-generator"] == (
-        "78e8bf8f1af297167d0eea8903be3c60645edef21f4e4acba9e2713d4c45d8b3"
+        "305e2a0ac4749f5d3ea3833e5685b8ea5abca791b4b0b2df531e40003f634edd"
     )
     assert digests["devflow-lead"] == {}
     assert {role: tuple(sorted(value)) for role, value in digests.items()} == {
@@ -324,7 +337,14 @@ def test_apply_helpers_keep_staging_outside_agents_and_only_move_fixed_skills() 
 
 
 def test_archive_replacement_is_exact_path_bounded_atomic_and_recoverable() -> None:
-    assert 'target="$base/$role-v1.2.0.zip"' in CONTROLLER_ARCHIVE_REPLACE_HELPER
+    assert 'path=/tmp/import/$role-v1.3.0.zip' in CONTROLLER_AUDIT_HELPER
+    assert 'target="$base/$role-v1.3.0.zip"' in CONTROLLER_ARCHIVE_REPLACE_HELPER
+    assert 'archive="/tmp/import/$role-v1.3.0.zip"' in CONTROLLER_CONVERGE_HELPER
+    for role in ROLE_SKILLS:
+        assert (
+            f"audit_archive {role} {ARCHIVE_SIZES[role]} {ARCHIVE_DIGESTS[role]}"
+            in CONTROLLER_AUDIT_HELPER
+        )
     assert 'cp -p "$target" "$saved"' in CONTROLLER_ARCHIVE_REPLACE_HELPER
     assert 'mv -fT "$stage" "$target"' in CONTROLLER_ARCHIVE_REPLACE_HELPER
     assert 'mv -nT "$stage" "$target"' in CONTROLLER_ARCHIVE_REPLACE_HELPER
@@ -405,12 +425,10 @@ class _ApplyRunner(_Runner):
         raise AssertionError("unexpected controller write")
 
 
-def _controller_releases() -> dict[str, Any]:
-    return load_role_releases(Path("dist"))
-
-
-def test_reconcile_controller_authority_executes_prepare_and_converges_cache() -> None:
-    releases = _controller_releases()
+def test_reconcile_controller_authority_executes_prepare_and_converges_cache(
+    controller_releases: dict[str, Any],
+) -> None:
+    releases = controller_releases
     expected = expected_controller_skill_digests(releases)
     runner = _ApplyRunner(expected)
     target = discover_controller(runner)
@@ -430,8 +448,10 @@ def test_reconcile_controller_authority_executes_prepare_and_converges_cache() -
     ).changed_roles
 
 
-def test_reconcile_controller_authority_prepare_failure_starts_no_convergence() -> None:
-    releases = _controller_releases()
+def test_reconcile_controller_authority_prepare_failure_starts_no_convergence(
+    controller_releases: dict[str, Any],
+) -> None:
+    releases = controller_releases
     runner = _ApplyRunner(
         expected_controller_skill_digests(releases),
         prepare_failure=True,
@@ -448,8 +468,10 @@ def test_reconcile_controller_authority_prepare_failure_starts_no_convergence() 
     assert runner.converge_calls == 0
 
 
-def test_reconcile_controller_authority_convergence_failure_is_fail_closed() -> None:
-    releases = _controller_releases()
+def test_reconcile_controller_authority_convergence_failure_is_fail_closed(
+    controller_releases: dict[str, Any],
+) -> None:
+    releases = controller_releases
     runner = _ApplyRunner(
         expected_controller_skill_digests(releases),
         converge_failure=True,
@@ -467,8 +489,10 @@ def test_reconcile_controller_authority_convergence_failure_is_fail_closed() -> 
     assert "devflow-coder" not in runner.converged
 
 
-def test_controller_identity_change_fails_then_fresh_identity_retry_converges() -> None:
-    releases = _controller_releases()
+def test_controller_identity_change_fails_then_fresh_identity_retry_converges(
+    controller_releases: dict[str, Any],
+) -> None:
+    releases = controller_releases
     runner = _ApplyRunner(
         expected_controller_skill_digests(releases),
         change_identity_after_converge=True,

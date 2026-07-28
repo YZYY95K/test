@@ -97,14 +97,14 @@ Service. The versioned ConfigMap is made immutable before any Pod can consume
 it; changing package bytes therefore requires a new release version.
 
 ```bash
-kubectl create configmap devflow-worker-packages-v1-2-0 -n agentteams-system \
-  --from-file=dist/devflow-lead-v1.2.0.zip \
-  --from-file=dist/devflow-triage-v1.2.0.zip \
-  --from-file=dist/devflow-locator-v1.2.0.zip \
-  --from-file=dist/devflow-coder-v1.2.0.zip \
-  --from-file=dist/devflow-tester-v1.2.0.zip \
-  --from-file=dist/devflow-reviewer-v1.2.0.zip
-kubectl patch configmap devflow-worker-packages-v1-2-0 \
+kubectl create configmap devflow-worker-packages-v1-3-0 -n agentteams-system \
+  --from-file=dist/devflow-lead-v1.3.0.zip \
+  --from-file=dist/devflow-triage-v1.3.0.zip \
+  --from-file=dist/devflow-locator-v1.3.0.zip \
+  --from-file=dist/devflow-coder-v1.3.0.zip \
+  --from-file=dist/devflow-tester-v1.3.0.zip \
+  --from-file=dist/devflow-reviewer-v1.3.0.zip
+kubectl patch configmap devflow-worker-packages-v1-3-0 \
   -n agentteams-system --type=merge -p '{"immutable":true}'
 kubectl apply -n agentteams-system -f agentteams/package-server.yaml
 kubectl rollout status -n agentteams-system deployment/devflow-package
