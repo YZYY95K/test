@@ -8,10 +8,11 @@ making the domain pipeline runnable without external infrastructure.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import math
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ from typing import Any, Protocol
 EventHandler = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 _MAX_EVENT_PAYLOAD_DEPTH = 64
+_MAX_EVENT_PAYLOAD_BYTES = 1_048_576
+_DEFAULT_HISTORY_LIMIT = 10_000
 
 
 class EventPayloadError(ValueError):
@@ -50,9 +53,12 @@ class EventRecord:
 class EventBus:
     """Concurrency-safe, fail-isolated asynchronous publish/subscribe bus."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, history_limit: int = _DEFAULT_HISTORY_LIMIT) -> None:
+        if history_limit < 1 or history_limit > 1_000_000:
+            raise ValueError("event history_limit must be between 1 and 1000000")
         self._handlers: dict[str, list[EventHandler]] = defaultdict(list)
-        self._history: list[EventRecord] = []
+        self._history: deque[EventRecord] = deque(maxlen=history_limit)
+        self._history_dropped = 0
         self._lock = asyncio.Lock()
 
     def subscribe(self, event_type: str, handler: EventHandler) -> None:
@@ -72,20 +78,94 @@ class EventBus:
             timestamp=datetime.now(timezone.utc),
         )
         async with self._lock:
+            if len(self._history) == self._history.maxlen:
+                self._history_dropped += 1
             self._history.append(record)
             handlers = tuple(self._handlers.get(event_type, ()))
         if not handlers:
             return
-        results = []
+        results: list[tuple[EventHandler, Awaitable[None]]] = []
         for handler in handlers:
             try:
                 value = handler(_decode_payload(encoded_payload))
-            except Exception:  # noqa: BLE001 - isolate synchronous subscribers
+            except Exception as exc:  # noqa: BLE001 - isolate subscribers
+                await self._record_delivery_failure(
+                    event_type=event_type,
+                    encoded_payload=encoded_payload,
+                    handler=handler,
+                    error=exc,
+                )
                 continue
             if inspect.isawaitable(value):
-                results.append(value)
+                results.append((handler, value))
         if results:
-            await asyncio.gather(*results, return_exceptions=True)
+            outcomes = await asyncio.gather(
+                *(value for _handler, value in results),
+                return_exceptions=True,
+            )
+            for (handler, _value), outcome in zip(results, outcomes, strict=True):
+                if isinstance(outcome, BaseException):
+                    await self._record_delivery_failure(
+                        event_type=event_type,
+                        encoded_payload=encoded_payload,
+                        handler=handler,
+                        error=outcome,
+                    )
+
+    async def _record_delivery_failure(
+        self,
+        *,
+        event_type: str,
+        encoded_payload: str,
+        handler: EventHandler,
+        error: BaseException,
+    ) -> None:
+        """Append and fan out a bounded, payload-free dead-letter receipt."""
+
+        error_type = type(error).__name__
+        if not error_type.isascii() or not error_type.isidentifier():
+            error_type = "Exception"
+        try:
+            error_text = str(error)
+        except Exception:  # noqa: BLE001 - hostile formatter
+            error_text = "<unprintable>"
+        handler_name = getattr(handler, "__qualname__", type(handler).__name__)
+        failure_payload = {
+            "schema_version": "devflow.event-delivery-failure/v1",
+            "source_event_type": event_type,
+            "payload_sha256": hashlib.sha256(
+                encoded_payload.encode("utf-8")
+            ).hexdigest(),
+            "handler_sha256": hashlib.sha256(
+                handler_name.encode("utf-8", errors="replace")
+            ).hexdigest(),
+            "error_type": error_type,
+            "error_digest": hashlib.sha256(
+                f"{error_type}\0{error_text}".encode("utf-8", errors="replace")
+            ).hexdigest(),
+        }
+        encoded_failure = _encode_payload(failure_payload)
+        record = EventRecord(
+            event_type="event.delivery_failed",
+            payload=_decode_payload(encoded_failure),
+            timestamp=datetime.now(timezone.utc),
+        )
+        async with self._lock:
+            if len(self._history) == self._history.maxlen:
+                self._history_dropped += 1
+            self._history.append(record)
+            failure_handlers = tuple(
+                self._handlers.get("event.delivery_failed", ())
+            )
+        if event_type == "event.delivery_failed":
+            return
+        for failure_handler in failure_handlers:
+            try:
+                value = failure_handler(_decode_payload(encoded_failure))
+                if inspect.isawaitable(value):
+                    await value
+            except Exception:  # noqa: BLE001 - dead-letter delivery is terminal
+                continue
 
     def history(self) -> list[EventRecord]:
         return [
@@ -102,9 +182,16 @@ class EventBus:
 
         return len(self._handlers.get(event_type, ()))
 
+    @property
+    def history_dropped(self) -> int:
+        """Number of old audit records evicted by bounded retention."""
+
+        return self._history_dropped
+
     def clear(self) -> None:
         self._handlers.clear()
         self._history.clear()
+        self._history_dropped = 0
 
 
 def _encode_payload(payload: dict[str, Any]) -> str:
@@ -118,7 +205,7 @@ def _encode_payload(payload: dict[str, Any]) -> str:
 
     _validate_json_value(payload, path="payload", depth=0, active=set())
     try:
-        return json.dumps(
+        encoded = json.dumps(
             payload,
             ensure_ascii=False,
             allow_nan=False,
@@ -126,6 +213,9 @@ def _encode_payload(payload: dict[str, Any]) -> str:
         )
     except (TypeError, ValueError, RecursionError) as exc:
         raise EventPayloadError("event payload is not finite JSON data") from exc
+    if len(encoded.encode("utf-8")) > _MAX_EVENT_PAYLOAD_BYTES:
+        raise EventPayloadError("event payload exceeds the byte limit")
+    return encoded
 
 
 def _validate_json_value(

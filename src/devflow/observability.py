@@ -13,6 +13,26 @@ from typing import Any
 import structlog
 from opentelemetry import trace
 
+_DEFAULT_HISTOGRAM_BUCKETS = (
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    30.0,
+    60.0,
+    120.0,
+    300.0,
+    600.0,
+    1200.0,
+)
+
 
 def _configure_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -63,6 +83,7 @@ class _Counter:
 
 @dataclass
 class _Histogram:
+    buckets: tuple[float, ...] = _DEFAULT_HISTOGRAM_BUCKETS
     values: dict[tuple[tuple[str, str], ...], list[float]] = field(
         default_factory=lambda: defaultdict(list)
     )
@@ -107,8 +128,27 @@ class Metrics:
     def counter(self, name: str) -> _Counter:
         return self._counters.setdefault(name, _Counter())
 
-    def histogram(self, name: str) -> _Histogram:
-        return self._histograms.setdefault(name, _Histogram())
+    def histogram(
+        self,
+        name: str,
+        *,
+        buckets: tuple[float, ...] | None = None,
+    ) -> _Histogram:
+        selected = buckets or _DEFAULT_HISTOGRAM_BUCKETS
+        if (
+            not selected
+            or tuple(sorted(set(selected))) != selected
+            or any(not math.isfinite(value) or value <= 0 for value in selected)
+        ):
+            raise ValueError("histogram buckets must be finite, positive, and increasing")
+        existing = self._histograms.get(name)
+        if existing is not None:
+            if existing.buckets != selected:
+                raise ValueError("histogram bucket definition cannot change")
+            return existing
+        metric = _Histogram(buckets=selected)
+        self._histograms[name] = metric
+        return metric
 
     def gauge(self, name: str) -> _Gauge:
         return self._gauges.setdefault(name, _Gauge())
@@ -158,10 +198,16 @@ class Metrics:
                     for key, value in sorted(gauge_metric.values.items())
                 )
         for name, histogram_metric in sorted(self._histograms.items()):
-            lines.extend((f"# TYPE {name} summary",))
+            lines.extend((f"# TYPE {name} histogram",))
             with histogram_metric.lock:
                 for key, values in sorted(histogram_metric.values.items()):
                     labels = _labels_text(key)
+                    for boundary in histogram_metric.buckets:
+                        bucket_labels = _labels_text(tuple(sorted((*key, ("le", str(boundary))))))
+                        count = sum(value <= boundary for value in values)
+                        lines.append(f"{name}_bucket{bucket_labels} {count}")
+                    infinite_labels = _labels_text(tuple(sorted((*key, ("le", "+Inf")))))
+                    lines.append(f"{name}_bucket{infinite_labels} {len(values)}")
                     lines.append(f"{name}_count{labels} {len(values)}")
                     lines.append(f"{name}_sum{labels} {sum(values)}")
         return "\n".join(lines) + "\n"
@@ -219,19 +265,30 @@ def configure_otlp_tracing(
     *,
     service_name: str = "devflow",
     insecure: bool = True,
+    span_exporter: Any | None = None,
+    set_global: bool = True,
 ) -> Any:
-    """Install a batched OTLP/gRPC exporter and return its provider."""
+    """Build a batched trace provider and optionally install it globally.
 
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    Production callers omit ``span_exporter`` and receive the real OTLP/gRPC
+    exporter.  Tests may inject an in-memory SDK exporter to verify the batch
+    pipeline without a network collector.
+    """
+
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
+    if not endpoint.strip():
+        raise ValueError("OTLP endpoint must be non-empty")
+    if span_exporter is None:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+
+        span_exporter = OTLPSpanExporter(endpoint=endpoint, insecure=insecure)
     provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
-    provider.add_span_processor(
-        BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, insecure=insecure))
-    )
-    trace.set_tracer_provider(provider)
+    provider.add_span_processor(BatchSpanProcessor(span_exporter))
+    if set_global:
+        trace.set_tracer_provider(provider)
     return provider
 
 

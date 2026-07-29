@@ -24,14 +24,19 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
 from devflow.agents.base import AgentIdentity, BaseAgent
 from devflow.agents.locator_agent import LocatedContext
+from devflow.collaboration.ledger import DurableRouteLedger, LedgerConflictError
 from devflow.exceptions import AgentError
+from devflow.mcp.approval import ApprovalVerifier
+from devflow.mcp.contracts import ApprovalEvidence
 from devflow.models.agent_event import AgentFailureEvent
+from devflow.models.experience import ExperiencePattern, VerifiedTerminalReceipt
+from devflow.models.human_approval import HumanApprovalTarget
 from devflow.models.issue import (
     ComplexityLevel,
     IssueClassification,
@@ -67,6 +72,9 @@ class IssueLifecycle(str, Enum):
     CODING = "coding"
     TESTING = "testing"
     REVIEWING = "reviewing"
+    DISTILLING = "distilling"
+    VERIFIED = "verified"
+    PAUSED = "paused"
     MERGED = "merged"
     REJECTED = "rejected"
 
@@ -134,7 +142,6 @@ class TeamLeader(BaseAgent):
         ),
         model="glm-5.2",
         temperature=0.3,
-        system_prompt_ref="prompts/team_leader.md",
     )
     _CAPABILITIES = (
         "task_decomposition",
@@ -153,27 +160,40 @@ class TeamLeader(BaseAgent):
         "issue.created",
         "agent.completed",
         "agent.failed",
+        "triage.completed",
+        "locator.completed",
         "coder.patch_ready",
+        "test.passed",
         "review.rejected",
+        "review.approved",
+        "experience.completed",
         "test.failed",
         "approval.required",
     )
     _OWNED_SKILLS = ("team-orchestration",)
     _FORBIDDEN_ACTIONS = {
         "write_code": "Cannot write code directly",
-        "approve_t4t5_without_human": (
-            "Cannot approve PRs without human review for T4/T5 issues"
-        ),
-        "modify_outside_devflow": (
-            "Cannot modify files outside the .devflow/ state directory"
-        ),
+        "approve_t4t5_without_human": ("Cannot approve PRs without human review for T4/T5 issues"),
+        "modify_outside_devflow": ("Cannot modify files outside the .devflow/ state directory"),
         "bypass_approval_workflow": (
             "Cannot bypass the approval workflow defined in security.yaml"
         ),
     }
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        execution_ledger: DurableRouteLedger | None = None,
+        approval_verifier: ApprovalVerifier | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
+        #: Optional durable scheduler authority. AgentTeams and production-like
+        #: local runs use this ledger so route ownership survives processes;
+        #: lightweight unit tests may retain the process-local fallback.
+        self._execution_ledger = execution_ledger
+        self._approval_verifier = approval_verifier
+        self._consumed_approval_ids: set[str] = set()
         #: Per-issue lifecycle state, keyed by issue number.
         self._lifecycle: dict[int, IssueLifecycle] = {}
         #: Per-issue accumulated context, keyed by issue number.
@@ -189,9 +209,7 @@ class TeamLeader(BaseAgent):
         #: execution. Distinct failure events from duplicate execution cannot
         #: create a second retry.
         self._execution_route_claims: dict[tuple[str, int], str] = {}
-        self._execution_route_outcomes: dict[
-            tuple[str, int], dict[str, Any]
-        ] = {}
+        self._execution_route_outcomes: dict[tuple[str, int], dict[str, Any]] = {}
         #: TeamLeader is the sole Coder model-call budget authority. Each
         #: issue receives at most three immutable, ordinal-bound routes across
         #: both candidate-validation and semantic test retries.
@@ -199,15 +217,24 @@ class TeamLeader(BaseAgent):
         #: A validated Coder result is re-issued as exactly one TeamLeader
         #: route to Tester.  The local scheduler consumes only Leader routes,
         #: never arbitrary peer-to-peer result events.
-        self._tester_candidate_routes: dict[
-            tuple[int, int], HandoffEnvelope
-        ] = {}
+        self._tester_candidate_routes: dict[tuple[int, int], HandoffEnvelope] = {}
+        if self._execution_ledger is not None:
+            for retained_route in self._execution_ledger.all_routes():
+                self._remember_execution_route(retained_route)
         #: Register handlers for watched events.
         self.register_event_handler("issue.created", self._on_issue_created)
         self.register_event_handler("agent.completed", self._on_agent_completed)
         self.register_event_handler("agent.failed", self._on_agent_failed)
+        self.register_event_handler("triage.completed", self._on_triage_completed)
+        self.register_event_handler("locator.completed", self._on_locator_completed)
         self.register_event_handler("coder.patch_ready", self._on_coder_patch_ready)
+        self.register_event_handler("test.passed", self._on_test_passed)
         self.register_event_handler("review.rejected", self._on_review_rejected)
+        self.register_event_handler("review.approved", self._on_review_approved)
+        self.register_event_handler(
+            "experience.completed",
+            self._on_experience_completed,
+        )
         self.register_event_handler("test.failed", self._on_test_failed)
         self.register_event_handler("approval.required", self._on_approval_required)
 
@@ -217,6 +244,11 @@ class TeamLeader(BaseAgent):
     def get_lifecycle(self, issue_id: int) -> IssueLifecycle:
         """Return the current lifecycle state of an issue (``NEW`` if unknown)."""
         return self._lifecycle.get(issue_id, IssueLifecycle.NEW)
+
+    def issue_snapshot(self, issue_id: int) -> dict[str, Any]:
+        """Return an isolated copy of one issue's canonical collaboration state."""
+
+        return copy.deepcopy(self._issue_context.get(issue_id, {}))
 
     def _set_lifecycle(self, issue_id: int, state: IssueLifecycle) -> None:
         previous = self.get_lifecycle(issue_id)
@@ -280,10 +312,7 @@ class TeamLeader(BaseAgent):
     ) -> int | None:
         """Return the issue-global Coder model-call ordinal on a route."""
 
-        if (
-            envelope.consumer != "CoderAgent"
-            or envelope.skill != "patch-generator"
-        ):
+        if envelope.consumer != "CoderAgent" or envelope.skill != "patch-generator":
             return None
         inline = envelope.artifact.inline
         request = inline.get("input") if isinstance(inline, dict) else None
@@ -299,7 +328,7 @@ class TeamLeader(BaseAgent):
         return raw_attempt
 
     def _remember_execution_route(self, envelope: HandoffEnvelope) -> None:
-        """Persist one immutable, integrity-valid replay source in Leader memory."""
+        """Persist one immutable, integrity-valid replay source under Leader authority."""
 
         if (
             envelope.producer != self.name
@@ -315,25 +344,24 @@ class TeamLeader(BaseAgent):
         route_digest = self._handoff_sha256(envelope)
         model_call_attempt = self._coder_model_call_attempt(envelope)
         model_call_key = (
-            (envelope.issue_id, model_call_attempt)
-            if model_call_attempt is not None
-            else None
+            (envelope.issue_id, model_call_attempt) if model_call_attempt is not None else None
         )
         if model_call_key is not None:
             claimed_route = self._coder_model_call_routes.get(model_call_key)
             if claimed_route is not None and claimed_route != route_digest:
-                raise AgentError(
-                    "Coder model-call attempt conflicts with canonical state."
-                )
+                raise AgentError("Coder model-call attempt conflicts with canonical state.")
             issued = sorted(
                 ordinal
                 for issue_id, ordinal in self._coder_model_call_routes
                 if issue_id == envelope.issue_id
             )
             if claimed_route is None and model_call_attempt != len(issued) + 1:
-                raise AgentError(
-                    "Coder model-call attempts must be issued sequentially."
-                )
+                raise AgentError("Coder model-call attempts must be issued sequentially.")
+        if self._execution_ledger is not None:
+            try:
+                self._execution_ledger.register_route(envelope)
+            except LedgerConflictError as exc:
+                raise AgentError(str(exc)) from exc
         self._execution_routes[envelope.task_id] = envelope.model_copy(deep=True)
         if model_call_key is not None:
             self._coder_model_call_routes[model_call_key] = route_digest
@@ -341,25 +369,123 @@ class TeamLeader(BaseAgent):
     def is_authorized_execution_route(self, envelope: HandoffEnvelope) -> bool:
         """Verify that this Leader issued the exact immutable Worker route."""
 
+        if self._execution_ledger is not None:
+            return self._execution_ledger.authorized_route(envelope)
         retained = self._execution_routes.get(envelope.task_id)
         return retained is not None and retained == envelope
 
     def claim_execution_route(self, envelope: HandoffEnvelope) -> bool:
         """Atomically claim one exact route for scheduler dispatch.
 
-        The mutation is synchronous and process-local. Every retry uses a new
-        canonical route, so a duplicate delivery of an old route is never
-        needed for recovery and can safely be suppressed across Worker
-        instances.
+        With a durable ledger this is an atomic, expiring scheduler lease. The
+        process-local fallback remains a permanent claim for isolated tests.
+        Every semantic retry still receives a new canonical route.
         """
 
         if not self.is_authorized_execution_route(envelope):
             return False
+        if self._execution_ledger is not None:
+            return self._execution_ledger.claim_route(envelope)
         route_digest = self._handoff_sha256(envelope)
         if route_digest in self._dispatched_execution_routes:
             return False
         self._dispatched_execution_routes.add(route_digest)
         return True
+
+    def finish_execution_route(
+        self,
+        envelope: HandoffEnvelope,
+        *,
+        succeeded: bool,
+    ) -> bool:
+        """Seal a durable scheduler lease after the Worker boundary returns.
+
+        An explicit Worker exception is terminal for this immutable execution
+        route; TeamLeader recovery issues a distinct retry route.  A process
+        crash cannot call this method, so its lease remains recoverable after
+        expiry.
+        """
+
+        if self._execution_ledger is None:
+            return self.is_authorized_execution_route(envelope)
+        return self._execution_ledger.finish_route(
+            envelope,
+            status="succeeded" if succeeded else "failed",
+        )
+
+    def recoverable_execution_routes(self) -> tuple[HandoffEnvelope, ...]:
+        """Return pending or expired routes for an explicit startup replay."""
+
+        if self._execution_ledger is None:
+            return ()
+        return tuple(route.envelope for route in self._execution_ledger.recoverable_routes())
+
+    def _require_parent_route(
+        self,
+        envelope: HandoffEnvelope,
+        *,
+        producer: str,
+        skill: str,
+    ) -> HandoffEnvelope:
+        """Bind a Worker result to the exact Leader route that caused it."""
+
+        if envelope.parent_task_id is None or envelope.parent_handoff_sha256 is None:
+            raise AgentError("Worker result is missing its source route binding.")
+        parent = self._execution_routes.get(envelope.parent_task_id)
+        if (
+            parent is None
+            or parent.issue_id != envelope.issue_id
+            or parent.producer != self.name
+            or parent.consumer != producer
+            or parent.skill != skill
+            or self._handoff_sha256(parent) != envelope.parent_handoff_sha256
+            or not self.is_authorized_execution_route(parent)
+        ):
+            raise AgentError("Worker result does not match a canonical source route.")
+        if self._execution_ledger is not None:
+            dispatched = self._execution_ledger.route_was_dispatched(parent)
+        else:
+            dispatched = self._handoff_sha256(parent) in self._dispatched_execution_routes
+        if not dispatched:
+            raise AgentError("Worker result source route was never dispatched.")
+        return parent
+
+    def _require_worker_result(
+        self,
+        payload: dict[str, Any],
+        *,
+        producer: str,
+        skill: str,
+        artifact_type: str,
+        status: HandoffStatus,
+    ) -> HandoffEnvelope:
+        """Validate a typed Worker-to-Leader result and its causal parent."""
+
+        if payload.get("envelope_version") != "1.0":
+            raise AgentError("Canonical Worker result hand-off is required.")
+        try:
+            envelope = HandoffEnvelope.model_validate(payload)
+        except ValueError as exc:
+            raise AgentError("Worker result hand-off is invalid.") from exc
+        if (
+            envelope.producer != producer
+            or envelope.consumer != self.name
+            or envelope.skill != skill
+            or envelope.artifact.type != artifact_type
+            or envelope.status is not status
+            or envelope.artifact.inline is None
+            or not envelope.artifact.verify_integrity()
+            or envelope.trace_id != f"{envelope.run_id}:{envelope.task_id}"
+            or envelope.idempotency_key
+            != (f"{envelope.run_id}:{envelope.task_id}:{envelope.consumer}:{envelope.skill}")
+        ):
+            raise AgentError("Worker result hand-off contract does not match.")
+        self._require_parent_route(
+            envelope,
+            producer=producer,
+            skill=skill,
+        )
+        return envelope
 
     def _canonical_coder_model_call_route(
         self,
@@ -368,16 +494,13 @@ class TeamLeader(BaseAgent):
     ) -> HandoffEnvelope:
         """Resolve a Coder output to its immutable model-call route."""
 
-        route_digest = self._coder_model_call_routes.get(
-            (issue_id, model_call_attempt)
-        )
+        route_digest = self._coder_model_call_routes.get((issue_id, model_call_attempt))
         if route_digest is None:
             raise AgentError("Canonical Coder model-call route is unavailable.")
         matches = [
             route
             for route in self._execution_routes.values()
-            if route.issue_id == issue_id
-            and self._handoff_sha256(route) == route_digest
+            if route.issue_id == issue_id and self._handoff_sha256(route) == route_digest
         ]
         if len(matches) != 1:
             raise AgentError("Canonical Coder generation route is ambiguous.")
@@ -417,10 +540,7 @@ class TeamLeader(BaseAgent):
                 "execution_attempt": route_claim[1],
             }
         self._handled_execution_failures[failure_id] = dict(payload)
-        if (
-            route_claim is not None
-            and self._execution_route_claims.get(route_claim) == failure_id
-        ):
+        if route_claim is not None and self._execution_route_claims.get(route_claim) == failure_id:
             self._execution_route_outcomes[route_claim] = dict(payload)
         await self._emit_event("failure.handled", payload)
 
@@ -459,9 +579,7 @@ class TeamLeader(BaseAgent):
             "idempotent": True,
             "issue_id": failure.issue_id,
             "claimed_failure_id": claimed_failure_id,
-            "claimed_resolution": (
-                prior.get("resolution") if prior is not None else "pending"
-            ),
+            "claimed_resolution": (prior.get("resolution") if prior is not None else "pending"),
             "route_claim": {
                 "handoff_sha256": route_claim[0],
                 "execution_attempt": route_claim[1],
@@ -495,9 +613,7 @@ class TeamLeader(BaseAgent):
             canonical_issue = (
                 issue if isinstance(issue, IssueData) else IssueData.model_validate(issue)
             )
-            canonical_tier = (
-                tier if isinstance(tier, ComplexityLevel) else ComplexityLevel(tier)
-            )
+            canonical_tier = tier if isinstance(tier, ComplexityLevel) else ComplexityLevel(tier)
             canonical_located = (
                 located_context
                 if isinstance(located_context, LocatedContext)
@@ -509,8 +625,7 @@ class TeamLeader(BaseAgent):
                 else Patch.model_validate(previous_patch)
             )
             if any(
-                isinstance(value, bool)
-                for value in (issue_id, patch_attempt, model_call_attempt)
+                isinstance(value, bool) for value in (issue_id, patch_attempt, model_call_attempt)
             ):
                 raise TypeError("Retry context ordinals must be integers")
             canonical_issue_id = int(issue_id)
@@ -523,9 +638,7 @@ class TeamLeader(BaseAgent):
         if not 1 <= canonical_attempt <= _MAX_CODER_GENERATION_ATTEMPTS:
             raise AgentError("Retry context patch attempt is outside the bounded budget.")
         if (
-            not 1
-            <= canonical_model_call_attempt
-            <= _MAX_CODER_GENERATION_ATTEMPTS
+            not 1 <= canonical_model_call_attempt <= _MAX_CODER_GENERATION_ATTEMPTS
             or canonical_model_call_attempt < canonical_attempt
         ):
             raise AgentError("Retry context model-call attempt is outside the budget.")
@@ -584,7 +697,9 @@ class TeamLeader(BaseAgent):
         pipeline including the human approval gate.
         """
         async with self._trace_span(
-            "decompose_task", issue_id=issue.issue_number, tier=classification.complexity_level.value
+            "decompose_task",
+            issue_id=issue.issue_number,
+            tier=classification.complexity_level.value,
         ):
             tier = classification.complexity_level
             issue_id = issue.issue_number
@@ -602,9 +717,7 @@ class TeamLeader(BaseAgent):
             # T1 issues are trivial (lint/typo) — localization adds no value
             # and only burns tokens, so skip straight to coding.
             if tier is ComplexityLevel.T1:
-                sequence = tuple(
-                    step for step in _STANDARD_PIPELINE if step[0] != "LocatorAgent"
-                )
+                sequence = tuple(step for step in _STANDARD_PIPELINE if step[0] != "LocatorAgent")
 
             previous_id: str | None = None
             for idx, (agent, skill) in enumerate(sequence):
@@ -615,9 +728,7 @@ class TeamLeader(BaseAgent):
                     "issue": issue.model_dump(mode="json"),
                 }
                 if classification is not None:
-                    task_input["classification"] = classification.model_dump(
-                        mode="json"
-                    )
+                    task_input["classification"] = classification.model_dump(mode="json")
                 depends_on = [previous_id] if previous_id else []
                 tasks.append(
                     Task(
@@ -744,13 +855,11 @@ class TeamLeader(BaseAgent):
                     prompt,
                     model=self.identity.model,
                     temperature=self.identity.temperature,
-                    system=self.identity.description,
+                    system=self.system_prompt,
                 )
                 decision = self._parse_arbitration(raw, conflict)
 
-            self._ensure_context(conflict.issue_id)["last_decision"] = (
-                decision.resolution
-            )
+            self._ensure_context(conflict.issue_id)["last_decision"] = decision.resolution
             logger.info(
                 "team_leader.arbitrated",
                 issue_id=conflict.issue_id,
@@ -770,8 +879,7 @@ class TeamLeader(BaseAgent):
 
     def _build_arbitration_prompt(self, conflict: Conflict) -> str:
         positions = "\n".join(
-            f"- {party}: {position}"
-            for party, position in conflict.positions.items()
+            f"- {party}: {position}" for party, position in conflict.positions.items()
         )
         return (
             "You are the Team Leader arbitrating a conflict between agents.\n"
@@ -818,9 +926,7 @@ class TeamLeader(BaseAgent):
         The strict ``agent.failed`` event path below is the only path that may
         emit a real retry, because it can prove canonical route ownership.
         """
-        error_digest = hashlib.sha256(
-            error.encode("utf-8", errors="replace")
-        ).hexdigest()
+        error_digest = hashlib.sha256(error.encode("utf-8", errors="replace")).hexdigest()
         async with self._trace_span(
             "handle_failure", issue_id=issue_id, failed_agent=failed_agent, attempt=attempt
         ):
@@ -907,7 +1013,26 @@ class TeamLeader(BaseAgent):
                 },
             )
             return
-        self._ensure_context(issue.issue_number)
+        context = self._ensure_context(issue.issue_number)
+        issue_payload = issue.model_dump(mode="json")
+        existing_issue = context.get("issue")
+        if existing_issue is not None and existing_issue != issue_payload:
+            await self._emit_event(
+                "issue.rejected",
+                {
+                    "schema_version": "devflow.issue-rejection/v1",
+                    "issue_id": issue.issue_number,
+                    "reason": "issue_identity_conflict",
+                },
+            )
+            return
+        context["issue"] = issue_payload
+        revision = payload.get("repository_revision")
+        if isinstance(revision, str) and revision.strip():
+            context["repository_revision"] = revision.strip()
+        else:
+            context.setdefault("repository_revision", "unresolved-local")
+        context.setdefault("create_pr", bool(payload.get("create_pr", False)))
         self._set_lifecycle(issue.issue_number, IssueLifecycle.NEW)
         # Kick off triage — classification is the first step of decomposition.
         await self.route_task(
@@ -922,6 +1047,110 @@ class TeamLeader(BaseAgent):
                 # The real tier is Triage's output; use the conservative
                 # scheduling policy until that classification exists.
                 tier=ComplexityLevel.T3,
+            )
+        )
+
+    async def _on_triage_completed(self, payload: dict[str, Any]) -> None:
+        incoming = self._require_worker_result(
+            payload,
+            producer="TriageAgent",
+            skill="issue-classifier",
+            artifact_type="ClassifiedIssue",
+            status=HandoffStatus.READY,
+        )
+        result = incoming.artifact.inline
+        assert result is not None
+        if set(result) != {"issue_id", "classification", "tier", "duplicate_of"}:
+            raise AgentError("Triage result fields do not match the contract.")
+        try:
+            issue_id_raw = result["issue_id"]
+            if isinstance(issue_id_raw, bool):
+                raise TypeError("issue_id must be an integer")
+            issue_id = int(issue_id_raw)
+            classification = IssueClassification.model_validate(result["classification"])
+            tier = ComplexityLevel(result["tier"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AgentError(f"Triage result is invalid: {exc}") from exc
+        if (
+            issue_id != incoming.issue_id
+            or classification.complexity_level is not tier
+            or classification.duplicate_of != result["duplicate_of"]
+        ):
+            raise AgentError("Triage result metadata is inconsistent.")
+        context = self._issue_context.get(issue_id)
+        if context is None or "issue" not in context:
+            raise AgentError("Triage result has no canonical issue context.")
+        prior = context.get("classification")
+        classified_payload = classification.model_dump(mode="json")
+        if prior is not None and prior != classified_payload:
+            raise AgentError("Triage result conflicts with canonical classification.")
+        context["classification"] = classified_payload
+        context["tier"] = tier.value
+        self._set_lifecycle(issue_id, IssueLifecycle.TRIAGED)
+        self._set_lifecycle(issue_id, IssueLifecycle.LOCATING)
+        await self.route_task(
+            Task(
+                task_id=f"{issue_id}-2-locatoragent",
+                agent="LocatorAgent",
+                skill="code-root-cause",
+                input_data={
+                    "issue_id": issue_id,
+                    "issue": context["issue"],
+                    "tier": tier.value,
+                },
+                depends_on=[incoming.task_id],
+                tier=tier,
+            )
+        )
+
+    async def _on_locator_completed(self, payload: dict[str, Any]) -> None:
+        incoming = self._require_worker_result(
+            payload,
+            producer="LocatorAgent",
+            skill="code-root-cause",
+            artifact_type="LocatedContext",
+            status=HandoffStatus.READY,
+        )
+        result = incoming.artifact.inline
+        assert result is not None
+        if set(result) != {"issue_id", "tier", "located_context"}:
+            raise AgentError("Locator result fields do not match the contract.")
+        try:
+            issue_id_raw = result["issue_id"]
+            if isinstance(issue_id_raw, bool):
+                raise TypeError("issue_id must be an integer")
+            issue_id = int(issue_id_raw)
+            tier = ComplexityLevel(result["tier"])
+            located = LocatedContext.model_validate(result["located_context"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AgentError(f"Locator result is invalid: {exc}") from exc
+        context = self._issue_context.get(issue_id)
+        if (
+            issue_id != incoming.issue_id
+            or context is None
+            or context.get("tier") != tier.value
+            or "issue" not in context
+        ):
+            raise AgentError("Locator result does not match canonical issue context.")
+        located_payload = located.model_dump(mode="json")
+        prior = context.get("located_context")
+        if prior is not None and prior != located_payload:
+            raise AgentError("Locator result conflicts with canonical context.")
+        context["located_context"] = located_payload
+        self._set_lifecycle(issue_id, IssueLifecycle.CODING)
+        await self.route_task(
+            Task(
+                task_id=f"{issue_id}-3-coderagent",
+                agent="CoderAgent",
+                skill="patch-generator",
+                input_data={
+                    "issue_id": issue_id,
+                    "issue": context["issue"],
+                    "tier": tier.value,
+                    "located_context": located_payload,
+                },
+                depends_on=[incoming.task_id],
+                tier=tier,
             )
         )
 
@@ -943,10 +1172,7 @@ class TeamLeader(BaseAgent):
         # for semantic progression, so a generic completion can never advance
         # the issue even when failure routing itself was rejected.
         if agent == "TesterAgent":
-            retry_pending = (
-                "pending_test_retry" in context
-                or "semantic_test_failure" in context
-            )
+            retry_pending = "pending_test_retry" in context or "semantic_test_failure" in context
             await self._emit_event(
                 "agent.completion.ignored",
                 {
@@ -1075,10 +1301,7 @@ class TeamLeader(BaseAgent):
                 model_call_attempt = self._coder_model_call_attempt(route)
             except AgentError:
                 model_call_attempt = None
-            if (
-                model_call_attempt is None
-                or model_call_attempt >= _MAX_CODER_GENERATION_ATTEMPTS
-            ):
+            if model_call_attempt is None or model_call_attempt >= _MAX_CODER_GENERATION_ATTEMPTS:
                 self._set_lifecycle(failure.issue_id, IssueLifecycle.REJECTED)
                 await self._record_failure_outcome(
                     failure_id=failure.failure_id,
@@ -1117,8 +1340,7 @@ class TeamLeader(BaseAgent):
                 not isinstance(request, dict)
                 or not isinstance(dependencies, list)
                 or any(
-                    not isinstance(dependency, str) or not dependency
-                    for dependency in dependencies
+                    not isinstance(dependency, str) or not dependency for dependency in dependencies
                 )
             ):
                 await self._record_failure_outcome(
@@ -1141,9 +1363,7 @@ class TeamLeader(BaseAgent):
                 if failure.error_code == "CANDIDATE_INVALID"
                 else "MODEL_CALL_FAILED"
             )
-            inline["depends_on"] = list(
-                dict.fromkeys([*dependencies, route.task_id])
-            )
+            inline["depends_on"] = list(dict.fromkeys([*dependencies, route.task_id]))
             inline["generation_retry"] = {
                 "schema_version": "devflow.generation-retry/v1",
                 "model_call_attempt": next_model_call_attempt,
@@ -1155,8 +1375,7 @@ class TeamLeader(BaseAgent):
             if generation_budget is not None:
                 if (
                     not isinstance(generation_budget, dict)
-                    or generation_budget.get("schema_version")
-                    != "devflow.generation-budget/v1"
+                    or generation_budget.get("schema_version") != "devflow.generation-budget/v1"
                 ):
                     await self._record_failure_outcome(
                         failure_id=failure.failure_id,
@@ -1171,9 +1390,7 @@ class TeamLeader(BaseAgent):
                     )
                     return
                 generation_budget["model_call_attempt"] = next_model_call_attempt
-                generation_budget["max_model_calls"] = (
-                    _MAX_CODER_GENERATION_ATTEMPTS
-                )
+                generation_budget["max_model_calls"] = _MAX_CODER_GENERATION_ATTEMPTS
             retry_envelope = HandoffEnvelope.create(
                 run_id=route.run_id,
                 issue_id=route.issue_id,
@@ -1259,9 +1476,7 @@ class TeamLeader(BaseAgent):
             return
         prior_retry = inline.get("execution_retry")
         root_task_id = (
-            prior_retry.get("root_task_id")
-            if isinstance(prior_retry, dict)
-            else route.task_id
+            prior_retry.get("root_task_id") if isinstance(prior_retry, dict) else route.task_id
         )
         dependencies = inline.get("depends_on", [])
         if (
@@ -1336,28 +1551,14 @@ class TeamLeader(BaseAgent):
         and retained by this Leader instance.
         """
 
-        if payload.get("envelope_version") != "1.0":
-            raise AgentError("Canonical Coder candidate hand-off is required.")
-        try:
-            incoming = HandoffEnvelope.model_validate(payload)
-        except ValueError as exc:
-            raise AgentError("Invalid Coder candidate hand-off.") from exc
-        if (
-            incoming.producer != "CoderAgent"
-            or incoming.consumer != "TesterAgent"
-            or incoming.skill != "patch-generator"
-            or incoming.artifact.type != "PatchCandidate"
-            or incoming.artifact.schema_version != "1.2"
-            or incoming.status is not HandoffStatus.READY
-            or incoming.trace_id != f"{incoming.run_id}:{incoming.task_id}"
-            or incoming.idempotency_key
-            != (
-                f"{incoming.run_id}:{incoming.task_id}:"
-                f"{incoming.consumer}:{incoming.skill}"
-            )
-            or incoming.artifact.inline is None
-            or not incoming.artifact.verify_integrity()
-        ):
+        incoming = self._require_worker_result(
+            payload,
+            producer="CoderAgent",
+            skill="patch-generator",
+            artifact_type="PatchCandidate",
+            status=HandoffStatus.READY,
+        )
+        if incoming.artifact.schema_version != "1.2":
             raise AgentError("Coder candidate hand-off contract does not match.")
 
         try:
@@ -1386,14 +1587,8 @@ class TeamLeader(BaseAgent):
             or route.trace_id != f"{route.run_id}:{route.task_id}"
             or route.idempotency_key
             != f"{route.run_id}:{route.task_id}:{route.consumer}:{route.skill}"
-            or (
-                model_call_attempt == 1
-                and route.status is not HandoffStatus.READY
-            )
-            or (
-                model_call_attempt > 1
-                and route.status is not HandoffStatus.RETRY
-            )
+            or (model_call_attempt == 1 and route.status is not HandoffStatus.READY)
+            or (model_call_attempt > 1 and route.status is not HandoffStatus.RETRY)
         ):
             raise AgentError("Coder candidate does not match its canonical route.")
 
@@ -1461,9 +1656,7 @@ class TeamLeader(BaseAgent):
                     raise TypeError("retry_attempt must be an integer")
                 request_attempt = int(request_attempt_raw)
                 previous_patch = Patch.model_validate(request["previous_patch"])
-                evidence = TestFailureEvidence.model_validate(
-                    request["test_failure_evidence"]
-                )
+                evidence = TestFailureEvidence.model_validate(request["test_failure_evidence"])
             except (KeyError, TypeError, ValueError) as exc:
                 raise AgentError(f"Canonical Coder retry input is invalid: {exc}") from exc
             if (
@@ -1503,17 +1696,266 @@ class TeamLeader(BaseAgent):
                 payload=candidate_payload,
             )
             self._remember_execution_route(tester_route)
-            self._tester_candidate_routes[candidate_key] = tester_route.model_copy(
-                deep=True
-            )
+            self._tester_candidate_routes[candidate_key] = tester_route.model_copy(deep=True)
         elif tester_route.artifact.inline != candidate_payload:
-            raise AgentError(
-                "Coder generation attempt conflicts with its retained Tester route."
-            )
+            raise AgentError("Coder generation attempt conflicts with its retained Tester route.")
         self._set_lifecycle(issue_id, IssueLifecycle.TESTING)
         await self._emit_event(
             "task.route.testeragent",
             tester_route.model_dump(mode="json"),
+        )
+
+    async def _on_test_passed(self, payload: dict[str, Any]) -> None:
+        """Verify Tester evidence and issue the sole Reviewer route."""
+
+        incoming = self._require_worker_result(
+            payload,
+            producer="TesterAgent",
+            skill="test-runner",
+            artifact_type="TestEvidence",
+            status=HandoffStatus.READY,
+        )
+        result_payload = incoming.artifact.inline
+        assert result_payload is not None
+        expected_fields = {
+            "issue_id",
+            "candidate_digest",
+            "test_result",
+            "test_result_redacted",
+            "failing_tests",
+        }
+        if set(result_payload) != expected_fields:
+            raise AgentError("Passing test result fields do not match the contract.")
+        try:
+            issue_id_raw = result_payload["issue_id"]
+            if isinstance(issue_id_raw, bool):
+                raise TypeError("issue_id must be an integer")
+            issue_id = int(issue_id_raw)
+            tests = TestRunResult.model_validate(result_payload["test_result"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AgentError(f"Passing test result is invalid: {exc}") from exc
+        comparison = tests.baseline_comparison
+        attestation = tests.integrity_attestation
+        context = self._issue_context.get(issue_id)
+        if context is None:
+            raise AgentError("Passing test result has no canonical issue context.")
+        tier = ComplexityLevel(context["tier"])
+        if (
+            issue_id != incoming.issue_id
+            or tests.failed != 0
+            or tests.errors != 0
+            or comparison is None
+            or comparison.regression
+            or comparison.new_failures
+            or attestation is None
+            or not attestation.verified
+            or attestation.full_suite
+            is not (tier in {ComplexityLevel.T3, ComplexityLevel.T4, ComplexityLevel.T5})
+            or result_payload["failing_tests"] != []
+        ):
+            raise AgentError("Tester pass claim does not satisfy the regression gate.")
+        required = {"issue", "tier", "located_context", "previous_patch"}
+        if required - set(context):
+            raise AgentError("Passing test result has incomplete canonical context.")
+        patch = Patch.model_validate(context["previous_patch"])
+        patch_digest = canonical_artifact_digest(patch)
+        if result_payload["candidate_digest"] != patch_digest:
+            raise AgentError("Passing test result does not match the candidate digest.")
+        tests_payload = tests.model_dump(mode="json")
+        prior_tests = context.get("test_result")
+        if prior_tests is not None and prior_tests != tests_payload:
+            raise AgentError("Passing test result conflicts with canonical evidence.")
+        context["test_result"] = tests_payload
+        context["test_result_digest"] = canonical_artifact_digest(tests)
+        context.pop("pending_test_retry", None)
+        context.pop("semantic_test_failure", None)
+        self._set_lifecycle(issue_id, IssueLifecycle.REVIEWING)
+        await self.route_task(
+            Task(
+                task_id=(f"{issue_id}-5-revieweragent-{patch_digest[:12]}"),
+                agent="ReviewerAgent",
+                skill="pr-reviewer",
+                input_data={
+                    "issue_id": issue_id,
+                    "tier": tier.value,
+                    "patch": patch.model_dump(mode="json"),
+                    "test_result": tests_payload,
+                    "create_pr": bool(context.get("create_pr", False)),
+                },
+                depends_on=[incoming.task_id],
+                tier=tier,
+            )
+        )
+
+    async def _on_review_approved(self, payload: dict[str, Any]) -> None:
+        """Accept an autonomous review and route post-review memory capture."""
+
+        incoming = self._require_worker_result(
+            payload,
+            producer="ReviewerAgent",
+            skill="pr-reviewer",
+            artifact_type="ReviewDecision",
+            status=HandoffStatus.READY,
+        )
+        review_payload = incoming.artifact.inline
+        assert review_payload is not None
+        if set(review_payload) != {"issue_id", "tier", "review"}:
+            raise AgentError("Reviewer approval fields do not match the contract.")
+        try:
+            issue_id_raw = review_payload["issue_id"]
+            if isinstance(issue_id_raw, bool):
+                raise TypeError("issue_id must be an integer")
+            issue_id = int(issue_id_raw)
+            tier = ComplexityLevel(review_payload["tier"])
+            review = ReviewResult.model_validate(review_payload["review"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AgentError(f"Reviewer approval is invalid: {exc}") from exc
+        if (
+            issue_id != incoming.issue_id
+            or review.decision is not ReviewDecision.APPROVED
+            or review.requires_human_approval
+            or tier in {ComplexityLevel.T4, ComplexityLevel.T5}
+        ):
+            raise AgentError("Reviewer approval metadata is inconsistent.")
+        context = self._issue_context.get(issue_id)
+        if context is None or context.get("tier") != tier.value:
+            raise AgentError("Reviewer approval has no canonical issue context.")
+        required = {
+            "issue",
+            "located_context",
+            "previous_patch",
+            "test_result",
+            "repository_revision",
+        }
+        if required - set(context):
+            raise AgentError("Reviewer approval has incomplete canonical evidence.")
+        await self._route_experience_after_approval(
+            issue_id=issue_id,
+            tier=tier,
+            run_id=incoming.run_id,
+            source_task_id=incoming.task_id,
+            review=review,
+            approval=None,
+        )
+
+    async def _route_experience_after_approval(
+        self,
+        *,
+        issue_id: int,
+        tier: ComplexityLevel,
+        run_id: str,
+        source_task_id: str,
+        review: ReviewResult,
+        approval: ApprovalEvidence | None,
+    ) -> None:
+        """Bind an autonomous or human-approved review and start stage six."""
+
+        context = self._issue_context.get(issue_id)
+        if context is None:
+            raise AgentError("Approved review has no canonical issue context.")
+        review_data = review.model_dump(mode="json")
+        prior_review = context.get("review")
+        if prior_review is not None and prior_review != review_data:
+            raise AgentError("Approved review conflicts with canonical evidence.")
+        context["review"] = review_data
+        context["review_digest"] = canonical_artifact_digest(review)
+        if approval is not None:
+            context["human_approval"] = approval.model_dump(mode="json")
+            context["human_approval_digest"] = canonical_artifact_digest(approval)
+        patch = Patch.model_validate(context["previous_patch"])
+        tests = TestRunResult.model_validate(context["test_result"])
+        terminal_receipt = VerifiedTerminalReceipt.create(
+            run_id=run_id,
+            issue_id=issue_id,
+            repository_revision=str(context["repository_revision"]),
+            patch=patch,
+            test_result=tests,
+            review=review,
+            approval=approval,
+        )
+        context["terminal_receipt"] = terminal_receipt.model_dump(mode="json")
+        patch_digest = canonical_artifact_digest(patch)
+        self._set_lifecycle(issue_id, IssueLifecycle.DISTILLING)
+        await self.route_task(
+            Task(
+                task_id=f"{issue_id}-6-experience-{patch_digest[:12]}",
+                agent="ReviewerAgent",
+                skill="experience-distiller",
+                input_data={
+                    "operation": "distill_experience",
+                    "issue_id": issue_id,
+                    "issue": context["issue"],
+                    "tier": tier.value,
+                    "repository_revision": context["repository_revision"],
+                    "located_context": context["located_context"],
+                    "patch": context["previous_patch"],
+                    "test_result": context["test_result"],
+                    "review": review_data,
+                    "trace_id": run_id,
+                    "terminal_receipt": context["terminal_receipt"],
+                    **(
+                        {"human_approval": approval.model_dump(mode="json")}
+                        if approval is not None
+                        else {}
+                    ),
+                },
+                depends_on=[source_task_id],
+                tier=tier,
+            )
+        )
+
+    async def _on_experience_completed(self, payload: dict[str, Any]) -> None:
+        """Seal the workflow only after the reviewed experience stage returns."""
+
+        incoming = self._require_worker_result(
+            payload,
+            producer="ReviewerAgent",
+            skill="experience-distiller",
+            artifact_type="ExperiencePattern",
+            status=HandoffStatus.READY,
+        )
+        result = incoming.artifact.inline
+        assert result is not None
+        if set(result) != {"issue_id", "experience"}:
+            raise AgentError("Experience result fields do not match the contract.")
+        try:
+            issue_id_raw = result["issue_id"]
+            if isinstance(issue_id_raw, bool):
+                raise TypeError("issue_id must be an integer")
+            issue_id = int(issue_id_raw)
+            experience = ExperiencePattern.model_validate(result["experience"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AgentError(f"Experience result is invalid: {exc}") from exc
+        context = self._issue_context.get(issue_id)
+        if context is None:
+            raise AgentError("Experience result has no canonical issue context.")
+        if (
+            issue_id != incoming.issue_id
+            or experience.provenance.issue_id != issue_id
+            or experience.provenance.candidate_digest
+            != canonical_artifact_digest(Patch.model_validate(context["previous_patch"]))
+            or experience.provenance.review_digest != context.get("review_digest")
+            or experience.outcome != ReviewDecision.APPROVED.value
+            or not experience.redaction.secret_scan_passed
+            or not experience.redaction.pii_scan_passed
+        ):
+            raise AgentError("Experience result does not match terminal evidence.")
+        context["experience"] = experience.model_dump(mode="json")
+        self._set_lifecycle(issue_id, IssueLifecycle.VERIFIED)
+        await self._emit_event(
+            "workflow.completed",
+            {
+                "schema_version": "devflow.workflow-receipt/v1",
+                "run_id": incoming.run_id,
+                "issue_id": issue_id,
+                "terminal_state": IssueLifecycle.VERIFIED.value,
+                "candidate_digest": experience.provenance.candidate_digest,
+                "test_result_digest": context["test_result_digest"],
+                "review_digest": experience.provenance.review_digest,
+                "approval_digest": context.get("human_approval_digest"),
+                "experience_pattern_id": experience.pattern_id,
+                "memory_status": "stored" if experience.stored else "degraded",
+            },
         )
 
     async def _on_review_rejected(self, payload: dict[str, Any]) -> None:
@@ -1535,10 +1977,7 @@ class TeamLeader(BaseAgent):
             or not incoming.artifact.verify_integrity()
             or incoming.trace_id != f"{incoming.run_id}:{incoming.task_id}"
             or incoming.idempotency_key
-            != (
-                f"{incoming.run_id}:{incoming.task_id}:"
-                f"{incoming.consumer}:{incoming.skill}"
-            )
+            != (f"{incoming.run_id}:{incoming.task_id}:{incoming.consumer}:{incoming.skill}")
         ):
             raise AgentError("Reviewer rejection hand-off contract does not match.")
         review_payload = incoming.artifact.inline
@@ -1553,10 +1992,7 @@ class TeamLeader(BaseAgent):
             review = ReviewResult.model_validate(review_payload["review"])
         except (KeyError, TypeError, ValueError) as exc:
             raise AgentError(f"Reviewer rejection payload is invalid: {exc}") from exc
-        if (
-            issue_id != incoming.issue_id
-            or review.decision is not ReviewDecision.CHANGES_REQUESTED
-        ):
+        if issue_id != incoming.issue_id or review.decision is not ReviewDecision.CHANGES_REQUESTED:
             raise AgentError("Reviewer rejection metadata is inconsistent.")
 
         context = self._ensure_context(issue_id)
@@ -1577,27 +2013,14 @@ class TeamLeader(BaseAgent):
         )
 
     async def _on_test_failed(self, payload: dict[str, Any]) -> None:
-        if payload.get("envelope_version") != "1.0":
-            raise AgentError(
-                "Canonical retry context is incomplete: typed Tester hand-off required."
-            )
-        try:
-            incoming = HandoffEnvelope.model_validate(payload)
-        except ValueError as exc:
-            raise AgentError("Invalid Tester failure hand-off.") from exc
-        if (
-            incoming.producer != "TesterAgent"
-            or incoming.consumer != "TeamLeader"
-            or incoming.skill != "test-runner"
-            or incoming.artifact.type != "TestEvidence"
-            or incoming.status is not HandoffStatus.RETRY
-            or incoming.trace_id != f"{incoming.run_id}:{incoming.task_id}"
-            or incoming.idempotency_key
-            != (
-                f"{incoming.run_id}:{incoming.task_id}:"
-                f"{incoming.consumer}:{incoming.skill}"
-            )
-        ):
+        incoming = self._require_worker_result(
+            payload,
+            producer="TesterAgent",
+            skill="test-runner",
+            artifact_type="TestEvidence",
+            status=HandoffStatus.RETRY,
+        )
+        if incoming.artifact.schema_version != "1.0":
             raise AgentError("Tester failure hand-off contract does not match.")
 
         failure_payload = self._handoff_payload(payload)
@@ -1627,10 +2050,7 @@ class TeamLeader(BaseAgent):
         }:
             raise AgentError("Test failure candidate digest is inconsistent.")
         supplied_failing_tests = failure_payload.get("failing_tests")
-        if (
-            supplied_failing_tests is not None
-            and supplied_failing_tests != evidence.failing_tests
-        ):
+        if supplied_failing_tests is not None and supplied_failing_tests != evidence.failing_tests:
             raise AgentError("Test failure names are inconsistent with the evidence.")
 
         context = self._issue_context.get(issue_id)
@@ -1659,9 +2079,8 @@ class TeamLeader(BaseAgent):
         if issue.issue_number != issue_id:
             raise AgentError("Canonical retry issue does not match the failure evidence.")
         previous_digest = canonical_artifact_digest(previous_patch)
-        if (
-            context["previous_patch_digest"] != previous_digest
-            or not evidence.verifies_candidate(previous_patch)
+        if context["previous_patch_digest"] != previous_digest or not evidence.verifies_candidate(
+            previous_patch
         ):
             raise AgentError("Test failure evidence does not match the previous patch digest.")
 
@@ -1762,21 +2181,152 @@ class TeamLeader(BaseAgent):
         )
 
     async def _on_approval_required(self, payload: dict[str, Any]) -> None:
-        payload = self._handoff_payload(payload)
-        issue_id = payload.get("issue_id")
-        if issue_id is None:
-            return
-        self._ensure_context(int(issue_id))["approval_required"] = True
+        """Validate a blocked Reviewer result and publish one exact human target."""
+
+        incoming = self._require_worker_result(
+            payload,
+            producer="ReviewerAgent",
+            skill="pr-reviewer",
+            artifact_type="ReviewDecision",
+            status=HandoffStatus.BLOCKED,
+        )
+        review_payload = incoming.artifact.inline
+        assert review_payload is not None
+        if set(review_payload) != {"issue_id", "tier", "review"}:
+            raise AgentError("Human approval request fields do not match the contract.")
+        try:
+            issue_id_raw = review_payload["issue_id"]
+            if isinstance(issue_id_raw, bool):
+                raise TypeError("issue_id must be an integer")
+            issue_id = int(issue_id_raw)
+            tier = ComplexityLevel(review_payload["tier"])
+            review = ReviewResult.model_validate(review_payload["review"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AgentError(f"Human approval request is invalid: {exc}") from exc
+        if (
+            issue_id != incoming.issue_id
+            or tier not in {ComplexityLevel.T4, ComplexityLevel.T5}
+            or review.decision is not ReviewDecision.HUMAN_APPROVAL_REQUIRED
+            or not review.requires_human_approval
+        ):
+            raise AgentError("Human approval request metadata is inconsistent.")
+        context = self._issue_context.get(issue_id)
+        if context is None or context.get("tier") != tier.value:
+            raise AgentError("Human approval request has no canonical issue context.")
+        required = {
+            "repository_revision",
+            "previous_patch",
+            "test_result",
+            "test_result_digest",
+        }
+        if required - set(context):
+            raise AgentError("Human approval request has incomplete canonical evidence.")
+        patch = Patch.model_validate(context["previous_patch"])
+        review_digest = canonical_artifact_digest(review)
+        tier_value: Literal["T4", "T5"] = "T4" if tier is ComplexityLevel.T4 else "T5"
+        target = HumanApprovalTarget.create(
+            run_id=incoming.run_id,
+            issue_id=issue_id,
+            tier=tier_value,
+            repository_revision=str(context["repository_revision"]),
+            candidate_digest=canonical_artifact_digest(patch),
+            test_result_digest=str(context["test_result_digest"]),
+            review_digest=review_digest,
+            source_task_id=incoming.task_id,
+        )
+        target_data = target.model_dump(mode="json")
+        prior_target = context.get("human_approval_target")
+        if prior_target is not None and prior_target != target_data:
+            raise AgentError("Human approval target conflicts with canonical evidence.")
+        context["pending_review"] = review.model_dump(mode="json")
+        context["pending_review_digest"] = review_digest
+        context["human_approval_target"] = target_data
+        context["approval_required"] = True
+        self._set_lifecycle(issue_id, IssueLifecycle.PAUSED)
         logger.info(
             "team_leader.approval_required",
             issue_id=issue_id,
-            tier=payload.get("tier"),
+            tier=tier.value,
         )
-        # Block until a human approves — the pipeline pauses here.
         await self._emit_event(
             "pipeline.paused",
-            {"issue_id": issue_id, "reason": "awaiting_human_approval"},
+            {
+                "schema_version": "devflow.pipeline-pause/v1",
+                "issue_id": issue_id,
+                "tier": tier.value,
+                "reason": "awaiting_human_approval",
+                "approval_target": target_data,
+            },
         )
+
+    async def resume_with_approval(
+        self,
+        issue_id: int,
+        evidence: ApprovalEvidence | dict[str, Any],
+    ) -> None:
+        """Consume one externally issued approval and resume stage six."""
+
+        try:
+            approval = (
+                evidence
+                if isinstance(evidence, ApprovalEvidence)
+                else ApprovalEvidence.model_validate(evidence)
+            )
+        except ValueError as exc:
+            raise AgentError("Human approval evidence is invalid.") from exc
+        context = self._issue_context.get(issue_id)
+        if context is None or self.get_lifecycle(issue_id) is not IssueLifecycle.PAUSED:
+            raise AgentError("Issue is not paused for human approval.")
+        try:
+            target = HumanApprovalTarget.model_validate(context["human_approval_target"])
+            pending_review = ReviewResult.model_validate(context["pending_review"])
+            tier = ComplexityLevel(context["tier"])
+        except (KeyError, ValueError) as exc:
+            raise AgentError("Paused human approval state is invalid.") from exc
+        if self._approval_verifier is None or not self._approval_verifier.verify(
+            approval,
+            action=target.action,
+            target=f"issue:{issue_id}",
+            artifact_digest=target.target_sha256,
+        ):
+            raise AgentError("Human approval signature, scope, or freshness is invalid.")
+        evidence_digest = canonical_artifact_digest(approval)
+        already_authorized = context.get("approved_resume_digest") == evidence_digest
+        if not already_authorized:
+            if self._execution_ledger is not None:
+                consumed = self._execution_ledger.consume_approval(
+                    approval_id=approval.approval_id,
+                    issue_id=issue_id,
+                    target_sha256=target.target_sha256,
+                    evidence_sha256=evidence_digest,
+                )
+            else:
+                consumed = approval.approval_id not in self._consumed_approval_ids
+                if consumed:
+                    self._consumed_approval_ids.add(approval.approval_id)
+            if not consumed:
+                raise AgentError("Human approval was already consumed.")
+            context["approved_resume_digest"] = evidence_digest
+            context["approved_resume_evidence"] = approval.model_dump(mode="json")
+        final_review = ReviewResult(
+            decision=ReviewDecision.APPROVED,
+            findings=pending_review.findings,
+            summary=(
+                "Exact T4/T5 approval target was verified by the external human-approval authority."
+            ),
+            pr_url=pending_review.pr_url,
+            requires_human_approval=False,
+        )
+        await self._route_experience_after_approval(
+            issue_id=issue_id,
+            tier=tier,
+            run_id=target.run_id,
+            source_task_id=target.source_task_id,
+            review=final_review,
+            approval=approval,
+        )
+        context["approval_required"] = False
+        context.pop("pending_review", None)
 
     # ------------------------------------------------------------------ #
     # BaseAgent.run — the TeamLeader is reactive; running it directly is a
@@ -1791,11 +2341,7 @@ class TeamLeader(BaseAgent):
         if isinstance(input_data, int):
             state = self.get_lifecycle(input_data)
             return {"issue_id": input_data, "lifecycle": state.value}
-        return {
-            "tracked_issues": {
-                str(iid): state.value for iid, state in self._lifecycle.items()
-            }
-        }
+        return {"tracked_issues": {str(iid): state.value for iid, state in self._lifecycle.items()}}
 
 
 __all__ = ["Conflict", "Decision", "IssueLifecycle", "Task", "TeamLeader"]

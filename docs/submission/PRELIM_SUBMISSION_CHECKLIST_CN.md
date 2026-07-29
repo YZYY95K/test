@@ -3,6 +3,9 @@
 核对日期：2026-07-28。官方赛道页：
 [Global Open-source AI Challenge — Agent Infra](https://www.goaihz.com/tracks)。
 初赛截止 **2026-08-16**；提交当天以报名页面显示的时区、大小和格式限制为准。
+当前公开规则的逐项合规结论见
+[`PRELIM_COMPLIANCE_20260728.md`](PRELIM_COMPLIANCE_20260728.md)，AgentTeams
+五项强制映射见 [`AGENTTEAMS_MAPPING_CN.md`](AGENTTEAMS_MAPPING_CN.md)。
 
 ## 必交材料
 
@@ -11,11 +14,19 @@
   小于 500；仍需以
   报名表计数器为最终标准，标题不粘贴。
 - [x] 12 页最终候选方案已生成两种格式：
-  [PPT](../../outputs/DevFlow_GOAI_2026_初赛方案_20260728.pptx)（51,879 bytes，
-  SHA-256 `03aca4383523193e313d360388a3c45cfb6d9f1cebfeb2909d9d12922d1e7372`）与
-  [PDF](../../outputs/DevFlow_GOAI_2026_初赛方案_20260728.pdf)（1,240,820 bytes，
-  SHA-256 `683b2a471c50dddf7a67b0576566207728ed3a20aeb094e55ee7d862d2b8c6a6`）。
+  [PPT](../../outputs/DevFlow_GOAI_2026_初赛方案_20260728.pptx)（52,153 bytes，
+  SHA-256 `7199d4765b768c1c38938d6a4842df68226417ad1ac6c05657335adcaab1f32d`）与
+  [PDF](../../outputs/DevFlow_GOAI_2026_初赛方案_20260728.pdf)（1,236,379 bytes，
+  SHA-256 `cf0031eb132f65025f830865b9419bd631764b00e0a80035c2e791fc1086ba23`）。
   初赛只需上传其中一种，除非平台允许且团队决定同时提交。
+- [x] 已确认现有 `GOAI_2026_AgentInfra_DevFlow_初赛提交包_v1.3.0_20260728.zip`
+  内的 PPT 为更早候选（SHA-256
+  `03aca4383523193e313d360388a3c45cfb6d9f1cebfeb2909d9d12922d1e7372`），
+  与上述当前成品不同；**旧 ZIP 不得上传**。初赛按官网要求分别
+  粘贴作品简介并上传当前 PPT 或 PDF；如需新 ZIP，必须从最终干净
+  commit 重新构建并复验。
+- [x] 第 5 页集中展示 AgentTeams 五项硬映射：角色编排、任务拆解、上下文传递、
+  协同执行与状态追踪；原生框架对象和 DevFlow 有界扩展另有逐项证据表。
 - [x] PPT/PDF 已完成本地逐页核对：12 页均渲染为 1280×720 检查，模板忠实度
   与画布溢出门通过，未发现中文乱码、截断或重叠；凭据形态扫描零命中；PDF
   未加密且无表单/JavaScript。
@@ -27,13 +38,13 @@
 
 ## 方案材料内容映射
 
-- [ ] 场景价值 25%：用户、痛点、失败成本、可复制工作流与 24 项边界基准。
-- [ ] 多 Agent 25%：六角色身份、DAG、交接摘要、失败返回、幂等与人工门。
-- [ ] Skill 25%：七个 Skill 的契约、触发/拒绝、验证器、所属角色和复用方式。
-- [ ] 工程安全审计 20%：MCP 权限交集、服务端复核、短期能力、审计链、回滚、
+- [x] 场景价值 25%：用户、痛点、失败成本、可复制工作流与 24 项边界基准。
+- [x] 多 Agent 25%：六角色身份、DAG、交接摘要、失败返回、幂等与人工门。
+- [x] Skill 25%：七个 Skill 的契约、触发/拒绝、验证器、所属角色和复用方式。
+- [x] 工程安全审计 20%：MCP 权限交集、服务端复核、短期能力、审计链、回滚、
   OTLP/Prometheus，以及真实证据与待办的界线。
-- [ ] 开放开源 5%：许可证、公开仓库、运行入口、贡献方式、固定版本与复现步骤。
-- [ ] 官方结构性要求单独一页：至少 3 Agent；AgentTeams 为协同基点；Skill
+- [x] 开放开源 5%：许可证、公开仓库、运行入口、贡献方式、固定版本与复现步骤。
+- [x] 官方结构性要求单独一页：至少 3 Agent；AgentTeams 为协同基点；Skill
   必选；RAG/记忆/共享状态/轨迹观测至少两项。
 
 ## 可选代码包
@@ -94,8 +105,10 @@
   同一 canonical execution route 并发重复/冲突的双审计与单重试，以及
   Coder 验证失败与测试失败共享的 issue-global 三次模型调用预算；
   `CANDIDATE_INVALID` 不触发通用 execution retry，也不会生成第四次模型调用。
-- [ ] 将上述进程内 execution-route claim 接入持久协调存储并验证重启、多副本和
-  broker redelivery；完成前不得使用“分布式 exactly-once”。
+- [x] 调度路由已接入 SQLite 持久账本，并验证跨进程竞争、租约过期恢复、封存、
+  重启读回与哈希链；Worker replay slot、失败路由去重/生成预算仍有进程内部分。
+- [ ] 外部副作用、多副本 broker redelivery 与所有进程内 replay 状态尚未形成
+  分布式 exactly-once；完成前不得使用该表述。
 - [x] 对这一次 T2 保留窄口径：两个 `stat` 只证明远端对象存在，不证明远端
   字节摘要；一次成功不能外推整体任务成功率，也不是六阶段软件修复。
 - [x] 安全限制继续明示：同 UID 文件操作仍有 TOCTOU 风险，当前不是 OS sandbox；
@@ -120,12 +133,12 @@
 | 真实 AgentTeams 项目 | 已完成 2 个依赖节点；另有旧 Locator `FAILED` 任务；最新一次 fresh operator-driven T2 边界任务完成并验证提交、重试、冲突、读回、Leader 验收及 2/2 文件同步；均不是六阶段修复，也不构成成功率统计 |
 | 角色 Skill 策略 | v1.3.0 六包已通过本地确定性/源码重放校验；2026-07-27 的 v1.2.0 包另有长度/SHA-256 和四运行面现场实证；未知/平台 Skill 不在完整边界内 |
 | GitHub MCP | 固定范围只读正例及错路径、错身份、直连阻断负例；fresh T2 已完成，项目同步 2/2，`meta.json`/`plan.md` 分别确认存在，但未证明远端字节摘要 |
-| 结构化失败回路 | 仓库本地 Leader→Router→Worker 闭环测试已通过；Reviewer 拒绝经 Leader 校验后 fail-closed；不是 AgentTeams Team Room 现场证据，route claim 未持久化 |
+| 结构化失败回路 | 本地 Leader→Router→Worker 闭环已通过；SQLite 调度路由可跨进程租约与恢复；Reviewer 拒绝经 Leader 校验后 fail-closed；仍不是 AgentTeams Team Room 现场证据，也不代表所有 replay 状态或外部副作用 exactly-once |
 | T4 真人闭环 | 已验证暂停和无批准拒绝；真人签名批准及恢复未完成 |
 | OpenClaw 强边界 | `strongBoundaryEnforceable=false`，6 项 blocker 已记录 |
 | 方案文件 | 12 页 PPT/PDF 已完成本地 QA；未等同平台提交 |
 | 正式视频 | 未完成 |
-| 当前候选工作树覆盖率 | 2026-07-28：846 passed、17 skipped、84.40%（3,874/4,590）；尚未绑定最终 commit，提交前需再次复跑 |
+| 当前候选工作树覆盖率 | 2026-07-28 冻结前门：971 passed、17 skipped、84.75%（6,314 statements / 963 missed）；其后代码仍有变化，最终 commit 必须再次复跑 |
 
 ## 最终提交前 30 分钟
 

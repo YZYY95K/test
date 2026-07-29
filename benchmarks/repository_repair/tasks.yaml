@@ -1,0 +1,411 @@
+schema_version: "1.1"
+benchmark: devflow-fixed-repository-mutation-repair
+evaluation_kind: repository_patch_resolution
+fixture_evidence:
+  path: benchmarks/repository_repair/evidence/prevalidation.json
+  sha256: b804861262d948585bb00f590442d070cda3c8452453d215c2e87463acf723ad
+repositories:
+  requests:
+    display_name: psf/requests
+    version: 2.32.3
+    url: https://github.com/psf/requests.git
+    commit: 0e322af87745eff34caffe4df68456ebc20d9068
+    tree: 9474485f84c7244930abc1b8023f847486572091
+    snapshot_sha256: fee298bff6fe1b95944f95f3664a5905f6e0be50ccda708c693c0e7dc8e1bb06
+    license:
+      spdx: Apache-2.0
+      path: LICENSE
+      sha256: 88046bf22d5b4f4b8cc85079ae6aae5424a3a1999db952ed152828ff325b2c6d
+      source_url: https://github.com/psf/requests/blob/0e322af87745eff34caffe4df68456ebc20d9068/LICENSE
+  flask:
+    display_name: pallets/flask
+    version: 3.1.1
+    url: https://github.com/pallets/flask.git
+    commit: 7fff56f5172c48b6f3aedf17ee14ef5c2533dfd1
+    tree: 29bd3ef8420dce3b374185783edd3e5dcb9a8407
+    snapshot_sha256: de29ffeada329563eeb26309e9f09790eb41253d2410d0e0f108900cd1d90ea6
+    license:
+      spdx: BSD-3-Clause
+      path: LICENSE.txt
+      sha256: 4631ec0db5fd90a547e336817264c6798214338146f8ac94b4a57f96ee8c9ec4
+      source_url: https://github.com/pallets/flask/blob/7fff56f5172c48b6f3aedf17ee14ef5c2533dfd1/LICENSE.txt
+  pydantic:
+    display_name: pydantic/pydantic
+    version: 2.11.7
+    url: https://github.com/pydantic/pydantic.git
+    commit: 5f033e46c54fea1b59b6894d6527daf49475e690
+    tree: 4200a6ef6753b863d35645c487449612c651b581
+    snapshot_sha256: 94a8446630ea790b910bb9f865061a14bd0cd438f94c003c75996eca94f9a89d
+    license:
+      spdx: MIT
+      path: LICENSE
+      sha256: fc67bae6467548be3bf034f79012cb3cdb2cc548c18969e305717cf8074bf8e7
+      source_url: https://github.com/pydantic/pydantic/blob/5f033e46c54fea1b59b6894d6527daf49475e690/LICENSE
+
+tasks:
+  - id: requests-adapter-leading-slash
+    repository: requests
+    title: Repair leading path separator normalization
+    issue: Restore the single-slash HTTP adapter path normalization changed by the pinned mutation.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/requests/adapters.py]
+    mutation:
+      path: src/requests/adapters.py
+      before: |2
+                    url = f"/{url.lstrip('/')}"
+      after: |2
+                    url = request.path_url
+      sha256: 7efc8dd9c9f8374b789b74a2de2cb4325d53930101639b62e5834800f271e27f
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_adapters.py::test_request_url_trims_leading_path_separators], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: requests-default-hook-map
+    repository: requests
+    title: Repair default response hook initialization
+    issue: Restore creation of the default response hook list after a deterministic empty-map mutation.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/requests/hooks.py]
+    mutation:
+      path: src/requests/hooks.py
+      before: |2
+            return {event: [] for event in HOOKS}
+      after: |2
+            return {}
+      sha256: 7838e7b65d4754e13eaf912e670ecc7d5053e80684837d77fa1c8eaa9d6df9fe
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_hooks.py::test_default_hooks], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: requests-hook-result-propagation
+    repository: requests
+    title: Repair hook return-value propagation
+    issue: Restore propagation of non-null response-hook return values through the bounded dispatch loop.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/requests/hooks.py]
+    mutation:
+      path: src/requests/hooks.py
+      before: |2
+                    if _hook_data is not None:
+                        hook_data = _hook_data
+      after: |2
+                    if _hook_data is None:
+                        hook_data = _hook_data
+      sha256: 0db927369df8dcb7a9d29b2891e47a56915a7b3317260033017fed885dcb8f94
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_hooks.py::test_hooks], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: requests-filename-detection
+    repository: requests
+    title: Repair uploaded filename detection
+    issue: Restore basename extraction for valid string-like file objects under the fixed utility tests.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/requests/utils.py]
+    mutation:
+      path: src/requests/utils.py
+      before: |2
+                return os.path.basename(name)
+      after: |2
+                return None
+      sha256: 00b1dbc4b54869c5facb066d96f6cba5643042d45c8dfec479ce7077b35586e1
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_utils.py::TestGuessFilename::test_guess_filename_valid], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: requests-url-auth-decoding
+    repository: requests
+    title: Repair URL authentication decoding
+    issue: Restore decoded username and password extraction for the fixed URL-authentication matrix.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/requests/utils.py]
+    mutation:
+      path: src/requests/utils.py
+      before: |2
+            return auth
+      after: |2
+            return ("", "")
+      sha256: 3845397aa1ff8aa32379fc50a39a5a5017bbe08471468469e7b85fae22d67e42
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_utils.py::test_get_auth_from_url], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: requests-invalid-percent-requote
+    repository: requests
+    title: Repair invalid-percent URL requoting
+    issue: Restore quoting of an invalid percent escape without changing the valid-percent branch.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/requests/utils.py]
+    mutation:
+      path: src/requests/utils.py
+      before: |2
+                return quote(uri, safe=safe_without_percent)
+      after: |2
+                return uri
+      sha256: f3f873bd8505f32c99fcdb7e8746dc4b3a346c3a7e7d025c3032b1aefd34b986
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_utils.py::test_requote_uri_with_unquoted_percents], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: requests-scheme-prepend
+    repository: requests
+    title: Repair missing URL scheme insertion
+    issue: Restore use of the caller-provided scheme when normalizing a URL that has no scheme.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/requests/utils.py]
+    mutation:
+      path: src/requests/utils.py
+      before: |2
+                scheme = new_scheme
+      after: |2
+                scheme = "https"
+      sha256: 170033578a6c3c5871df6e0991f8aaab03273b85657e44c3ffa59d9ab12494ba
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_utils.py::test_prepend_scheme_if_needed], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: flask-debug-flag
+    repository: flask
+    title: Repair Flask debug environment parsing
+    issue: Restore truthy FLASK_DEBUG parsing while retaining the fixed false-value spellings.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/flask/helpers.py]
+    mutation:
+      path: src/flask/helpers.py
+      before: |2
+            return bool(val and val.lower() not in {"0", "false", "no"})
+      after: |2
+            return bool(val and val.lower() in {"0", "false", "no"})
+      sha256: 164b067d0cfc7af3f00226cc2989e086df118949eefd7656c8037c831fbb7276
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_helpers.py::TestHelpers::test_get_debug_flag], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: flask-app-redirect-delegation
+    repository: flask
+    title: Repair application redirect delegation
+    issue: Restore delegation to the active Flask application's redirect implementation.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/flask/helpers.py]
+    mutation:
+      path: src/flask/helpers.py
+      before: |2
+            if current_app:
+                return current_app.redirect(location, code=code)
+      after: |2
+            if False and current_app:
+                return current_app.redirect(location, code=code)
+      sha256: a70b1b1ad48757d9f5f217e8313aecf5747e33b52547dc3aa10d2feea9e162db
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_helpers.py::test_redirect_with_app], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: flask-decimal-json
+    repository: flask
+    title: Repair Decimal JSON serialization
+    issue: Restore string serialization of Decimal values without changing UUID serialization.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/flask/json/provider.py]
+    mutation:
+      path: src/flask/json/provider.py
+      before: |2
+            if isinstance(o, (decimal.Decimal, uuid.UUID)):
+                return str(o)
+      after: |2
+            if isinstance(o, uuid.UUID):
+                return str(o)
+      sha256: e7905529c56853f39eec8ad372dfd76b1e09bc7ae80618adebf50cdd909cdcb3
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_json.py::test_json_decimal], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: flask-json-key-sorting
+    repository: flask
+    title: Repair default JSON key sorting
+    issue: Restore deterministic JSON key ordering in the default provider's configured behavior.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/flask/json/provider.py]
+    mutation:
+      path: src/flask/json/provider.py
+      before: |2
+            sort_keys = True
+      after: |2
+            sort_keys = False
+      sha256: b495b90c24c4a6b39b6bb08d86fed0c2fd3d29444141029f5d0ef61f93e90b4e
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_json.py::test_json_key_sorting], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: flask-partitioned-cookie-flag
+    repository: flask
+    title: Repair partitioned session cookie configuration
+    issue: Restore forwarding of SESSION_COOKIE_PARTITIONED into the emitted session cookie attributes.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/flask/sessions.py]
+    mutation:
+      path: src/flask/sessions.py
+      before: |2
+                return app.config["SESSION_COOKIE_PARTITIONED"]  # type: ignore[no-any-return]
+      after: |2
+                return False
+      sha256: d5c9216843c6e28d81a78ec116c0dfa8de15b0f5cf2780f1fd47ced615bb1602
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_basic.py::test_session_using_session_settings], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: flask-request-context-presence
+    repository: flask
+    title: Repair request-context presence detection
+    issue: Restore context-variable based detection of an active request context.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/flask/ctx.py]
+    mutation:
+      path: src/flask/ctx.py
+      before: |2
+            return _cv_request.get(None) is not None
+      after: |2
+            return False
+      sha256: b68b024be44a7b6a029f3b7992b0a58142c875725179439df67dad95ef00639d
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_reqctx.py::test_context_test], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: flask-cli-import-name
+    repository: flask
+    title: Repair CLI module-name derivation
+    issue: Restore package-aware module-name derivation for fixed filesystem import paths.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [src/flask/cli.py]
+    mutation:
+      path: src/flask/cli.py
+      before: |2
+            return ".".join(module_name[::-1])
+      after: |2
+            return "mutated.module"
+      sha256: d6ccb0d9f41473fdd5db16623d7c4ace0a47e0423a02d0e73e2b0054a4d595f0
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_cli.py::test_prepare_import], timeout_seconds: 120}]
+    human_intervention_expected: false
+
+  - id: pydantic-required-field
+    repository: pydantic
+    title: Repair required-field classification
+    issue: Restore required classification for fields without a default value or default factory.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [pydantic/fields.py]
+    mutation:
+      path: pydantic/fields.py
+      before: |2
+                return self.default is PydanticUndefined and self.default_factory is None
+      after: |2
+                return False
+      sha256: 5f16faaf898f976a7c29b065c07c9fa629b7bc87e6bb04583c00b0dbaf40bcd6
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_dataclasses.py::test_fields], timeout_seconds: 180}]
+    human_intervention_expected: false
+
+  - id: pydantic-dataclass-identity
+    repository: pydantic
+    title: Repair Pydantic dataclass identity detection
+    issue: Restore the exact marker and standard-dataclass checks used to identify Pydantic dataclasses.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [pydantic/dataclasses.py]
+    mutation:
+      path: pydantic/dataclasses.py
+      before: |2
+                return '__is_pydantic_dataclass__' in class_.__dict__ and dataclasses.is_dataclass(class_)
+      after: |2
+                return False
+      sha256: 2431e100714117095f93f961963f8e17b835f99599b5e9e207a9fb6dee66e538
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_dataclasses.py::test_is_pydantic_dataclass], timeout_seconds: 180}]
+    human_intervention_expected: false
+
+  - id: pydantic-type-adapter-repr
+    repository: pydantic
+    title: Repair TypeAdapter type representation
+    issue: Restore type-aware TypeAdapter representation for scalar, generic, and dataclass inputs.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [pydantic/type_adapter.py]
+    mutation:
+      path: pydantic/type_adapter.py
+      before: |2
+                return f'TypeAdapter({_repr.display_as_type(self._type)})'
+      after: |2
+                return 'TypeAdapter(mutated)'
+      sha256: bdaa91966bdb44e5906652138e3e0ddb80dfc4c67d9181cbf2378957b7a50f98
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_type_adapter.py::test_ta_repr], timeout_seconds: 180}]
+    human_intervention_expected: false
+
+  - id: pydantic-root-model-equality
+    repository: pydantic
+    title: Repair RootModel equality semantics
+    issue: Restore equality across matching RootModel annotations and values while retaining type distinctions.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [pydantic/root_model.py]
+    mutation:
+      path: pydantic/root_model.py
+      before: |2
+                return self.__pydantic_fields__['root'].annotation == other.__pydantic_fields__[
+                    'root'
+                ].annotation and super().__eq__(other)
+      after: |2
+                return False
+      sha256: 9340b8f2c16af92df3658c01148c0115acc4d754afb3ee36efd66fba7898f1ed
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_root_model.py::test_root_model_equality], timeout_seconds: 180}]
+    human_intervention_expected: false
+
+  - id: pydantic-url-host
+    repository: pydantic
+    title: Repair canonical URL host access
+    issue: Restore the canonical host property while retaining the fixed URL parsing and string behavior.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [pydantic/networks.py]
+    mutation:
+      path: pydantic/networks.py
+      before: |2
+                return self._url.host
+      after: |2
+                return "mutated"
+      sha256: 5e9ecd4666cc3da873d31848e379196b539b0140b462cf2ad13b2607b24f2203
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_networks.py::test_any_url_parts], timeout_seconds: 180}]
+    human_intervention_expected: false
+
+  - id: pydantic-model-iteration
+    repository: pydantic
+    title: Repair BaseModel field iteration
+    issue: Restore iteration over non-private model fields so list and dict conversion preserve values.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [pydantic/main.py]
+    mutation:
+      path: pydantic/main.py
+      before: |2
+                yield from [(k, v) for (k, v) in self.__dict__.items() if not k.startswith('_')]
+      after: |2
+                yield from []
+      sha256: 83d73bf71ed470c05283ed1eeef9dd10536923c11b1a4b89c4b70ec851dce81c
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_main.py::test_model_iteration], timeout_seconds: 180}]
+    human_intervention_expected: false
+
+  - id: pydantic-color-string
+    repository: pydantic
+    title: Repair Color string representation
+    issue: Restore named or hexadecimal fallback string conversion for validated Color values.
+    origin: deterministic-mutation
+    execution_ready: true
+    target_paths: [pydantic/color.py]
+    mutation:
+      path: pydantic/color.py
+      before: |2
+            def __str__(self) -> str:
+                return self.as_named(fallback=True)
+      after: |2
+            def __str__(self) -> str:
+                return "mutated"
+      sha256: a43eba5f9f84910ade50963abca157dd7f0bfa55bee491686ce1a3e29c9a3ecc
+    acceptance: [{argv: [python, -m, pytest, -q, tests/test_color.py::test_str_repr], timeout_seconds: 180}]
+    human_intervention_expected: false

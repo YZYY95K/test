@@ -20,8 +20,12 @@ unavailable is a refusal; isolation lost after startup is `ISOLATION_UNAVAILABLE
 1. Validate the complete `PatchCandidate` 1.2, including its nested Patch
    digest, Locator-derived evidence boundary, tier, semantic retry attempt,
    issue-global model-call ordinal, and `model_call_attempt >= retry_attempt`.
-2. Require the isolated CI adapter to return a baseline comparison; absence is
-   a fail-closed result, never a pass.
+2. Require the isolated CI adapter to return both a baseline comparison and a
+   server-owned `TestIntegrityAttestation` v1.0. A success requires
+   `verified=true`, the supported policy digest, identical immutable-baseline
+   and pre/post execution manifests, and the exact requested suite mode.
+   Missing or malformed integrity evidence is `ISOLATION_UNAVAILABLE`, never a
+   test failure and never a pass.
 3. Create an isolated disposable checkout and apply the candidate there only.
 4. Run focused tests for T1/T2 and the full suite for T3+; enforce resource and
    network policy.
@@ -39,13 +43,13 @@ unavailable is a refusal; isolation lost after startup is `ISOLATION_UNAVAILABLE
    `python scripts/validate.py failure <evidence.json> <verified-candidate.json>`.
    Validate the complete Tester-to-TeamLeader envelope with
    `python scripts/validate.py failure-handoff <envelope.json> <verified-candidate.json>`.
-   Emit exactly one `test.passed` to ReviewerAgent or `test.failed` to
-   TeamLeader. Every output must match the candidate issue and exact Patch
-   digest. Emit exactly one result; only TeamLeader may create a Coder retry.
+   Emit exactly one `test.passed` or `test.failed` to TeamLeader. Every output
+   must match the candidate issue, exact Patch digest, and source route digest.
+   Only TeamLeader may create a Reviewer route or Coder retry.
 
 ## Decision rules
 
-- Timeout, missing baseline, malformed output, or unavailable isolation is
+- Timeout, missing baseline, missing integrity attestation, malformed output, or unavailable isolation is
   never `passed`. A result produced after execution uses bounded failure
   evidence; a pre-execution boundary failure routes to TeamLeader as `error`.
 - Retry infrastructure failure once. Cap isolated flaky reruns at two.
@@ -57,10 +61,14 @@ unavailable is a refusal; isolation lost after startup is `ISOLATION_UNAVAILABLE
 
 ## Boundaries
 
-Do not alter the canonical checkout, source, tests, acceptance criteria, or
+Do not alter the canonical checkout, source, existing tests, acceptance criteria, or
 review status. Never interpolate untrusted input into a shell command. Never
 forward the complete `TestRunResult` into a model prompt; Coder receives only
 the digest-bound, bounded, redacted failure view.
+
+The current local adapter uses two disposable directory copies and a
+server-owned subprocess. Its attestation explicitly says this is process-level
+isolation, not a container or operating-system sandbox.
 
 ## Tool boundary
 

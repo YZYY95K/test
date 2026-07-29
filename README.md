@@ -1,7 +1,7 @@
 # DevFlow
 
 DevFlow is an auditable multi-agent system for resolving software issues from
-intake to a reviewed pull request. It is built for the **Agent Infra** track of
+intake to verified, PR-ready evidence. It is built for the **Agent Infra** track of
 the Global Open-source AI Challenge and maps its domain agents onto the
 [AgentTeams](https://github.com/agentscope-ai/AgentTeams) Manager–Team–Worker
 runtime.
@@ -36,16 +36,17 @@ approval.
   trusted adapters.
 - Credential-free offline demo that applies a real candidate patch in a
   temporary repository, executes a real regression test, reviews the result,
-  and writes a JSON evidence report.
+  and writes a JSON evidence report plus a durable SQLite route ledger whose
+  digest-only audit chain is recomputed before reporting success.
 - AgentTeams `Team` manifest and six role-scoped Worker packages containing
-  only each role's self-contained Skill v2 set, with
+  only each role's self-contained, versioned Skill set, with
   typed contracts, deterministic validators, UI metadata, examples, and
   release/rollback policy.
 - Paired GLM behavior evaluation that compares each Skill against a no-Skill
   baseline on positive and adversarial routing cases.
 - Integrity-checked `HandoffEnvelope` collaboration with versioned artifacts,
-  explicit consumer/Skill ownership, retry status, idempotency keys, and
-  SHA-256.
+  explicit consumer/Skill ownership, parent-causal result binding, transport
+  status semantics, idempotency keys, and SHA-256.
 
 ## Quick start
 
@@ -68,7 +69,8 @@ The demo does not need an API key or GitHub token. It:
 5. proves that the baseline fails and the candidate passes;
 6. performs the review/approval gate;
 7. distills and stores a provenance-linked reusable experience;
-8. stores the full event and result evidence under `.devflow/runs/`.
+8. seals six routed tasks and verifies the collaboration audit hash chain;
+9. stores the event, result, and SQLite route evidence under `.devflow/runs/`.
 
 The fixed logical request and machine-checkable expected assertions are in
 [`examples/prelim_sample`](examples/prelim_sample). The report timestamp and
@@ -83,12 +85,26 @@ that heavier optional dependency. Production semantic retrieval requires the
 configured embedding model to be enabled and funded. Set
 `EMBEDDING_PROVIDER=local-hash` only for deterministic offline/degraded
 retrieval; it is not presented as equivalent semantic quality.
+Production RAG additionally requires a server-held `DEVFLOW_RAG_HMAC_KEY` of
+at least 32 bytes and an exact tenant/repository/revision scope. Missing keys,
+branch-like revisions, stale records, cross-tenant results, and modified
+content, metadata, or vectors fail closed.
 
 ## AgentTeams deployment
 
-DevFlow targets AgentTeams `agentteams.io/v1beta1`.
+The live manifest targets the exact AgentTeams `v1.2.0-beta.1`
+`agentteams.io/v1beta1` contract, not a floating `main` branch. The upstream
+tag, commit and Team-CRD digest are recorded in
+[`agentteams/upstream.lock.yaml`](agentteams/upstream.lock.yaml); the current
+upstream membership-only API is treated as an explicit future migration.
+The competition's five mandatory design mappings—role orchestration, task
+decomposition, context transfer, collaborative execution, and state
+tracking—are mapped to AgentTeams native objects and clearly separated from
+DevFlow extensions in
+[`docs/submission/AGENTTEAMS_MAPPING_CN.md`](docs/submission/AGENTTEAMS_MAPPING_CN.md).
 
 ```powershell
+.\.venv\Scripts\python scripts\verify_agentteams_upstream.py
 .\.venv\Scripts\python scripts\build_agentteams_package.py
 ```
 
@@ -97,14 +113,14 @@ Service. The versioned ConfigMap is made immutable before any Pod can consume
 it; changing package bytes therefore requires a new release version.
 
 ```bash
-kubectl create configmap devflow-worker-packages-v1-3-0 -n agentteams-system \
-  --from-file=dist/devflow-lead-v1.3.0.zip \
-  --from-file=dist/devflow-triage-v1.3.0.zip \
-  --from-file=dist/devflow-locator-v1.3.0.zip \
-  --from-file=dist/devflow-coder-v1.3.0.zip \
-  --from-file=dist/devflow-tester-v1.3.0.zip \
-  --from-file=dist/devflow-reviewer-v1.3.0.zip
-kubectl patch configmap devflow-worker-packages-v1-3-0 \
+kubectl create configmap devflow-worker-packages-v2-0-0 -n agentteams-system \
+  --from-file=dist/devflow-lead-v2.0.0.zip \
+  --from-file=dist/devflow-triage-v2.0.0.zip \
+  --from-file=dist/devflow-locator-v2.0.0.zip \
+  --from-file=dist/devflow-coder-v2.0.0.zip \
+  --from-file=dist/devflow-tester-v2.0.0.zip \
+  --from-file=dist/devflow-reviewer-v2.0.0.zip
+kubectl patch configmap devflow-worker-packages-v2-0-0 \
   -n agentteams-system --type=merge -p '{"immutable":true}'
 kubectl apply -n agentteams-system -f agentteams/package-server.yaml
 kubectl rollout status -n agentteams-system deployment/devflow-package
@@ -131,15 +147,20 @@ tests/             unit and end-to-end tests
 ## Verification
 
 ```powershell
-.\.venv\Scripts\python -m ruff check src tests examples
-.\.venv\Scripts\python -m mypy src
-.\.venv\Scripts\python -m pytest --cov=devflow --cov-report=term --cov-fail-under=80 -q
+.\.venv\Scripts\python -m devflow.cli validate
+.\.venv\Scripts\python scripts\verify_agentteams_upstream.py
+.\.venv\Scripts\python -m ruff check .
+.\.venv\Scripts\python -m mypy src scripts tests
+.\.venv\Scripts\python -m pytest -ra --cov=devflow --cov-report=term-missing --cov-fail-under=80 -q
 .\.venv\Scripts\python scripts\evaluate_skills.py
 .\.venv\Scripts\python scripts\run_behavior_evals.py --validate-only
-.\.venv\Scripts\devflow demo
+.\.venv\Scripts\python scripts\run_repository_benchmark.py --repair-manifest benchmarks\repository_repair\tasks.yaml --repos-root .devflow\benchmark-repos --validate-only
+.\.venv\Scripts\devflow demo --output-dir .devflow\runs\finals-demo
+git diff --check
 ```
 
 See [the research basis](docs/RESEARCH.md), [competition scorecard](docs/SCORECARD.md),
+[finals acceptance matrix](docs/finals/ACCEPTANCE_MATRIX_CN.md),
 [Skill engineering standard](docs/SKILL_ENGINEERING.md),
 [behavior evaluation protocol](docs/SKILL_BEHAVIOR_EVAL.md), and
 [AgentTeams mapping](docs/AGENTTEAMS.md) for design rationale and remaining work.
@@ -152,11 +173,11 @@ Executable provider boundaries are mapped in
 AgentTeams, MCP, failure-path, and artifact evidence is consolidated in
 [AgentTeams live evidence](docs/evidence/AGENTTEAMS_LIVE_20260727.md); the
 quantitative evaluation design is in [Repository benchmark](docs/BENCHMARK.md).
-The outer preliminary-submission archive also carries the Chinese introduction,
-Agent Identity appendix, live-demo script, defense Q&A, and the final 12-page
-PPT/PDF. Those companion artifacts deliberately live outside this nested source
-ZIP and are therefore named, rather than linked with non-resolving source-relative
-paths, here.
+Finals-facing source material lives under `docs/finals/`; rendered PPT/PDF files
+live under `outputs/`. `scripts/build_finals_submission.py` assembles the exact
+allowlisted source, material, evidence, dependency locks, SBOM, license ledger,
+checksums, and provenance from a clean tagged Git object. It refuses to treat a
+dirty worktree or the historical preliminary ZIP as a finals release.
 
 ## Security
 
@@ -165,7 +186,9 @@ paths, here.
 - Secret-shaped output and dangerous execution patterns are blocked.
 - Test execution occurs in a temporary copy in the offline demo.
 - CI failure and high/critical findings block promotion.
-- T4/T5 issues always require a human approval event.
+- T4/T5 issues pause until a trusted external authority signs the exact
+  revision/candidate/test/review target; chat text and Agent-authored approval
+  are never authority.
 
 Never commit `.env`, runtime evidence containing private code, or real tokens.
 

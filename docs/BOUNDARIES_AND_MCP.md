@@ -11,10 +11,10 @@ an explicit grant. Every unspecified combination is denied.
 |---|---|---|---|---|---|
 | TeamLeader | `team-orchestration` capability | issue and worker lifecycle events | plan, assignment, retry, escalation | read/comment on issues; human-approved rollback | no code generation, testing, review, merge, or approval substitution |
 | TriageAgent | `issue-classifier` | new or materially changed issue | `ClassifiedIssue` for TeamLeader | none | no repository read/write, patching, or tier above T5 |
-| LocatorAgent | `code-root-cause`, `github-evidence` | classified task with fixed revision/scope | `LocatedContext` or digest-bound repository evidence | `github:get_file_contents` only | no source modification, code execution, test execution, or scope expansion |
-| CoderAgent | `patch-generator` | located context or retry evidence | `PatchCandidate` for TesterAgent | none | no canonical file write, test execution, PR operation, review, or approval |
-| TesterAgent | `test-runner` | patch candidate | `TestEvidence` for ReviewerAgent, or bounded failure evidence mediated by TeamLeader | isolated CI/CD test tools only | no agent-supplied shell command, canonical checkout mutation, direct Coder routing, review, or merge |
-| ReviewerAgent | `pr-reviewer`, `experience-distiller` | passing test evidence | review decision, PR-ready record, or human-gate escalation | no GitHub write in the current AgentTeams deployment | no merge, deployment, rollback, test execution, or self-authored approval |
+| LocatorAgent | `code-root-cause`, `github-evidence` | classified task with fixed revision/scope | `LocatedContext` or digest-bound repository evidence for TeamLeader | `github:get_file_contents` only | no source modification, code execution, test execution, or scope expansion |
+| CoderAgent | `patch-generator` | located context or retry evidence | `PatchCandidate` for TeamLeader validation | none | no canonical file write, test execution, PR operation, review, or approval |
+| TesterAgent | `test-runner` | patch candidate | integrity-attested `TestEvidence` or bounded failure evidence for TeamLeader | isolated CI/CD test tools only | no agent-supplied shell command, canonical checkout mutation, direct Coder routing, review, or merge |
+| ReviewerAgent | `pr-reviewer`, `experience-distiller` | passing test evidence or a verified terminal bundle | review/experience result for TeamLeader, including a typed human-gate request | no GitHub write in the current AgentTeams deployment | no merge, deployment, rollback, test execution, or self-authored approval |
 | Human reviewer | approval authority, not an Agent | T4/T5 evidence bundle | digest-bound approval or rejection | no ambient MCP grant | approval cannot be inferred from chat text or supplied by an Agent |
 
 The TeamLeader's orchestration capability is deliberately not a distributable
@@ -75,19 +75,36 @@ the same issue-global budget, so their worst case is three model calls rather
 than two stacked three-attempt loops. `PatchCandidate` 1.2 echoes the ordinal
 and binds it to the exact retained source route.
 
-These claims remain process-local memory. The local scheduler asks TeamLeader
-to claim an exact route before dispatch, so duplicate delivery cannot repeat a
-model-call lease even if the Worker instance changes inside that Leader
-runtime; BaseAgent also caches direct successful redelivery. A deterministic
-idempotency key is correlation material, not by itself a durable exactly-once
-guarantee. The repository tests do not claim state survival across process
-restart, multiple TeamLeader replicas, or broker redelivery after Leader state
-loss.
+The portable runtime can place these claims in `DurableRouteLedger`, a
+SQLite/WAL authority outside every Worker. Registration is immutable by
+`task_id` and canonical envelope digest; `BEGIN IMMEDIATE` serializes scheduler
+claims across processes; bounded leases allow recovery after a dead scheduler;
+only the lease owner can seal success/failure. Its digest-only audit rows form
+an independently recomputable hash chain. The bundled offline six-stage demo
+enables this ledger and reports its aggregate snapshot and verified chain head.
+Repository tests cover competing processes, expired-lease recovery, immutable
+route conflict, terminal replay denial, audit tampering, and one-shot approval
+consumption.
 
-A T4/T5 review emits a blocked envelope for `HumanReviewer`; it is not
-silently converted into success. Repository code and tests cover the gate and
-approval validation. Live evidence currently covers pause and rejection of an
-unapproved resume, but not a human signature followed by successful resume.
+The ledger provides durable at-most-one-active-lease semantics, not magical
+exactly-once side effects: a Worker can still perform an external action and
+die before sealing its lease. Such tools need their own idempotency key and
+read-after-write reconciliation. Integrations that instantiate TeamLeader
+without `DurableRouteLedger` deliberately fall back to process-local claims
+and must not claim restart or multi-replica safety.
+
+A T4/T5 review emits a blocked Reviewer result to TeamLeader; it is never
+addressed directly to a human and is not silently converted into success.
+TeamLeader validates the exact parent route and canonical evidence, enters
+`PAUSED`, and publishes a `HumanApprovalTarget` binding run, issue, tier,
+revision, candidate, test result, review and source task digests. Only an
+external approval authority may issue fresh evidence for that exact target.
+The evidence is verified and consumed once before TeamLeader creates the final
+approved review and routes experience capture. Repository tests cover wrong
+signature/scope denial, successful T4 resume, terminal receipt binding and
+cross-process replay denial. Live AgentTeams evidence still covers only pause
+and rejection of an unapproved resume, not a human signature followed by a
+successful resume.
 
 Coder accepts `patch-generator` envelopes only from TeamLeader, requires exact
 initial/retry input fields, and binds a retry to the previous candidate. Before
@@ -106,6 +123,15 @@ non-creator requested-worker projection; the full set is represented by its
 verified count and digest. Idempotent retry and conflict evidence bind both
 `taskId` and submission digests. The final operator-driven T2 run exercised
 these bindings; it remains separate from the earlier honest failed task.
+
+The same guard validates a packaged Skill before either Worker submission or
+Leader acceptance mutates AgentTeams state. Transport status is mandatory and
+unambiguous: a `ready` result must be `SUCCESS`; `retry` and `blocked` must be
+`FAILED`. Test `ready` additionally requires zero failures/errors, no baseline
+regression and a verified integrity attestation; test `retry` requires bounded
+failure evidence. Reviewer status is bound to its typed decision, and only a
+T4/T5 `human_approval_required` decision may be `blocked`. This prevents an
+AgentTeams task from laundering domain failure into transport success.
 
 ### Guarded TeamHarness surface
 

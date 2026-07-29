@@ -1,4 +1,4 @@
-"""Release-version consistency gates for the preliminary source bundle."""
+"""Release-version consistency gates for the current source bundle."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def test_application_and_worker_release_versions_are_aligned() -> None:
     )
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
-    assert project_version == "1.3.0"
+    assert project_version == "2.0.0"
     assert __version__ == project_version
     assert observability_match.group(1) == project_version
     assert worker["version"] == project_version

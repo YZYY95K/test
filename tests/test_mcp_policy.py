@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sys
@@ -11,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from devflow.exceptions import MCPAuthorizationError, MCPError
+from devflow.exceptions import ConfigError, MCPAuthorizationError, MCPError
 from devflow.mcp.approval import HMACApprovalAuthority
 from devflow.mcp.cicd import IsolatedTestService
 from devflow.mcp.context_auth import HMACContextAuthority
@@ -35,9 +36,7 @@ class RecordingTransport:
         self.response = response if response is not None else {"ok": True}
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
 
-    async def call_tool(
-        self, server: str, tool: str, arguments: dict[str, Any]
-    ) -> Any:
+    async def call_tool(self, server: str, tool: str, arguments: dict[str, Any]) -> Any:
         self.calls.append((server, tool, arguments))
         return self.response
 
@@ -150,13 +149,9 @@ def test_policy_denies_protected_branch_and_repository_escape(policy: MCPPolicy)
 
 def test_rollback_requires_signed_target_and_digest_bound_approval() -> None:
     authority = HMACApprovalAuthority(b"test-only-approval-signing-key-32-bytes")
-    policy = MCPPolicy.from_file(
-        ROOT / "config" / "mcp_servers.yaml", approval_verifier=authority
-    )
+    policy = MCPPolicy.from_file(ROOT / "config" / "mcp_servers.yaml", approval_verifier=authority)
     arguments = {"environment": "production", "target_release": "v1.2.3"}
-    serialized = json.dumps(
-        arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
+    serialized = json.dumps(arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
     leader = _context(agent="TeamLeader", skill="team-orchestration")
 
@@ -197,12 +192,8 @@ def test_rollback_denies_unsigned_expired_or_unverifiable_approval() -> None:
         approved_by="human:reviewer",
         approved_at=datetime.now(timezone.utc) - timedelta(days=2),
     )
-    context = _context(
-        agent="TeamLeader", skill="team-orchestration", approval=expired
-    )
-    policy = MCPPolicy.from_file(
-        ROOT / "config" / "mcp_servers.yaml", approval_verifier=authority
-    )
+    context = _context(agent="TeamLeader", skill="team-orchestration", approval=expired)
+    policy = MCPPolicy.from_file(ROOT / "config" / "mcp_servers.yaml", approval_verifier=authority)
     with pytest.raises(MCPAuthorizationError, match="expiry"):
         policy.authorize(context, "cicd", "rollback_deployment", arguments)
 
@@ -215,9 +206,7 @@ def test_rollback_denies_unsigned_expired_or_unverifiable_approval() -> None:
 async def test_internal_cicd_receives_verified_context(policy: MCPPolicy) -> None:
     transport = RecordingTransport({"passed": 1})
     authority = HMACContextAuthority(b"test-only-context-signing-key-32-bytes")
-    client = PolicyEnforcedMCPClient(
-        transport, policy, MemoryAuditSink(), context_signer=authority
-    )
+    client = PolicyEnforcedMCPClient(transport, policy, MemoryAuditSink(), context_signer=authority)
     tester = _context(agent="TesterAgent", skill="test-runner")
 
     await client.call_tool(
@@ -287,6 +276,71 @@ async def test_hash_chain_audit_log_links_entries(tmp_path: Path) -> None:
         "\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8"
     )
     assert not verify_audit_chain(tmp_path / "audit.jsonl")
+
+
+@pytest.mark.asyncio
+async def test_hash_chain_serializes_independent_concurrent_appenders(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "audit.jsonl"
+    first = HashChainAuditLog(path)
+    second = HashChainAuditLog(path)
+    from devflow.mcp.policy import MCPAuditRecord
+
+    def record(index: int) -> MCPAuditRecord:
+        return MCPAuditRecord(
+            timestamp=datetime.now(timezone.utc),
+            run_id="run",
+            task_id=f"task-{index}",
+            issue_id=42,
+            agent="TesterAgent",
+            skill="test-runner",
+            server="cicd",
+            tool="run_tests",
+            readonly=False,
+            outcome="succeeded",
+            arguments_sha256=hashlib.sha256(str(index).encode()).hexdigest(),
+        )
+
+    await asyncio.gather(
+        *[(first if index % 2 else second).record(record(index)) for index in range(12)]
+    )
+
+    assert verify_audit_chain(path)
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 12
+
+
+@pytest.mark.asyncio
+async def test_hash_chain_refuses_to_append_after_external_tampering(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "audit.jsonl"
+    sink = HashChainAuditLog(path)
+    from devflow.mcp.policy import MCPAuditRecord
+
+    record = MCPAuditRecord(
+        timestamp=datetime.now(timezone.utc),
+        run_id="run",
+        task_id="task",
+        issue_id=42,
+        agent="TesterAgent",
+        skill="test-runner",
+        server="cicd",
+        tool="run_tests",
+        readonly=False,
+        outcome="succeeded",
+        arguments_sha256="a" * 64,
+    )
+    await sink.record(record)
+    parsed = json.loads(path.read_text(encoding="utf-8"))
+    parsed["outcome"] = "failed"
+    path.write_text(json.dumps(parsed) + "\n", encoding="utf-8")
+    before = path.read_bytes()
+
+    with pytest.raises(ConfigError, match="invalid"):
+        await sink.record(record)
+
+    assert path.read_bytes() == before
 
 
 @pytest.mark.asyncio

@@ -2,9 +2,13 @@
 
 Evidence date: 2026-07-28 (Asia/Shanghai).
 
+> **Superseded snapshot.** The numbers in this file describe the earlier
+> pre-finals worktree at the time recorded below. Later finals changes have a
+> separate quality gate and must not cite `846 / 17 / 84.40%` as current.
+
 ## Claim boundary
 
-This record covers the current local, modified release-candidate worktree. It
+This record covers an earlier local, modified release-candidate worktree. It
 is not bound to a final commit or tag, does not prove that 1.3.0 is deployed to
 AgentTeams, and does not replace the historical 1.2.0 cluster evidence. Repeat
 the same gates after freezing the submission commit.
@@ -52,12 +56,12 @@ source tree.
 
 | Role | Bytes | SHA-256 |
 |---|---:|---|
-| devflow-lead | 2,163 | `5ec6e76a43a6b4a5cf55fd0321f82be2f81b294c75081c18a139ec32c5757661` |
-| devflow-triage | 14,595 | `bcb84afa4004a1b1c208a83bee8fdc7ef8bdea289b740b909677e2f152ca02da` |
-| devflow-locator | 56,415 | `2d59b7d1533165009596167bc6470a0ba473895c835a390e083e967cddd2ff53` |
-| devflow-coder | 54,690 | `5425868754f5539eb5568fdfb5900d7fa0bcee6f724f92cf26bb2a289ac3de7f` |
-| devflow-tester | 49,237 | `68ad37e009c5485230dc38065c2095d751d6298943ebe88bbc471040b2488de2` |
-| devflow-reviewer | 28,232 | `6e2c4a4a76b9860e1931275d820cff3f961133257567d6eed417ae7cf896e947` |
+| devflow-lead | 2,862 | `c082670199dcefcbbcaf6afd888c364999ccca5a8cd243979c399238253d97f2` |
+| devflow-triage | 15,721 | `7c14a62a0dce3c774b7e0e4fcff969ed9ba8fdcabc4356ef7a080c47dcd51bca` |
+| devflow-locator | 57,200 | `b0e9422d16202cdea690deeef3f7629f5b400333b00fbd329d61c6f9da521019` |
+| devflow-coder | 56,024 | `23469bd358c0044f20877bb7035734d724742ad8dde34e35ce11035cd502e643` |
+| devflow-tester | 55,161 | `011524dc5f839fb9157da82a9a30bdd1debb31e58d9371fda37c0f67a9e1ac7e` |
+| devflow-reviewer | 37,151 | `c25b44efee849740f92390d4e9de2773ee6a6392ef0e3301217aa1563994702a` |
 
 Focused publication, cache, role-policy, and TeamHarness reconciliation tests
 also passed. The package paths, immutable ConfigMap, package server, Team

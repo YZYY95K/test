@@ -9,13 +9,9 @@ clients instead.
 
 from __future__ import annotations
 
-import asyncio
 import json
-import shutil
-import subprocess
 import sys
-import tempfile
-import time
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -30,8 +26,11 @@ from devflow.agents import (
     TesterAgent,
     TriageAgent,
 )
-from devflow.agents.locator_agent import RootCause
-from devflow.event_bus import clear, event_bus
+from devflow.agents.locator_agent import LocatedContext, RootCause
+from devflow.collaboration import DurableRouteLedger
+from devflow.event_bus import LocalAgentEventRuntime, clear, event_bus, publish
+from devflow.local_runtime import LocalAgentTaskRouter
+from devflow.mcp.cicd import IsolatedTestService
 from devflow.mcp.context_auth import HMACContextAuthority
 from devflow.mcp.policy import MCPPolicy, MemoryAuditSink, PolicyEnforcedMCPClient
 from devflow.models.issue import (
@@ -42,13 +41,9 @@ from devflow.models.issue import (
     IssuePriority,
 )
 from devflow.models.patch import ChangeType, FileChange, Patch
-from devflow.models.test_result import (
-    BaselineComparison,
-    TestCaseResult,
-    TestRunResult,
-    TestStatus,
-)
-from devflow.skills.experience_distiller import ExperienceDistillerSkill
+from devflow.models.review import ReviewResult
+from devflow.models.test_result import TestRunResult
+from devflow.skills.contracts import HandoffEnvelope
 
 
 def _root() -> Path:
@@ -89,7 +84,7 @@ class DemoLLM:
                 '"""Tiny calculator used by the reproducible DevFlow demo."""\n\n\n'
                 "def add(a: int, b: int) -> int:\n"
                 '    """Return the sum of two integers."""\n'
-                "    return a - b\n"
+                "    return a - b\n\n"
             )
             updated = original.replace("return a - b", "return a + b")
             return Patch(
@@ -112,9 +107,7 @@ class DemoLLM:
                     )
                 ],
                 commit_message="fix: add operands correctly",
-                description=(
-                    "Correct calculator.add and preserve the existing public API."
-                ),
+                description=("Correct calculator.add and preserve the existing public API."),
             )
         raise TypeError(f"DemoLLM has no fixture for {response_model.__name__}")
 
@@ -125,9 +118,7 @@ class DemoVectorStore:
     def __init__(self, repo: Path) -> None:
         self.repo = repo
 
-    async def query(
-        self, collection: str, query: str, n_results: int = 5
-    ) -> list[dict[str, Any]]:
+    async def query(self, collection: str, query: str, n_results: int = 5) -> list[dict[str, Any]]:
         if collection == "experience_store":
             return []
         content = (self.repo / "calculator.py").read_text(encoding="utf-8")
@@ -148,14 +139,22 @@ class DemoMCPClient:
     def __init__(self, repo: Path) -> None:
         self.repo = repo.resolve()
 
-    async def call_tool(
-        self, server: str, tool: str, arguments: dict[str, Any]
-    ) -> Any:
+    async def call_tool(self, server: str, tool: str, arguments: dict[str, Any]) -> Any:
         if (server, tool) == ("github", "get_file_contents"):
             path = self._safe_path(str(arguments["path"]))
             return {"content": path.read_text(encoding="utf-8")}
         if (server, tool) == ("cicd", "run_tests"):
-            return await asyncio.to_thread(self._run_candidate, arguments["patch"])
+            patch = Patch.model_validate(arguments["patch"])
+            service = IsolatedTestService(
+                self.repo,
+                (sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"),
+                timeout_seconds=30,
+            )
+            result = await service.run_tests(
+                patch,
+                full_suite=bool(arguments["full_suite"]),
+            )
+            return result.model_dump(mode="json")
         raise ValueError(f"Demo MCP tool is not available: {server}:{tool}")
 
     def _safe_path(self, relative: str) -> Path:
@@ -167,65 +166,6 @@ class DemoMCPClient:
             raise ValueError(f"Path escapes demo repository: {relative}")
         return resolved
 
-    def _execute_tests(self, repo: Path) -> tuple[int, str, int]:
-        start = time.perf_counter()
-        process = subprocess.run(
-            [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        duration_ms = int((time.perf_counter() - start) * 1000)
-        return process.returncode, process.stdout + process.stderr, duration_ms
-
-    def _run_candidate(self, patch_payload: dict[str, Any]) -> dict[str, Any]:
-        patch = Patch.model_validate(patch_payload)
-        baseline_code, baseline_output, _ = self._execute_tests(self.repo)
-        with tempfile.TemporaryDirectory(prefix="devflow-demo-") as temp_dir:
-            candidate = Path(temp_dir) / "repo"
-            shutil.copytree(self.repo, candidate)
-            for change in patch.changes:
-                relative = PurePosixPath(change.file_path.replace("\\", "/"))
-                if relative.is_absolute() or ".." in relative.parts:
-                    raise ValueError(f"Unsafe patch path: {change.file_path}")
-                target = candidate / Path(*relative.parts)
-                if change.change_type is ChangeType.DELETE:
-                    target.unlink()
-                else:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text(change.new_content or "", encoding="utf-8")
-            code, output, duration_ms = self._execute_tests(candidate)
-
-        passed = int(code == 0)
-        failed = int(code != 0)
-        case = TestCaseResult(
-            name="tests.test_calculator.CalculatorTests.test_add",
-            status=TestStatus.PASSED if code == 0 else TestStatus.FAILED,
-            duration_ms=duration_ms,
-            error_message=None if code == 0 else "Candidate test suite failed.",
-            traceback=None if code == 0 else output[-4000:],
-        )
-        return TestRunResult(
-            total=1,
-            passed=passed,
-            failed=failed,
-            errors=0,
-            skipped=0,
-            duration_ms=duration_ms,
-            results=[case],
-            baseline_comparison=BaselineComparison(
-                baseline_passed=int(baseline_code == 0),
-                current_passed=passed,
-                new_failures=[],
-                fixed_tests=(
-                    [case.name] if baseline_code != 0 and code == 0 else []
-                ),
-                regression=baseline_code == 0 and code != 0,
-            ),
-        ).model_dump(mode="json")
-
 
 class DemoExperienceStore:
     """In-memory evidence sink proving the terminal knowledge write."""
@@ -233,9 +173,7 @@ class DemoExperienceStore:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, Any]] = {}
 
-    async def store(
-        self, pattern_id: str, summary: str, metadata: dict[str, Any]
-    ) -> None:
+    async def store(self, pattern_id: str, summary: str, metadata: dict[str, Any]) -> None:
         self.records[pattern_id] = {"summary": summary, "metadata": metadata}
 
 
@@ -246,6 +184,12 @@ async def run_demo(output_dir: Path | None = None) -> tuple[dict[str, Any], Path
     repo = _root() / "examples" / "calculator_bug"
     output = output_dir or (_root() / ".devflow" / "runs")
     output.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    ledger_path = output / f"demo-{stamp}.routes.sqlite3"
+    route_ledger = DurableRouteLedger(
+        ledger_path,
+        owner_id=f"offline-demo-{stamp}",
+    )
 
     issue = IssueData(
         issue_number=1,
@@ -260,9 +204,7 @@ async def run_demo(output_dir: Path | None = None) -> tuple[dict[str, Any], Path
     llm = DemoLLM()
     vector_store = DemoVectorStore(repo)
     mcp_audit = MemoryAuditSink()
-    context_authority = HMACContextAuthority(
-        b"devflow-offline-demo-context-key-only"
-    )
+    context_authority = HMACContextAuthority(b"devflow-offline-demo-context-key-only")
     mcp = PolicyEnforcedMCPClient(
         DemoMCPClient(repo),
         MCPPolicy.from_file(_root() / "config" / "mcp_servers.yaml"),
@@ -271,62 +213,51 @@ async def run_demo(output_dir: Path | None = None) -> tuple[dict[str, Any], Path
     )
     experience_store = DemoExperienceStore()
 
-    leader = TeamLeader(llm_client=llm)
+    leader = TeamLeader(llm_client=llm, execution_ledger=route_ledger)
     triage = TriageAgent(llm_client=llm, vector_store=vector_store)
-    locator = LocatorAgent(
-        llm_client=llm, vector_store=vector_store, mcp_client=mcp
-    )
+    locator = LocatorAgent(llm_client=llm, vector_store=vector_store, mcp_client=mcp)
     coder = CoderAgent(llm_client=llm)
     tester = TesterAgent(llm_client=llm, mcp_client=mcp)
-    reviewer = ReviewerAgent(llm_client=llm, mcp_client=mcp)
-    distiller = ExperienceDistillerSkill(store=experience_store)
+    reviewer = ReviewerAgent(
+        llm_client=llm,
+        mcp_client=mcp,
+        experience_store=experience_store,
+    )
+    router = LocalAgentTaskRouter(
+        leader,
+        triage,
+        locator,
+        coder,
+        tester,
+        reviewer,
+    )
+    runtime = LocalAgentEventRuntime(leader, router).start()
+    try:
+        await publish(
+            "issue.created",
+            {
+                "issue": issue.model_dump(mode="json"),
+                "repository_revision": "demo-fixture-v1",
+                "create_pr": False,
+            },
+        )
+    finally:
+        runtime.stop()
 
-    classification = await triage.execute(issue)
-    tasks = await leader.decompose_task(issue, classification)
-    located = await locator.execute(
-        {
-            "issue_id": issue.issue_number,
-            "issue": issue.model_dump(mode="json"),
-            "tier": classification.complexity_level.value,
-        }
-    )
-    patch = await coder.execute(
-        {
-            "issue_id": issue.issue_number,
-            "issue": issue.model_dump(mode="json"),
-            "tier": classification.complexity_level.value,
-            "located_context": located.model_dump(mode="json"),
-        }
-    )
-    candidate = CoderAgent.build_patch_candidate(
-        issue_id=issue.issue_number,
-        tier=classification.complexity_level,
-        patch=patch,
-        located=located,
-    )
-    test_result = await tester.execute(
-        candidate.model_dump(mode="json", exclude_none=True)
-    )
-    review = await reviewer.execute(
-        {
-            "issue_id": issue.issue_number,
-            "tier": classification.complexity_level.value,
-            "patch": patch.model_dump(mode="json"),
-            "test_result": test_result.model_dump(mode="json"),
-            "create_pr": False,
-        }
-    )
-    trace_id = f"demo-{issue.issue_number}"
-    experience = await distiller.run(
-        issue=issue.model_dump(mode="json"),
-        tier=classification.complexity_level.value,
-        repository_revision="demo-fixture-v1",
-        located_context=located.model_dump(mode="json"),
-        patch=patch.model_dump(mode="json"),
-        test_result=test_result.model_dump(mode="json"),
-        review=review.model_dump(mode="json"),
-        trace_id=trace_id,
-    )
+    context = leader.issue_snapshot(issue.issue_number)
+    classification = IssueClassification.model_validate(context["classification"])
+    located = LocatedContext.model_validate(context["located_context"])
+    patch = Patch.model_validate(context["previous_patch"])
+    test_result = TestRunResult.model_validate(context["test_result"])
+    review = ReviewResult.model_validate(context["review"])
+    experience = context["experience"]
+    route_envelopes = [
+        HandoffEnvelope.model_validate(record.payload)
+        for record in event_bus.history()
+        if record.event_type.startswith("task.route.")
+    ]
+    ledger_snapshot = route_ledger.snapshot()
+    audit_verification = route_ledger.verify_audit_chain()
 
     report = {
         "schema_version": "1.0",
@@ -337,21 +268,31 @@ async def run_demo(output_dir: Path | None = None) -> tuple[dict[str, Any], Path
         "classification": classification.model_dump(mode="json"),
         "plan": [
             {
-                "task_id": task.task_id,
-                "agent": task.agent,
-                "skill": task.skill,
-                "depends_on": task.depends_on,
+                "task_id": route.task_id,
+                "agent": route.consumer,
+                "skill": route.skill,
+                "depends_on": (
+                    route.artifact.inline.get("depends_on", [])
+                    if route.artifact.inline is not None
+                    else []
+                ),
             }
-            for task in tasks
+            for route in route_envelopes
         ],
         "located_context": located.model_dump(mode="json"),
         "patch": patch.model_dump(mode="json"),
         "test_result": test_result.model_dump(mode="json"),
         "review": review.model_dump(mode="json"),
         "experience": experience,
-        "mcp_audit": [
-            entry.model_dump(mode="json") for entry in mcp_audit.records
-        ],
+        "terminal_receipt": context["terminal_receipt"],
+        "terminal_state": leader.get_lifecycle(issue.issue_number).value,
+        "collaboration_ledger": {
+            "schema_version": "devflow.collaboration-ledger-evidence/v1",
+            "file": ledger_path.name,
+            "snapshot": asdict(ledger_snapshot),
+            "audit_chain": asdict(audit_verification),
+        },
+        "mcp_audit": [entry.model_dump(mode="json") for entry in mcp_audit.records],
         "events": [
             {
                 "event_type": record.event_type,
@@ -361,7 +302,6 @@ async def run_demo(output_dir: Path | None = None) -> tuple[dict[str, Any], Path
             for record in event_bus.history()
         ],
     }
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     report_path = output / f"demo-{stamp}.json"
     report_path.write_text(
         json.dumps(report, indent=2, ensure_ascii=False, default=str),

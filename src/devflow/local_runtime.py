@@ -38,6 +38,15 @@ class LocalRouteAuthority(Protocol):
         """Claim one authorized route for exactly one scheduler dispatch."""
         ...
 
+    def finish_execution_route(
+        self,
+        envelope: HandoffEnvelope,
+        *,
+        succeeded: bool,
+    ) -> bool:
+        """Seal the scheduler claim after an explicit Worker outcome."""
+        ...
+
 
 class LocalRoutedWorker(Protocol):
     """Minimum Worker surface used by the local scheduler."""
@@ -151,7 +160,19 @@ class LocalAgentTaskRouter:
             # Deliberately discard the return value. Agent outputs cross only
             # through their typed, redacted events; they never become router
             # state or a second unbounded collaboration channel.
-            await binding.worker.execute(envelope)
+            try:
+                await binding.worker.execute(envelope)
+            except Exception:
+                self._authority.finish_execution_route(
+                    envelope,
+                    succeeded=False,
+                )
+                raise
+            else:
+                self._authority.finish_execution_route(
+                    envelope,
+                    succeeded=True,
+                )
 
         return _handler
 

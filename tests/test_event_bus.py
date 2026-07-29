@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from typing import Any
+
 import pytest
 
 from devflow.event_bus import EventBus, EventPayloadError
@@ -25,6 +28,18 @@ async def test_event_bus_isolates_handler_failure_and_keeps_history() -> None:
     assert received == [7]
     assert bus.history()[0].event_type == "sample"
     assert bus.history()[0].payload == {"value": 7}
+    dead_letter = bus.history()[1]
+    assert dead_letter.event_type == "event.delivery_failed"
+    assert dead_letter.payload["source_event_type"] == "sample"
+    assert set(dead_letter.payload) == {
+        "schema_version",
+        "source_event_type",
+        "payload_sha256",
+        "handler_sha256",
+        "error_type",
+        "error_digest",
+    }
+    assert "expected test failure" not in json.dumps(dead_letter.payload)
 
 
 @pytest.mark.asyncio
@@ -99,3 +114,31 @@ async def test_event_bus_rejects_cyclic_payload() -> None:
         await bus.publish("sample", cyclic)
 
     assert bus.history() == []
+
+
+@pytest.mark.asyncio
+async def test_event_bus_rejects_oversized_payload_before_fanout() -> None:
+    bus = EventBus()
+    received = False
+
+    async def handler(_: dict[str, Any]) -> None:
+        nonlocal received
+        received = True
+
+    bus.subscribe("sample", handler)
+    with pytest.raises(EventPayloadError, match="byte limit"):
+        await bus.publish("sample", {"body": "x" * 1_048_576})
+
+    assert received is False
+    assert bus.history() == []
+
+
+@pytest.mark.asyncio
+async def test_event_history_has_bounded_retention_and_drop_counter() -> None:
+    bus = EventBus(history_limit=2)
+    await bus.publish("sample", {"sequence": 1})
+    await bus.publish("sample", {"sequence": 2})
+    await bus.publish("sample", {"sequence": 3})
+
+    assert [record.payload["sequence"] for record in bus.history()] == [2, 3]
+    assert bus.history_dropped == 1

@@ -14,6 +14,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from devflow.models.test_integrity import TestIntegrityAttestation
 from devflow.security.secrets import REDACTION_MARKER, contains_secret, redact_text
 
 _MAX_FAILURE_NAMES = 128
@@ -145,6 +146,13 @@ class TestRunResult(BaseModel):
     baseline_comparison: BaselineComparison | None = Field(
         default=None,
         description="Comparison against the baseline, if a baseline is available",
+    )
+    integrity_attestation: TestIntegrityAttestation | None = Field(
+        default=None,
+        description=(
+            "CI/CD MCP evidence that repository-owned tests were immutable; "
+            "absence means integrity was not attested"
+        ),
     )
 
     @model_validator(mode="after")
@@ -555,6 +563,7 @@ __all__ = [
     "TestFailureDiagnostic",
     "TestFailureEvidence",
     "TestFailureReason",
+    "TestIntegrityAttestation",
     "TestRunResult",
     "TestStatus",
     "canonical_artifact_digest",

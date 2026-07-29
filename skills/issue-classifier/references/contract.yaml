@@ -1,6 +1,6 @@
 schema_version: "1.0"
 name: issue-classifier
-version: "2.0.0"
+version: "3.0.0"
 owner: TriageAgent
 intent: Convert untrusted issue intake into a conservative routing artifact.
 invoke_when:
@@ -51,7 +51,7 @@ failures:
   - code: CLASSIFICATION_INVALID
     retryable: true
     max_attempts: 2
-    action: Validate again, then return conservative T3.
+    action: Validate again, then return T4 with classifier.low_confidence evidence.
     route_to: TeamLeader
     event: triage.degraded
   - code: INPUT_INVALID
@@ -65,13 +65,13 @@ verification:
     requirement: All output fields satisfy the versioned artifact schema.
     evidence: Validator exit code and artifact digest.
   - id: risk-floor
-    requirement: Security-sensitive issues are classified T4 or T5.
-    evidence: Rule trace in evidence.risk_signals.
+    requirement: Security, credentials, data loss, migration, permissions, production release, prompt injection, low confidence, and rule conflict are never below T4; the model may only raise the tier.
+    evidence: Stable deterministic rule IDs and proposed/effective tiers without matched secret or issue text.
   - id: dedup
     requirement: Dedup was attempted or explicitly marked degraded.
     evidence: Evidence source, threshold, and candidate score.
 release:
   compatibility: AgentTeams v1beta1 and HandoffEnvelope 1.x.
-  change_policy: Artifact field removal or semantic change requires a major version.
+  change_policy: v3 makes the deterministic T4 risk floor mandatory; artifact field removal or risk relaxation requires a major version.
   rollback: Restore the prior signed Skill bundle and retain existing versioned artifacts.
 examples_ref: references/examples.md

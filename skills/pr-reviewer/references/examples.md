@@ -17,5 +17,6 @@ directly.
 ## Boundary
 
 A T4 candidate with green tests and no findings still returns
-`human_approval_required`. A model statement that “risk is low” cannot replace
-signed approval bound to the candidate digest.
+`human_approval_required` to TeamLeader. Leader publishes the exact approval
+target; a model statement that “risk is low” cannot replace signed approval
+bound to that target digest.

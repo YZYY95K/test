@@ -272,6 +272,14 @@ def handle_request(request):
                 project["status"] = "active"
         elif action == "complete_project":
             project["status"] = "completed"
+        elif action == "accept_task_result":
+            marker = Path(arguments["workspaceDir"]) / ".fixture-accept-transitions"
+            marker.write_text(
+                marker.read_text(encoding="utf-8") + "accepted\\n"
+                if marker.exists()
+                else "accepted\\n",
+                encoding="utf-8",
+            )
         projects[project_id] = project
         path.write_text(json.dumps(projects), encoding="utf-8")
         return {"jsonrpc": "2.0", "id": request.get("id"), "result": {
@@ -310,6 +318,14 @@ def handle_request(request):
         return {"jsonrpc": "2.0", "id": request.get("id"), "result": {
             "content": [{"type": "text", "text": json.dumps({"task": task})}]
         }}
+    if params.get("name") == "taskflow" and arguments.get("action") == "submit_task":
+        marker = Path(arguments["workspaceDir"]) / ".fixture-submit-transitions"
+        marker.write_text(
+            marker.read_text(encoding="utf-8") + "submitted\\n"
+            if marker.exists()
+            else "submitted\\n",
+            encoding="utf-8",
+        )
     return {"jsonrpc": "2.0", "id": request.get("id"), "result": {
         "ok": True,
         "echo": {"name": params.get("name"), "arguments": arguments}
@@ -798,6 +814,423 @@ def _guard_payload(response: dict[str, Any]) -> dict[str, Any]:
     return cast(
         dict[str, Any], json.loads(response["result"]["content"][0]["text"])
     )
+
+
+def _skill_handoff(
+    *,
+    task_id: str,
+    producer: str,
+    consumer: str,
+    artifact_type: str,
+    artifact_schema: str,
+    inline: dict[str, Any],
+    created_at: str,
+    parent: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    run_id = "skill-gate-run"
+    artifact_digest = hashlib.sha256(
+        json.dumps(
+            inline,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    envelope: dict[str, Any] = {
+        "envelope_version": "1.0",
+        "run_id": run_id,
+        "issue_id": 17,
+        "task_id": task_id,
+        "producer": producer,
+        "consumer": consumer,
+        "skill": "issue-classifier",
+        "trace_id": f"{run_id}:{task_id}",
+        "idempotency_key": f"{run_id}:{task_id}:{consumer}:issue-classifier",
+        "created_at": created_at,
+        "status": "ready",
+        "artifact": {
+            "type": artifact_type,
+            "schema_version": artifact_schema,
+            "inline": inline,
+            "sha256": artifact_digest,
+        },
+    }
+    if parent is not None:
+        envelope["parent_task_id"] = parent["task_id"]
+        envelope["parent_handoff_sha256"] = hashlib.sha256(
+            json.dumps(
+                parent,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+    return envelope
+
+
+def _write_skill_gate_fixture(
+    workspace: Path,
+    *,
+    task_status: str,
+    mutation: str | None = None,
+    include_task_skill: bool = True,
+) -> dict[str, Any]:
+    skill_root = workspace / "skills" / "issue-classifier"
+    for relative in (
+        "scripts/validate.py",
+        "scripts/_contract.py",
+        "references/contract.yaml",
+    ):
+        source = ROOT / "skills" / "issue-classifier" / relative
+        target = skill_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+
+    now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    rendered_now = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    task_id = "task-fixture"
+    source_handoff = _skill_handoff(
+        task_id=task_id,
+        producer="devflow-lead",
+        consumer="devflow-triage",
+        artifact_type="IssueIntake",
+        artifact_schema="1.0",
+        inline={
+            "issue_number": 17,
+            "title": "Classify fixture",
+            "author": "fixture",
+            "repo_owner": "example",
+            "repo_name": "repo",
+            "created_at": rendered_now,
+        },
+        created_at=rendered_now,
+    )
+    result_handoff = _skill_handoff(
+        task_id=task_id,
+        producer="devflow-triage",
+        consumer="devflow-lead",
+        artifact_type="ClassifiedIssue",
+        artifact_schema="1.0",
+        inline={
+            "issue": {"issue_number": 17},
+            "complexity_level": "simple",
+            "category": "bug",
+            "priority": "P2",
+            "duplicate_of": None,
+            "estimated_effort_hours": 1,
+            "rationale": "bounded fixture",
+            "confidence": 0.9,
+            "evidence": [],
+        },
+        created_at=rendered_now,
+        parent=source_handoff,
+    )
+    if mutation == "invalid":
+        del result_handoff["artifact"]["inline"]["rationale"]
+        result_handoff["artifact"]["sha256"] = hashlib.sha256(
+            json.dumps(
+                result_handoff["artifact"]["inline"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+    elif mutation == "tampered":
+        result_handoff["artifact"]["sha256"] = "0" * 64
+    elif mutation == "stale":
+        result_handoff["created_at"] = (now - dt.timedelta(days=2)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+    elif mutation == "cross-task":
+        result_handoff["task_id"] = "other-task"
+        result_handoff["trace_id"] = "skill-gate-run:other-task"
+        result_handoff["idempotency_key"] = (
+            "skill-gate-run:other-task:devflow-lead:issue-classifier"
+        )
+
+    task_root = workspace / "shared" / "tasks" / task_id
+    task_root.mkdir(parents=True, exist_ok=True)
+    spec_path = f"shared/tasks/{task_id}/spec.md"
+    result_path = f"shared/tasks/{task_id}/result.handoff.json"
+    (workspace / spec_path).write_text(
+        json.dumps(source_handoff, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    (workspace / result_path).write_text(
+        json.dumps(result_handoff, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    task = {
+        "task_id": task_id,
+        "assigned_to": "devflow-triage",
+        "status": task_status,
+        "spec_path": spec_path,
+        "deliverables": [result_path],
+    }
+    if include_task_skill:
+        task["skill"] = "issue-classifier"
+    return task
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error"),
+    [
+        ("invalid", "skill_validation_failed"),
+        ("tampered", "skill_artifact_invalid"),
+        ("stale", "skill_route_stale"),
+        ("cross-task", "skill_task_mismatch"),
+    ],
+)
+def test_stdio_skill_gate_rejects_without_submit_transition(
+    tmp_path: Path,
+    mutation: str,
+    error: str,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-triage"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("worker", "devflow-triage"))
+    _install_fake(plugin, workspace, "worker", runtime)
+    task = _write_skill_gate_fixture(workspace, task_status="in_progress", mutation=mutation)
+    request = _task_request(
+        "submit_task",
+        assigned_to="devflow-triage",
+        status="in_progress",
+        deliverables=task["deliverables"],
+    )
+    request["params"]["arguments"]["_fixtureTask"] = task
+
+    denied = _guard_call(workspace, "worker", request)
+
+    assert _guard_payload(denied)["error"] == error
+    assert not (workspace / ".fixture-submit-transitions").exists()
+
+
+def test_stdio_skill_gate_validates_before_submit_transition(tmp_path: Path) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-triage"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("worker", "devflow-triage"))
+    _install_fake(plugin, workspace, "worker", runtime)
+    task = _write_skill_gate_fixture(workspace, task_status="in_progress")
+    request = _task_request(
+        "submit_task",
+        assigned_to="devflow-triage",
+        status="in_progress",
+        deliverables=task["deliverables"],
+    )
+    request["params"]["arguments"]["_fixtureTask"] = task
+
+    accepted = _guard_call(workspace, "worker", request)
+
+    assert (workspace / ".fixture-submit-transitions").read_text(encoding="utf-8") == (
+        "submitted\n"
+    )
+    attestation = accepted["result"]["skillValidation"]
+    assert attestation["schema"] == "devflow.agentteams.skill-validation/v1"
+    assert attestation["taskId"] == "task-fixture"
+    assert attestation["skill"] == "issue-classifier"
+    assert all(
+        re.fullmatch(r"[0-9a-f]{64}", attestation[field])
+        for field in (
+            "sourceRouteSha256",
+            "resultHandoffSha256",
+            "artifactSha256",
+            "validatorSha256",
+        )
+    )
+
+
+def test_stdio_skill_gate_derives_skill_from_verified_assignment_envelope(
+    tmp_path: Path,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-triage"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("worker", "devflow-triage"))
+    _install_fake(plugin, workspace, "worker", runtime)
+    task = _write_skill_gate_fixture(
+        workspace,
+        task_status="in_progress",
+        include_task_skill=False,
+    )
+    request = _task_request(
+        "submit_task",
+        assigned_to="devflow-triage",
+        status="in_progress",
+        deliverables=task["deliverables"],
+    )
+    request["params"]["arguments"]["_fixtureTask"] = task
+
+    accepted = _guard_call(workspace, "worker", request)
+
+    assert accepted["result"]["ok"] is True
+    assert accepted["result"]["skillValidation"]["skill"] == "issue-classifier"
+
+
+@pytest.mark.parametrize("claimed_status", ["FAILED", None])
+def test_stdio_skill_gate_rejects_wrong_or_missing_worker_result_status(
+    tmp_path: Path,
+    claimed_status: str | None,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-triage"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("worker", "devflow-triage"))
+    _install_fake(plugin, workspace, "worker", runtime)
+    task = _write_skill_gate_fixture(workspace, task_status="in_progress")
+    request = _task_request(
+        "submit_task",
+        assigned_to="devflow-triage",
+        status="in_progress",
+        result_status=claimed_status or "SUCCESS",
+        deliverables=task["deliverables"],
+    )
+    arguments = request["params"]["arguments"]
+    arguments["_fixtureTask"] = task
+    if claimed_status is None:
+        arguments.pop("status")
+
+    denied = _guard_call(workspace, "worker", request)
+
+    assert _guard_payload(denied)["error"] == "skill_result_status_invalid"
+    assert not (workspace / ".fixture-submit-transitions").exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["invalid", "tampered", "stale", "cross-task"],
+)
+def test_stdio_skill_gate_rejects_without_accept_transition(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-lead"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader", "devflow-lead"))
+    _install_fake(plugin, workspace, "leader", runtime)
+    task = _write_skill_gate_fixture(workspace, task_status="submitted", mutation=mutation)
+    worker_skill = tmp_path / "devflow-triage" / "skills" / "issue-classifier"
+    for relative in (
+        "scripts/validate.py",
+        "scripts/_contract.py",
+        "references/contract.yaml",
+    ):
+        source = workspace / "skills" / "issue-classifier" / relative
+        target = worker_skill / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+
+    created = _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "skill-gate-project", riskTier="T2"),
+    )
+    assert created["result"]["project"]["status"] == "active"
+    request = _project_request(
+        "accept_task_result",
+        "skill-gate-project",
+        taskId="task-fixture",
+        accepted=True,
+        resultStatus="SUCCESS",
+    )
+    request["params"]["arguments"]["_fixtureTask"] = task
+
+    denied = _guard_call(workspace, "leader", request)
+
+    assert _guard_payload(denied)["error"].startswith("approval_denied:skill_")
+    assert not (workspace / ".fixture-accept-transitions").exists()
+    resolved = _guard_call(
+        workspace,
+        "leader",
+        _project_request("resolve_project", "skill-gate-project"),
+    )
+    assert resolved["result"]["project"]["status"] == "active"
+
+
+def test_stdio_skill_gate_validates_before_accept_transition(tmp_path: Path) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-lead"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader", "devflow-lead"))
+    _install_fake(plugin, workspace, "leader", runtime)
+    task = _write_skill_gate_fixture(workspace, task_status="submitted")
+    worker_skill = tmp_path / "devflow-triage" / "skills" / "issue-classifier"
+    for relative in (
+        "scripts/validate.py",
+        "scripts/_contract.py",
+        "references/contract.yaml",
+    ):
+        source = workspace / "skills" / "issue-classifier" / relative
+        target = worker_skill / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "skill-gate-project", riskTier="T2"),
+    )
+    request = _project_request(
+        "accept_task_result",
+        "skill-gate-project",
+        taskId="task-fixture",
+        accepted=True,
+        resultStatus="SUCCESS",
+    )
+    request["params"]["arguments"]["_fixtureTask"] = task
+
+    accepted = _guard_call(workspace, "leader", request)
+
+    assert accepted["result"]["ok"] is True
+    assert (workspace / ".fixture-accept-transitions").read_text(encoding="utf-8") == (
+        "accepted\n"
+    )
+
+
+@pytest.mark.parametrize("claimed_status", ["FAILED", None])
+def test_stdio_skill_gate_rejects_wrong_or_missing_leader_result_status(
+    tmp_path: Path,
+    claimed_status: str | None,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-lead"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader", "devflow-lead"))
+    _install_fake(plugin, workspace, "leader", runtime)
+    task = _write_skill_gate_fixture(workspace, task_status="submitted")
+    worker_skill = tmp_path / "devflow-triage" / "skills" / "issue-classifier"
+    for relative in (
+        "scripts/validate.py",
+        "scripts/_contract.py",
+        "references/contract.yaml",
+    ):
+        source = workspace / "skills" / "issue-classifier" / relative
+        target = worker_skill / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "status-gate-project", riskTier="T2"),
+    )
+    request = _project_request(
+        "accept_task_result",
+        "status-gate-project",
+        taskId="task-fixture",
+        accepted=True,
+    )
+    arguments = request["params"]["arguments"]
+    arguments["_fixtureTask"] = task
+    if claimed_status is not None:
+        arguments["resultStatus"] = claimed_status
+
+    denied = _guard_call(workspace, "leader", request)
+
+    assert _guard_payload(denied)["error"] == (
+        "approval_denied:skill_result_status_invalid"
+    )
+    assert not (workspace / ".fixture-accept-transitions").exists()
 
 
 def test_worker_task_transition_requires_matching_assignment(tmp_path: Path) -> None:

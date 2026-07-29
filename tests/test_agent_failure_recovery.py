@@ -243,7 +243,10 @@ def _coder_input(attempt: int) -> dict[str, Any]:
     return payload
 
 
-def _tester_failure_handoff(candidate: Patch) -> HandoffEnvelope:
+def _tester_failure_handoff(
+    candidate: Patch,
+    parent: HandoffEnvelope | None = None,
+) -> HandoffEnvelope:
     result = _failed_test_result()
     evidence = FailureEvidence.from_test_result(
         issue_id=ISSUE_ID,
@@ -259,6 +262,8 @@ def _tester_failure_handoff(candidate: Patch) -> HandoffEnvelope:
         skill="test-runner",
         artifact_type="TestEvidence",
         status=HandoffStatus.RETRY,
+        parent_task_id=None if parent is None else parent.task_id,
+        parent_handoff_sha256=(None if parent is None else TeamLeader._handoff_sha256(parent)),
         payload={
             "issue_id": ISSUE_ID,
             "candidate_digest": evidence.candidate_digest,
@@ -349,9 +354,7 @@ async def test_verified_failure_routes_real_retry_and_is_idempotent() -> None:
     await publish("agent.failed", failure_record.payload)
     assert len(_routes("task.route.locatoragent")) == 2
     outcomes = [
-        record.payload
-        for record in event_bus.history()
-        if record.event_type == "failure.handled"
+        record.payload for record in event_bus.history() if record.event_type == "failure.handled"
     ]
     assert outcomes[-1]["idempotent"] is True
     assert outcomes[-1]["resolution"] == "retry_routed"
@@ -393,13 +396,15 @@ async def test_concurrent_distinct_failures_claim_one_route_and_both_are_audited
         "retry_routed",
         "duplicate",
     }
-    assert outcomes[0]["route_claim"] == outcomes[1]["route_claim"] == {
-        "handoff_sha256": first.handoff_sha256,
-        "execution_attempt": 1,
-    }
-    duplicate = next(
-        outcome for outcome in outcomes if outcome["resolution"] == "duplicate"
+    assert (
+        outcomes[0]["route_claim"]
+        == outcomes[1]["route_claim"]
+        == {
+            "handoff_sha256": first.handoff_sha256,
+            "execution_attempt": 1,
+        }
     )
+    duplicate = next(outcome for outcome in outcomes if outcome["resolution"] == "duplicate")
     assert duplicate["reason"] == "route_attempt_failure_conflict"
     assert duplicate["idempotent"] is True
     runtime.stop()
@@ -482,9 +487,7 @@ async def test_third_execution_failure_escalates_without_fourth_route() -> None:
 
     assert len(_routes("task.route.locatoragent")) == 3
     outcome = [
-        record.payload
-        for record in event_bus.history()
-        if record.event_type == "failure.handled"
+        record.payload for record in event_bus.history() if record.event_type == "failure.handled"
     ][-1]
     assert outcome["resolution"] == "escalated"
     assert outcome["reason"] == "execution_retry_budget_exhausted"
@@ -544,8 +547,7 @@ async def test_coder_candidate_failures_never_multiply_generation_budget() -> No
     failures = [
         AgentFailureEvent.model_validate(record.payload)
         for record in event_bus.history()
-        if record.event_type == "agent.failed"
-        and record.payload.get("agent") == "CoderAgent"
+        if record.event_type == "agent.failed" and record.payload.get("agent") == "CoderAgent"
     ]
     assert len(failures) == 3
     assert all(failure.error_code == "CANDIDATE_INVALID" for failure in failures)
@@ -605,9 +607,7 @@ async def test_forged_handoff_correlation_is_audited_but_not_trusted(
 
     failure = AgentFailureEvent.model_validate(
         next(
-            record.payload
-            for record in event_bus.history()
-            if record.event_type == "agent.failed"
+            record.payload for record in event_bus.history() if record.event_type == "agent.failed"
         )
     )
     assert failure.correlation_trusted is False
@@ -637,9 +637,7 @@ async def test_malformed_handoff_is_audited_without_forged_identifiers() -> None
         await worker.execute(malformed)
     failure = AgentFailureEvent.model_validate(
         next(
-            record.payload
-            for record in event_bus.history()
-            if record.event_type == "agent.failed"
+            record.payload for record in event_bus.history() if record.event_type == "agent.failed"
         )
     )
     assert failure.correlation_trusted is False
@@ -670,13 +668,9 @@ async def test_success_completion_declares_execution_outcome() -> None:
         artifact_type="SkillInvocation",
         payload={"input": {"issue_id": ISSUE_ID}},
     )
-    assert await worker.execute(envelope.model_dump(mode="json")) == {
-        "issue_id": ISSUE_ID
-    }
+    assert await worker.execute(envelope.model_dump(mode="json")) == {"issue_id": ISSUE_ID}
     completed = next(
-        record.payload
-        for record in event_bus.history()
-        if record.event_type == "agent.completed"
+        record.payload for record in event_bus.history() if record.event_type == "agent.completed"
     )
     assert completed["outcome"] == "execution_succeeded"
     assert completed["execution_attempt"] == 1
@@ -724,13 +718,10 @@ async def test_successful_handoff_redelivery_is_cached_and_never_routes_retry() 
         for record in event_bus.history()
         if record.event_type in {"agent.failed", "failure.handled"}
     ]
-    assert len(
-        [
-            record
-            for record in event_bus.history()
-            if record.event_type == "agent.completed"
-        ]
-    ) == 1
+    assert (
+        len([record for record in event_bus.history() if record.event_type == "agent.completed"])
+        == 1
+    )
     duplicates = [
         record.payload
         for record in event_bus.history()
@@ -738,7 +729,8 @@ async def test_successful_handoff_redelivery_is_cached_and_never_routes_retry() 
     ]
     assert len(duplicates) == 2
     assert all(
-        duplicate == {
+        duplicate
+        == {
             "agent": "LocatorAgent",
             "schema_version": "devflow.execution-duplicate/v1",
             "outcome": "cached_success",
@@ -782,9 +774,7 @@ async def test_untrusted_direct_failure_escalates_without_claiming_retry() -> No
         await worker.execute({"issue_id": ISSUE_ID, "retry_attempt": 2})
     assert _routes("task.route.coderagent") == []
     outcome = next(
-        record.payload
-        for record in event_bus.history()
-        if record.event_type == "failure.handled"
+        record.payload for record in event_bus.history() if record.event_type == "failure.handled"
     )
     assert outcome["resolution"] == "escalated"
     assert outcome["reason"] == "untrusted_execution_context"
@@ -872,7 +862,7 @@ def test_next_patch_attempt_clears_only_semantic_retry_state() -> None:
 async def test_invalid_tester_failure_has_no_sticky_state_side_effect() -> None:
     leader = TeamLeader()
     handoff = _tester_failure_handoff(_patch())
-    with pytest.raises(AgentError, match="Canonical retry context is incomplete"):
+    with pytest.raises(AgentError, match="source route binding"):
         await leader._on_test_failed(handoff.model_dump(mode="json"))
     assert ISSUE_ID not in leader._issue_context
 
@@ -891,9 +881,20 @@ async def test_conflicting_pending_test_retry_has_no_sticky_failure_marker() -> 
     )
     context = leader._issue_context[ISSUE_ID]
     context["pending_test_retry"] = {"test_result_digest": "0" * 64}
+    await leader.route_task(
+        Task(
+            task_id=f"{ISSUE_ID}-testeragent-test-runner-parent",
+            agent="TesterAgent",
+            skill="test-runner",
+            input_data={"issue_id": ISSUE_ID},
+            tier=ComplexityLevel.T2,
+        )
+    )
+    parent = _routes("task.route.testeragent")[-1]
+    assert leader.claim_execution_route(parent)
     with pytest.raises(AgentError, match="different test retry"):
         await leader._on_test_failed(
-            _tester_failure_handoff(candidate).model_dump(mode="json")
+            _tester_failure_handoff(candidate, parent).model_dump(mode="json")
         )
     assert "semantic_test_failure" not in context
 
@@ -901,6 +902,6 @@ async def test_conflicting_pending_test_retry_has_no_sticky_failure_marker() -> 
 @pytest.mark.asyncio
 async def test_legacy_untyped_test_failure_is_rejected_by_default() -> None:
     leader = TeamLeader()
-    with pytest.raises(AgentError, match="typed Tester hand-off required"):
+    with pytest.raises(AgentError, match="Canonical Worker result hand-off"):
         await leader._on_test_failed({"issue_id": ISSUE_ID})
     assert ISSUE_ID not in leader._issue_context

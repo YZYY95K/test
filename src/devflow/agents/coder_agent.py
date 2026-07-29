@@ -27,6 +27,7 @@ from devflow.models.test_result import (
 )
 from devflow.observability import logger
 from devflow.security.secrets import redact_text, secret_kinds
+from devflow.security.test_integrity import patch_integrity_violations
 from devflow.skills.base import BaseSkill
 from devflow.skills.contracts import HandoffStatus
 
@@ -47,7 +48,6 @@ class CoderAgent(BaseAgent):
         description=("Generate minimal, repository-aware patches from verified located context."),
         model="glm-5.2",
         temperature=0.2,
-        system_prompt_ref="prompts/coder.md",
         model_fallback=("glm-5.2",),
     )
     _CAPABILITIES = (
@@ -64,7 +64,7 @@ class CoderAgent(BaseAgent):
     )
     # Tester failures are mediated by TeamLeader; Coder never consumes raw
     # test.failed hand-offs directly.
-    _WATCHES = ("locator.completed",)
+    _WATCHES: tuple[str, ...] = ()
     _OWNED_SKILLS = ("patch-generator",)
     _HANDOFF_PRODUCERS = {"patch-generator": frozenset({"TeamLeader"})}
     _FORBIDDEN_ACTIONS = {
@@ -108,7 +108,7 @@ class CoderAgent(BaseAgent):
                         response_model=Patch,
                         model=self.identity.model,
                         temperature=self.identity.temperature,
-                        system=self.identity.description,
+                        system=self.system_prompt,
                     ),
                     Patch,
                 )
@@ -168,7 +168,7 @@ class CoderAgent(BaseAgent):
             await self._emit_handoff(
                 "coder.patch_ready",
                 issue_id=issue.issue_number,
-                consumer="TesterAgent",
+                consumer="TeamLeader",
                 skill="patch-generator",
                 artifact_type="PatchCandidate",
                 artifact_schema_version="1.2",
@@ -192,6 +192,7 @@ class CoderAgent(BaseAgent):
             ("secret-shaped", "SECRET_OUTPUT"),
             ("duplicate changes", "DUPLICATE_FILE"),
             ("outside the located evidence", "OUTSIDE_EVIDENCE_SCOPE"),
+            ("immutable tests", "TEST_INTEGRITY_FORBIDDEN"),
             ("delete a test file", "TEST_DELETE_FORBIDDEN"),
             ("change type conflicts", "CHANGE_SHAPE_INVALID"),
             ("blocked code patterns", "DANGEROUS_PATTERN"),
@@ -423,6 +424,10 @@ class CoderAgent(BaseAgent):
         if leaked:
             raise AgentError("Patch contains secret-shaped output and was blocked.")
 
+        # Preserve the repository-boundary error contract before applying the
+        # higher-level integrity policy.
+        for change in patch.changes:
+            CoderAgent._normalize_repository_path(change.file_path)
         allowed_files = CoderAgent._allowed_files(located) if located else None
         seen: set[str] = set()
         for change in patch.changes:
@@ -446,6 +451,13 @@ class CoderAgent(BaseAgent):
                     ast.parse(change.new_content, filename=normalized)
                 except SyntaxError as exc:
                     raise AgentError("Patch contains invalid Python syntax.") from exc
+
+        integrity_violations = patch_integrity_violations(patch)
+        if integrity_violations:
+            raise AgentError(
+                "Patch attempts to change immutable tests or control their outcome "
+                f"(policy codes: {', '.join(integrity_violations)})."
+            )
 
     @staticmethod
     def _normalize_repository_path(value: str) -> str:

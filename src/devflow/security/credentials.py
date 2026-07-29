@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,24 @@ from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel, Field
 
 from devflow.exceptions import MCPAuthorizationError
+
+_RESERVED_PROVIDER_ENVIRONMENT = frozenset(
+    {
+        "COMSPEC",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "PATHEXT",
+        "PYTHONPATH",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "USERPROFILE",
+        "WINDIR",
+    }
+)
 
 
 class CapabilityHandle(BaseModel):
@@ -66,9 +85,7 @@ class CredentialBroker:
             "capability": capability,
             "expires_at": datetime.now(timezone.utc) + ttl,
         }
-        return CapabilityHandle.model_validate(
-            {**unsigned, "signature": self._sign(unsigned)}
-        )
+        return CapabilityHandle.model_validate({**unsigned, "signature": self._sign(unsigned)})
 
     def resolve(
         self,
@@ -86,9 +103,7 @@ class CredentialBroker:
             raise MCPAuthorizationError("credential handle is expired")
         if handle.agent != expected_agent or handle.capability != expected_capability:
             raise MCPAuthorizationError("credential handle scope does not match caller")
-        if expected_capability not in self._agent_capabilities.get(
-            expected_agent, frozenset()
-        ):
+        if expected_capability not in self._agent_capabilities.get(expected_agent, frozenset()):
             raise MCPAuthorizationError("credential capability was revoked")
         variable = self._capability_secrets.get(expected_capability)
         if variable is None:
@@ -103,11 +118,54 @@ class CredentialBroker:
             payload,
             sort_keys=True,
             separators=(",", ":"),
-            default=lambda value: value.astimezone(timezone.utc).isoformat()
-            if isinstance(value, datetime)
-            else str(value),
+            default=lambda value: (
+                value.astimezone(timezone.utc).isoformat()
+                if isinstance(value, datetime)
+                else str(value)
+            ),
         )
         return hmac.new(self._key, serialized.encode(), hashlib.sha256).hexdigest()
 
 
-__all__ = ["CapabilityHandle", "CredentialBroker"]
+class CredentialEnvironmentProxy:
+    """Resolve one scoped capability directly into a trusted provider env.
+
+    The short-lived handle and provider credential never cross the agent/MCP
+    argument boundary.  The returned mapping is intended only for immediate
+    use by a server-owned subprocess adapter and must not be serialized.
+    """
+
+    def __init__(
+        self,
+        broker: CredentialBroker,
+        *,
+        capability: str,
+        provider_variable: str,
+    ) -> None:
+        if re.fullmatch(r"[A-Z_][A-Z0-9_]{0,63}", provider_variable) is None:
+            raise ValueError("provider credential environment name is invalid")
+        if provider_variable in _RESERVED_PROVIDER_ENVIRONMENT or provider_variable.startswith(
+            "DEVFLOW_"
+        ):
+            raise ValueError("provider credential cannot replace a bootstrap variable")
+        self._broker = broker
+        self._capability = capability
+        self._provider_variable = provider_variable
+
+    def resolve_for_provider(self, *, agent: str) -> dict[str, str]:
+        """Return the one exact provider variable after fresh scope checks."""
+
+        handle = self._broker.issue(
+            agent=agent,
+            capability=self._capability,
+            ttl=timedelta(minutes=1),
+        )
+        secret = self._broker.resolve(
+            handle,
+            expected_agent=agent,
+            expected_capability=self._capability,
+        )
+        return {self._provider_variable: secret}
+
+
+__all__ = ["CapabilityHandle", "CredentialBroker", "CredentialEnvironmentProxy"]

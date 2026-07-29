@@ -20,38 +20,25 @@ audit_log:
   enabled: true
   # Append-only JSONL file. One event per line for easy ingestion/grep.
   # Path resolved from AUDIT_LOG_PATH env var so it can differ per env.
-  file_path: "${AUDIT_LOG_PATH:-logs/audit.log}"
-  # How long to retain audit records. 90 days balances forensic needs against
-  # storage; compliance regimes may require longer.
-  retention_days: 90
-  # Rotate when the file crosses this size to keep individual files manageable.
-  rotation:
-    max_size_mb: 100
-    backup_count: 30
-  # What gets recorded. Every privileged/irreversible action is audited.
-  events:
-    - "pr.created"
-    - "pr.merged"
-    - "pr.review_submitted"
-    - "deployment.rolled_back"
-    - "approval.granted"
-    - "approval.denied"
-    - "approval.auto_approved"
-    - "security.finding"
-    - "boundary.violation"       # agent attempted a forbidden action
-    - "credential.access"        # a secret was fetched from the gateway
-    - "mcp.tool_invoked"         # any write-capable MCP tool call
-  # Each entry includes: timestamp (UTC, ISO8601), actor (agent name or
-  # "human:<login>"), action, target (issue/PR/commit id), outcome, and a
-  # correlation_id linking to the trace span.
+  file_path: "${AUDIT_LOG_PATH:-logs/mcp-audit.jsonl}"
+  append_fsync: true
+  process_safe_sidecar_lock: true
+  outcomes: ["denied", "authorized", "succeeded", "failed"]
+  # Exact secret-free MCP boundary fields persisted by HashChainAuditLog.
   include_fields:
     - "timestamp"
-    - "actor"
-    - "action"
-    - "target"
+    - "run_id"
+    - "task_id"
+    - "issue_id"
+    - "agent"
+    - "skill"
+    - "server"
+    - "tool"
+    - "readonly"
     - "outcome"
-    - "correlation_id"
-    - "issue_tier"
+    - "arguments_sha256"
+    - "previous_hash"
+    - "entry_hash"
   # Integrity: hash-chain consecutive entries so tampering is detectable.
   # The previous entry's hash is included in the current entry's payload.
   chain_hashes: true
@@ -101,51 +88,36 @@ approval_workflow:
 # 3. Rollback — safe failure recovery
 # ---------------------------------------------------------------------------
 # If a merged change causes a regression or incident, DevFlow can roll back
-# the deployment via the cicd MCP server. Bounded retries + cooldown prevent
-# thrash during a cascading failure.
+# the deployment via one exact, externally approved CI/CD MCP action.
 rollback:
   enabled: true
-  # Maximum rollback attempts before escalating to humans. Each attempt is a
-  # full deploy of the previous-known-good release.
-  max_retries: 3
-  # Wait between rollback attempts to let the CI/CD provider settle and to
-  # avoid amplifying a provider outage.
-  cooldown_seconds: 300
-  triggers:
-    # Detectors request approval; they never execute rollback on their own.
-    detect_and_request_approval:
-      - "deployment.health_check_failed"
-      - "error_rate_spike"          # error rate > threshold post-deploy
-      - "test.regression_on_main"   # a previously-passing test fails on main
+  # These fields map directly to executable fail-closed checks.
+  provider_command_required: true
+  known_good_target_required: true
+  signed_approval_required: true
+  durable_one_shot_approval: true
+  automatic_retries: 0
+  # The adapter never retries a destructive action implicitly.
+  cooldown_seconds: 0
     # Manual triggers — a human requests rollback via the TeamLeader.
-    manual:
-      - "human.rollback_requested"
-  # After max_retries, stop trying and page humans via the configured channel.
-  on_exhausted:
-    action: "escalate"
-    emit_event: "rollback.exhausted"
-    notify_channel: "${ALERT_CHANNEL:-}"  # e.g. Slack webhook, unset = log only
   # Health check used to confirm a rollback succeeded.
   health_check:
-    endpoint: "${HEALTH_CHECK_ENDPOINT:-/health}"
-    timeout_seconds: 30
-    retry_delay_seconds: 10
-    success_threshold: 2            # consecutive successes required
+    url: "${HEALTH_CHECK_URL}"
+    required: true
+    timeout_seconds: 10
+    retry_delay_seconds: 0
+    success_threshold: 1
 
 # ---------------------------------------------------------------------------
 # 4. Credential Isolation — secrets never touch agents or prompts
 # ---------------------------------------------------------------------------
-# Agents and LLM prompts must never see raw credentials. DevFlow uses a
-# credential gateway: the runtime fetches short-lived scoped tokens on behalf
-# of an agent and injects them into MCP server calls only. The agent receives
-# only a capability handle, never the secret.
+# Agents and LLM prompts must never see raw credentials. A trusted adapter
+# derives an internal one-minute capability from the signed Agent identity and
+# injects only the exact provider variable into the server-owned subprocess.
 credential_isolation:
-  # Gateway URL for the credential broker. Local dev uses an in-process
-  # gateway; prod points at a dedicated secret broker (e.g. Vault).
-  gateway_url: "${CREDENTIAL_GATEWAY_URL:-http://127.0.0.1:8200}"
-  # How often short-lived tokens are refreshed. 3600s aligns with typical
-  # GitHub PAT caching; lower for more sensitive deployments.
-  token_refresh_interval: 3600
+  implemented_mode: "in_process_signed_capability"
+  provider_secret_source: "trusted_process_environment"
+  internal_handle_ttl_seconds: 60
   # Secrets are referenced by logical name in config (e.g. ${GITHUB_PAT})
   # and resolved by the gateway at runtime. They are NEVER expanded into
   # agent-visible config, logs, traces, or prompts.
@@ -160,9 +132,6 @@ credential_isolation:
     "github:read_file": "GITHUB_PERSONAL_ACCESS_TOKEN"
     "github:create_pr": "GITHUB_PERSONAL_ACCESS_TOKEN"
     "github:review_pr": "GITHUB_PERSONAL_ACCESS_TOKEN"
-    "cicd:trigger_pipeline": "GITHUB_PERSONAL_ACCESS_TOKEN"
-    "cicd:read_results": "GITHUB_PERSONAL_ACCESS_TOKEN"
-    "cicd:read_coverage": "GITHUB_PERSONAL_ACCESS_TOKEN"
     "cicd:rollback": "GITHUB_PERSONAL_ACCESS_TOKEN"
   # Capabilities granted per agent. An agent can only call gateway-issued
   # tokens for the scopes listed here — least privilege.
@@ -175,10 +144,7 @@ credential_isolation:
     LocatorAgent:
       - "github:read_file"
     CoderAgent: []                    # candidate artifact only; no provider token
-    TesterAgent:
-      - "cicd:trigger_pipeline"
-      - "cicd:read_results"
-      - "cicd:read_coverage"
+    TesterAgent: []                    # local Git CI needs no provider credential
     ReviewerAgent:
       - "github:create_pr"
       - "github:review_pr"

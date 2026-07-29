@@ -107,18 +107,19 @@ servers:
       - "-m"
       - "devflow.mcp.cicd_server"
     env:
-      CICD_PROVIDER: "${CICD_PROVIDER:-github_actions}"
-      GITHUB_REPO_OWNER: "${GITHUB_REPO_OWNER}"
-      GITHUB_REPO_NAME: "${GITHUB_REPO_NAME}"
-      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
       DEVFLOW_REPOSITORY_ROOT: "${DEVFLOW_REPOSITORY_ROOT}"
       CICD_TEST_COMMAND_JSON: "${CICD_TEST_COMMAND_JSON}"
+      CICD_PIPELINE_COMMANDS_JSON: "${CICD_PIPELINE_COMMANDS_JSON}"
       DEVFLOW_MCP_CONTEXT_HMAC_KEY: "${DEVFLOW_MCP_CONTEXT_HMAC_KEY}"
       DEVFLOW_APPROVAL_HMAC_KEY: "${DEVFLOW_APPROVAL_HMAC_KEY}"
+      DEVFLOW_CREDENTIAL_BROKER_HMAC_KEY: "${DEVFLOW_CREDENTIAL_BROKER_HMAC_KEY}"
+      CICD_REPLAY_STATE_PATH: "${CICD_REPLAY_STATE_PATH}"
       CICD_RELEASE_STATE_PATH: "${CICD_RELEASE_STATE_PATH}"
       CICD_ROLLBACK_COMMAND_JSON: "${CICD_ROLLBACK_COMMAND_JSON}"
-      CICD_RELEASES_ROOT: "${CICD_RELEASES_ROOT}"
-      CICD_RELEASE_LINK_TEMPLATE: "${CICD_RELEASE_LINK_TEMPLATE}"
+      # Logical source/target names only. The credential value is resolved
+      # inside the trusted adapter and never appears in MCP arguments.
+      CICD_ROLLBACK_CREDENTIAL_SOURCE: "${CICD_ROLLBACK_CREDENTIAL_SOURCE}"
+      CICD_ROLLBACK_CREDENTIAL_ENV: "${CICD_ROLLBACK_CREDENTIAL_ENV}"
       HEALTH_CHECK_URL: "${HEALTH_CHECK_URL}"
     tools:
       - name: "run_tests"
@@ -152,8 +153,9 @@ servers:
         readonly: false
       - name: "get_test_results"
         description: >-
-          Fetch pass/fail/skip counts and failure details for a pipeline.
-          Supports polling via wait_seconds.
+          Fetch the immutable-ref pipeline status, return code, bounded
+          redacted output tail, duration, and coverage evidence. Supports
+          bounded polling via wait_seconds.
         allowed_agents: ["TesterAgent"]
         allowed_skills: ["test-runner"]
         input_schema:
@@ -168,8 +170,8 @@ servers:
         readonly: true
       - name: "get_coverage"
         description: >-
-          Fetch line/branch coverage for a pipeline and the delta vs the
-          baseline ref.
+          Fetch line/branch coverage produced by the exact committed tree
+          recorded for a completed pipeline.
         allowed_agents: ["TesterAgent"]
         allowed_skills: ["test-runner"]
         input_schema:
@@ -177,7 +179,6 @@ servers:
           required: ["pipeline_id"]
           properties:
             pipeline_id: {type: "string"}
-            baseline_ref: {type: "string", default: "main"}
         readonly: true
       - name: "rollback_deployment"
         description: >-
@@ -205,7 +206,6 @@ servers:
     health_check:
       interval_seconds: 30
       timeout_seconds: 3
-      endpoint: "/health"
 
 # =============================================================================
 # Shared MCP client policy

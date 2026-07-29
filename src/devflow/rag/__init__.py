@@ -18,6 +18,7 @@ from devflow.rag.codebase_indexer import (
     FileFetcher,
 )
 from devflow.rag.experience_store import ExperiencePattern, ExperienceStore
+from devflow.rag.scope import RepositoryScope
 
 __all__ = [
     "CodeChunk",
@@ -25,4 +26,5 @@ __all__ = [
     "FileFetcher",
     "ExperiencePattern",
     "ExperienceStore",
+    "RepositoryScope",
 ]

@@ -70,6 +70,10 @@ _CREDENTIAL_FIELD_SUFFIXES = (
     "credential",
     "private_key",
 )
+_SAFE_BARE_PYTHON_CALL = re.compile(
+    r"(?:[A-Za-z_][A-Za-z0-9_]*\.)*[A-Za-z_][A-Za-z0-9_]*"
+    r"\((?:[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)?\)"
+)
 _PLACEHOLDER_TERMS = (
     "changeme",
     "dummy",
@@ -106,9 +110,7 @@ def secret_kinds(value: Any) -> list[str]:
                     found.add("named_credential")
                 visit(nested)
             return
-        if isinstance(item, Sequence) and not isinstance(
-            item, (str, bytes, bytearray)
-        ):
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
             for nested in item:
                 visit(nested)
 
@@ -141,9 +143,9 @@ def _credential_matches(value: str) -> list[re.Match[str]]:
 
 def _is_secret_assignment(match: re.Match[str]) -> bool:
     credential = match.group("double") or match.group("single") or match.group("bare")
-    return _is_credential_field_name(match.group("name")) and _looks_high_entropy(
-        credential
-    )
+    if match.group("bare") is not None and _SAFE_BARE_PYTHON_CALL.fullmatch(credential) is not None:
+        return False
+    return _is_credential_field_name(match.group("name")) and _looks_high_entropy(credential)
 
 
 def _is_credential_field_name(value: str) -> bool:
@@ -192,8 +194,7 @@ def _looks_high_entropy(value: str) -> bool:
     )
     counts = Counter(candidate)
     entropy = -sum(
-        (count / len(candidate)) * log2(count / len(candidate))
-        for count in counts.values()
+        (count / len(candidate)) * log2(count / len(candidate)) for count in counts.values()
     )
     return (classes >= 3 and entropy >= 3.2) or (
         len(candidate) >= 20 and classes >= 2 and entropy >= 3.75

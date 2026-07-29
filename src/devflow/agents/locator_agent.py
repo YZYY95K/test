@@ -79,7 +79,6 @@ class LocatorAgent(BaseAgent):
         ),
         model="glm-5.2",
         temperature=0.4,  # slightly higher to explore candidate locations
-        system_prompt_ref="prompts/locator.md",
     )
     _CAPABILITIES = (
         "code_root_cause",
@@ -92,11 +91,14 @@ class LocatorAgent(BaseAgent):
         "Cannot execute repository code",
         "Context payload must stay under the CoderAgent input token budget",
     )
-    _WATCHES = (
-        "triage.completed",
-        "codebase.indexed",
-    )
+    # Task execution is accepted only from TeamLeader routes. Repository index
+    # refreshes are infrastructure notifications, not peer-to-peer work.
+    _WATCHES = ("codebase.indexed",)
     _OWNED_SKILLS = ("code-root-cause", "github-evidence")
+    _HANDOFF_PRODUCERS = {
+        "code-root-cause": frozenset({"TeamLeader"}),
+        "github-evidence": frozenset({"TeamLeader"}),
+    }
     _FORBIDDEN_ACTIONS = {
         "write_source_files": "Cannot write or modify source files",
         "execute_code": "Cannot execute repository code",
@@ -104,20 +106,11 @@ class LocatorAgent(BaseAgent):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.register_event_handler("triage.completed", self._on_triage_completed)
         self.register_event_handler("codebase.indexed", self._on_codebase_indexed)
 
     # ------------------------------------------------------------------ #
     # Event handlers
     # ------------------------------------------------------------------ #
-    async def _on_triage_completed(self, payload: dict[str, Any]) -> None:
-        issue = payload.get("issue")
-        tier = payload.get("tier")
-        if issue is None or tier is None:
-            logger.warning("locator.missing_triage_input", payload=payload)
-            return
-        await self.execute({"issue": issue, "tier": tier})
-
     async def _on_codebase_indexed(self, payload: dict[str, Any]) -> None:
         logger.info(
             "locator.codebase_reindexed",
@@ -179,15 +172,13 @@ class LocatorAgent(BaseAgent):
             await self._emit_handoff(
                 "locator.completed",
                 issue_id=issue.issue_number,
-                consumer="CoderAgent",
+                consumer="TeamLeader",
                 skill="code-root-cause",
                 artifact_type="LocatedContext",
                 payload={
                     "issue_id": issue.issue_number,
-                    "root_cause": root_cause.model_dump(mode="json"),
-                    "context_payload": context_payload,
-                    "affected_files": [f.model_dump(mode="json") for f in located.affected_files],
-                    "impact_analysis": impact.model_dump(mode="json"),
+                    "tier": tier.value,
+                    "located_context": located.model_dump(mode="json"),
                 },
             )
             return located
@@ -199,10 +190,20 @@ class LocatorAgent(BaseAgent):
                 "LocatorAgent expects a dict with 'issue' and 'tier' keys."
             )
         issue_raw = input_data.get("issue")
+        issue_id_raw = input_data.get("issue_id")
         tier_raw = input_data.get("tier")
-        if issue_raw is None or tier_raw is None:
-            raise AgentError("LocatorAgent input missing 'issue' or 'tier'.")
+        if (
+            issue_raw is None
+            or issue_id_raw is None
+            or tier_raw is None
+            or set(input_data) != {"issue_id", "issue", "tier"}
+        ):
+            raise AgentError(
+                "LocatorAgent input requires exact issue_id, issue, and tier fields."
+            )
         issue = issue_raw if isinstance(issue_raw, IssueData) else IssueData(**issue_raw)
+        if isinstance(issue_id_raw, bool) or int(issue_id_raw) != issue.issue_number:
+            raise AgentError("LocatorAgent issue_id does not match the issue artifact.")
         tier = ComplexityLevel(tier_raw) if not isinstance(tier_raw, ComplexityLevel) else tier_raw
         return issue, tier
 
@@ -299,7 +300,7 @@ class LocatorAgent(BaseAgent):
                 response_model=RootCause,
                 model=self.identity.model,
                 temperature=self.identity.temperature,
-                system=self.identity.description,
+                system=self.system_prompt,
             )
         except Exception as exc:  # noqa: BLE001 — low-confidence fallback
             logger.warning(

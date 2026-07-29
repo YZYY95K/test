@@ -1,6 +1,6 @@
 ---
 name: experience-distiller
-description: Distill a terminal reviewed run into reusable, provenance-linked experience. Use when merge, rejection, or human closure is complete, all evidence exists, and no operational action remains.
+description: Distill a clean, review-approved run into reusable provenance-linked experience. Use when TeamLeader supplies a digest-valid VerifiedTerminalReceipt binding the patch, regression-free test result, review decision, repository revision, and run.
 ---
 
 # Experience Distiller
@@ -16,8 +16,13 @@ after a valid invocation starts.
 
 ## Procedure
 
-1. Require a terminal reviewed outcome, trace ID, artifact digests, and policy
-   decision.
+1. Validate `VerifiedTerminalReceipt`, including its own digest and exact links
+   to the issue, repository revision, candidate, clean test result, and approved
+   review. Require the bound test result to carry a verified immutable-test
+   attestation; a merely green result is not terminal evidence. Reject failed
+   tests, requested changes, or human-pending decisions. A human-approved T4/T5
+   bundle must additionally bind the exact consumed approval evidence; an
+   autonomous bundle must contain no human-approval claim.
 2. Redact credentials, personal data, and unnecessary proprietary source.
 3. Summarize symptom, root cause, attempted strategy, result, validation, and
    reusable lesson. Preserve uncertainty and failed approaches.
@@ -29,16 +34,19 @@ after a valid invocation starts.
 
 ## Decision rules
 
-- Missing provenance is rejected.
+- Missing, stale, mismatched, tampered, or integrity-unattested terminal
+  provenance is rejected.
+- A failed/regressed test result or non-approved review is never reusable
+  experience; quarantine it outside the trusted retrieval index.
 - Redaction uncertainty is quarantined for HumanReviewer.
 - Storage outage emits a retryable failure; it does not alter the completed
   run.
 
 ## Boundaries
 
-Do not store raw secrets, personal data, full private files, unreviewed runs,
-or unsupported causal claims. Do not trigger new coding, testing, or merge
-work.
+Do not store raw secrets, personal data, full private files, failed runs,
+rejected reviews, human-pending work, or unsupported causal claims. Do not
+trigger new coding, testing, or merge work.
 
 ## Tool boundary
 

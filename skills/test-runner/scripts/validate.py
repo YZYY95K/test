@@ -22,6 +22,25 @@ SECRET = re.compile(
 )
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 REDACTION_MARKER = "[REDACTED]"
+INTEGRITY_POLICY = "immutable-baseline-tests/v1"
+INTEGRITY_POLICY_DIGEST = "e30d5b49b5bbde322301604354d21f604687483b54d1b4dd0f2e86473462516c"
+ISOLATION_BOUNDARY = "stdlib-temporary-directory-process-only-not-os-sandbox"
+INTEGRITY_FIELDS = {
+    "schema_version",
+    "policy",
+    "policy_digest",
+    "command_digest",
+    "baseline_manifest_digest",
+    "candidate_baseline_manifest_digest",
+    "candidate_pre_run_manifest_digest",
+    "candidate_post_run_manifest_digest",
+    "added_tests_manifest_digest",
+    "baseline_protected_file_count",
+    "added_test_file_count",
+    "full_suite",
+    "verified",
+    "isolation_boundary",
+}
 FAILURE_FIELDS = {
     "schema_version",
     "issue_id",
@@ -328,6 +347,49 @@ def _canonical_digest(value: dict[str, Any]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _validate_integrity_attestation(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != INTEGRITY_FIELDS:
+        raise ValueError("test integrity attestation fields do not match v1.0")
+    if value["schema_version"] != "1.0":
+        raise ValueError("test integrity attestation schema_version must be 1.0")
+    if value["policy"] != INTEGRITY_POLICY:
+        raise ValueError("test integrity attestation policy is unsupported")
+    if value["policy_digest"] != INTEGRITY_POLICY_DIGEST:
+        raise ValueError("test integrity policy digest is unsupported")
+    for field in (
+        "command_digest",
+        "baseline_manifest_digest",
+        "candidate_baseline_manifest_digest",
+        "candidate_pre_run_manifest_digest",
+        "candidate_post_run_manifest_digest",
+        "added_tests_manifest_digest",
+    ):
+        _require_digest(value[field], f"integrity_attestation.{field}")
+    _require_integer(
+        value["baseline_protected_file_count"],
+        "integrity_attestation.baseline_protected_file_count",
+    )
+    _require_integer(
+        value["added_test_file_count"],
+        "integrity_attestation.added_test_file_count",
+    )
+    _require_boolean(value["full_suite"], "integrity_attestation.full_suite")
+    verified = _require_boolean(value["verified"], "integrity_attestation.verified")
+    if value["isolation_boundary"] != ISOLATION_BOUNDARY:
+        raise ValueError("test integrity isolation boundary is unsupported")
+    if verified and (
+        value["baseline_manifest_digest"] != value["candidate_baseline_manifest_digest"]
+    ):
+        raise ValueError("verified integrity evidence changed the immutable baseline")
+    if verified and (
+        value["candidate_pre_run_manifest_digest"] != value["candidate_post_run_manifest_digest"]
+    ):
+        raise ValueError("verified integrity evidence changed during execution")
+    return value
+
+
 def _validate_test_result(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("test_result must be an object")
@@ -340,10 +402,13 @@ def _validate_test_result(value: Any) -> dict[str, Any]:
         "duration_ms",
         "results",
         "baseline_comparison",
+        "integrity_attestation",
     }
     missing = sorted(required - set(value))
     if missing:
         raise ValueError(f"missing test_result fields: {', '.join(missing)}")
+    if set(value) != required:
+        raise ValueError("test_result fields do not match the contract")
     for field in ("total", "passed", "failed", "errors", "skipped", "duration_ms"):
         _require_integer(value[field], f"test_result.{field}")
     if not isinstance(value["results"], list):
@@ -416,6 +481,7 @@ def _validate_test_result(value: Any) -> dict[str, Any]:
             if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
                 raise ValueError(f"baseline_comparison.{field} must be a string list")
         _require_boolean(comparison["regression"], "baseline_comparison.regression")
+    _validate_integrity_attestation(value["integrity_attestation"])
     return value
 
 
@@ -561,6 +627,9 @@ def _validate_test_evidence(artifact: dict[str, Any]) -> None:
         and not comparison["new_failures"]
     )
     if passed:
+        attestation = result["integrity_attestation"]
+        if attestation is None or not attestation["verified"]:
+            raise ValueError("passing TestEvidence requires verified integrity evidence")
         if artifact["failing_tests"] != []:
             raise ValueError("passing TestEvidence cannot contain failing_tests")
         if "failure_evidence" in artifact:
@@ -587,7 +656,8 @@ def _validate_failure_handoff(envelope: dict[str, Any]) -> None:
     missing = sorted(required - set(envelope))
     if missing:
         raise ValueError(f"missing failure envelope fields: {', '.join(missing)}")
-    if set(envelope) - required - {"agent"}:
+    optional = {"agent", "parent_task_id", "parent_handoff_sha256"}
+    if set(envelope) - required - optional:
         raise ValueError("failure envelope contains unknown fields")
     if envelope["envelope_version"] != "1.0":
         raise ValueError("envelope_version must be 1.0")
@@ -601,6 +671,18 @@ def _validate_failure_handoff(envelope: dict[str, Any]) -> None:
         raise ValueError("failure envelope must route TesterAgent to TeamLeader")
     if envelope.get("agent", "TesterAgent") != "TesterAgent":
         raise ValueError("enriched failure envelope agent must be TesterAgent")
+    parent_task_id = envelope.get("parent_task_id")
+    parent_digest = envelope.get("parent_handoff_sha256")
+    if (parent_task_id is None) != (parent_digest is None):
+        raise ValueError("failure envelope parent correlation is incomplete")
+    if parent_task_id is not None:
+        if not isinstance(parent_task_id, str) or not parent_task_id:
+            raise ValueError("failure envelope parent task id is invalid")
+        if (
+            not isinstance(parent_digest, str)
+            or re.fullmatch(r"[a-f0-9]{64}", parent_digest) is None
+        ):
+            raise ValueError("failure envelope parent digest is invalid")
     issue_id = _require_integer(envelope["issue_id"], "envelope issue_id", minimum=1)
 
     run_id = envelope["run_id"]
@@ -677,6 +759,21 @@ def _run(
         if mode == "output":
             _validate_test_evidence(artifact)
             _validate_candidate_binding(candidate, artifact)
+            result = artifact["test_result"]
+            comparison = result["baseline_comparison"]
+            passed = bool(
+                comparison is not None
+                and result["failed"] == 0
+                and result["errors"] == 0
+                and not comparison["regression"]
+                and not comparison["new_failures"]
+            )
+            if (
+                passed
+                and candidate["tier"] in {"T3", "T4", "T5"}
+                and not result["integrity_attestation"]["full_suite"]
+            ):
+                raise ValueError("T3 through T5 passes require a full-suite attestation")
         elif mode == "failure":
             _validate_failure_evidence(artifact)
             _validate_candidate_binding(candidate, artifact)

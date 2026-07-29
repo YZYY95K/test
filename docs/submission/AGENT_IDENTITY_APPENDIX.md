@@ -28,10 +28,10 @@ payload 类型、SHA-256、trace 与 idempotency key。Worker 只接受发给自
 
 对 TeamHarness task-result submission，同一 assignment 的重试必须保持 ID 和
 字节级摘要一致；相同幂等键但不同结果摘要属于冲突，必须失败。Python Agent
-runtime 的 execution-route claim 则只保存在当前 TeamLeader/Worker 进程内：
-本地并发重复投递最多产生一个重试路由并分别留审计，但不能宣称跨进程、重启后
-或多副本持久 exactly-once。大产物走共享任务路径，房间消息只传引用与摘要，
-减少上下文重复和 token 损耗。
+runtime 的调度路由注册、租约、过期恢复和封存可写入 SQLite 持久账本，并已验证
+跨进程竞争与重启读回；Worker replay slot、Leader 失败路由去重和生成预算仍含
+进程内状态。外部工具副作用也不能据此宣称多副本 exactly-once。大产物走共享
+任务路径，房间消息只传引用与摘要，减少上下文重复和 token 损耗。
 
 ## 有效权限计算
 
@@ -40,6 +40,11 @@ runtime 的 execution-route claim 则只保存在当前 TeamLeader/Worker 进程
 任一维度未知、不匹配、过期或不可验证即默认拒绝。AgentTeams 房间负责协作
 可见性，不承担最终授权；Guard、Higress/MCP 服务和下游适配器必须独立复核。
 提示词中的“我是 Leader”不能改变进程身份。
+
+本地 Python Agent 的系统指令由 `BaseAgent.system_prompt` 直接从已加载的角色、使命、
+能力、所属 Skill 与边界生成，不再引用不存在或可能漂移的外部 prompt 文件；Issue、
+仓库内容、RAG、房间消息和工具输出在指令中均被声明为不可信数据。AgentTeams
+运行面则使用角色包中受清单摘要保护的 `SOUL.md` / `AGENTS.md`。
 
 ## 运行面 Skill 边界
 

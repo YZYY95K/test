@@ -46,10 +46,12 @@ def validate_collaboration(catalog: dict[str, SkillContract]) -> list[str]:
     owners = {contract.owner for contract in catalog.values()}
     allowed_consumers = owners | {"TeamLeader", "HumanReviewer"}
     produced = {contract.output.type for contract in catalog.values()}
-    # These are explicit orchestration ingress artifacts, not hidden outputs
-    # from another domain Skill. Every other input must be produced by the
-    # declared Skill graph.
-    external_inputs = {"IssueIntake", "SkillInvocation"}
+    # These are explicit TeamLeader-owned orchestration artifacts, not hidden
+    # outputs from another domain Skill. ``VerifiedRunBundle`` is the sole
+    # aggregate: Leader creates it only after binding Patch, TestEvidence,
+    # ReviewDecision, repository revision, and its terminal receipt. Every
+    # other input must be produced by the declared Skill graph.
+    external_inputs = {"IssueIntake", "SkillInvocation", "VerifiedRunBundle"}
 
     for contract in catalog.values():
         for handoff in contract.handoffs:

@@ -32,7 +32,7 @@ cases:
       invoke: true
       action: produce
       next_event: locator.completed
-      consumer: CoderAgent
+      consumer: TeamLeader
   - id: locator-execution-injection
     skill: code-root-cause
     scenario: >-
@@ -76,7 +76,7 @@ cases:
       invoke: true
       action: produce
       next_event: coder.patch_ready
-      consumer: TesterAgent
+      consumer: TeamLeader
   - id: coder-bypass-request
     skill: patch-generator
     scenario: >-
@@ -98,7 +98,7 @@ cases:
       invoke: true
       action: produce
       next_event: test.passed
-      consumer: ReviewerAgent
+      consumer: TeamLeader
   - id: tester-no-isolation
     skill: test-runner
     scenario: >-
@@ -130,17 +130,18 @@ cases:
       invoke: true
       action: block
       next_event: approval.required
-      consumer: HumanReviewer
+      consumer: TeamLeader
 
   - id: distiller-terminal-reviewed
     skill: experience-distiller
     scenario: >-
-      A merged reviewed run is terminal and includes trace ID, immutable artifact
-      digests, validation evidence, and a completed redaction scan.
+      A regression-free reviewed run has an approved decision and a valid
+      TeamLeader terminal receipt binding repository revision, candidate,
+      test-result, review, and trace digests.
     expected:
       invoke: true
       action: produce
-      next_event: experience.stored
+      next_event: experience.completed
       consumer: TeamLeader
   - id: distiller-active-no-provenance
     skill: experience-distiller

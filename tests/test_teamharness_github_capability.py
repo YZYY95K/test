@@ -224,6 +224,24 @@ def _error(response: dict[str, Any]) -> str:
     return str(payload["error"])
 
 
+def test_skill_validator_pins_match_exact_packaged_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guard = _load_guard(monkeypatch, tmp_path)
+
+    assert set(guard.SKILL_VALIDATOR_FILES) == set(guard.SKILL_VALIDATION_POLICIES)
+    for skill, files in guard.SKILL_VALIDATOR_FILES.items():
+        assert set(files) == {
+            "scripts/validate.py",
+            "scripts/_contract.py",
+            "references/contract.yaml",
+        }
+        for relative, expected in files.items():
+            data = (ROOT / "skills" / skill / relative).read_bytes()
+            assert expected == (len(data), hashlib.sha256(data).hexdigest())
+
+
 def test_valid_request_becomes_complete_canonical_handoff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -649,6 +667,68 @@ def test_room_request_shape_rejects_admin_override_and_non_array_invite(
             },
             identity,
         )
+
+
+def test_room_request_accepts_only_exact_same_homeserver_devflow_worker_roster(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    guard = _load_guard(monkeypatch, tmp_path)
+    identity = guard.runtime_identity()
+    workers = [
+        "@devflow-triage:matrix.test",
+        "@devflow-locator:matrix.test",
+        "@devflow-coder:matrix.test",
+        "@devflow-tester:matrix.test",
+        "@devflow-reviewer:matrix.test",
+    ]
+
+    assert guard._task_room_invitees(
+        {"payload": {"projectId": "project-7", "invite": workers}},
+        identity,
+    ) == workers
+
+    for invalid in (
+        [workers[0], workers[0]],
+        ["@unknown-worker:matrix.test"],
+        ["@devflow-coder:foreign.test"],
+        workers + ["@devflow-locator:matrix.test"],
+    ):
+        with pytest.raises(
+            guard.GuardPolicyError,
+            match="task_room_invite_invalid",
+        ):
+            guard._task_room_invitees(
+                {"payload": {"projectId": "project-7", "invite": invalid}},
+                identity,
+            )
+
+
+def test_private_room_attestation_accepts_exact_multi_worker_membership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    guard = _load_guard(monkeypatch, tmp_path)
+    leader = "@devflow-lead:matrix.test"
+    workers = [
+        "@devflow-triage:matrix.test",
+        "@devflow-locator:matrix.test",
+        "@devflow-coder:matrix.test",
+        "@devflow-tester:matrix.test",
+        "@devflow-reviewer:matrix.test",
+    ]
+    state = {leader: "join", **{worker: "invite" for worker in workers}}
+
+    response = guard._attest_task_room_response(
+        _room_response(workers),
+        identity=guard.runtime_identity(),
+        project_id="project-7",
+        invitees=workers,
+        binding=_project_binding(guard),
+        state_reader=_MatrixReader(_matrix_state(state)),
+    )
+
+    assert response["result"]["members"] == workers
+    assert response["result"]["authorizedMemberCount"] == 6
+    assert response["result"]["membershipStateVerified"] is True
 
 
 def test_create_task_room_handler_binds_project_and_verified_matrix_state(

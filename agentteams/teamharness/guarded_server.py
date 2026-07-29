@@ -70,6 +70,10 @@ GITHUB_MAX_TOKEN_BYTES = 16_384
 GITHUB_MAX_CAPABILITY_LIFETIME_SECONDS = 300
 MAX_REQUEST_BYTES = 1_048_576
 MAX_PAYLOAD_BYTES = 1_000_000
+SKILL_ARTIFACT_MAX_BYTES = 1_048_576
+SKILL_ROUTE_MAX_AGE_SECONDS = 86_400
+SKILL_CLOCK_SKEW_SECONDS = 300
+SKILL_VALIDATOR_TIMEOUT_SECONDS = 10
 MATRIX_STATE_TIMEOUT_SECONDS = 10
 MATRIX_MAX_RESPONSE_BYTES = 16_384
 GITHUB_REQUEST_FIELDS = frozenset(
@@ -134,6 +138,204 @@ APPROVER_RE = re.compile(r"[A-Za-z0-9@._:/+\-]{3,128}")
 RFC3339_UTC_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 ROLES = frozenset({"leader", "worker", "remote-member", "manager"})
+
+
+@dataclass(frozen=True)
+class SkillValidationPolicy:
+    """Fixed AgentTeams identity and artifact contract for one packaged Skill."""
+
+    runtime_name: str
+    agent_name: str
+    input_type: str
+    input_schema: str
+    output_type: str
+    output_schema: str
+    source_argument: str
+
+
+SKILL_VALIDATION_POLICIES = {
+    "issue-classifier": SkillValidationPolicy(
+        "devflow-triage",
+        "TriageAgent",
+        "IssueIntake",
+        "1.0",
+        "ClassifiedIssue",
+        "1.0",
+        "none",
+    ),
+    "code-root-cause": SkillValidationPolicy(
+        "devflow-locator",
+        "LocatorAgent",
+        "ClassifiedIssue",
+        "1.0",
+        "LocatedContext",
+        "1.0",
+        "none",
+    ),
+    "github-evidence": SkillValidationPolicy(
+        "devflow-locator",
+        "LocatorAgent",
+        "SkillInvocation",
+        "1.0",
+        "GitHubEvidence",
+        "1.0",
+        "none",
+    ),
+    "patch-generator": SkillValidationPolicy(
+        "devflow-coder",
+        "CoderAgent",
+        "SkillInvocation",
+        "1.0",
+        "PatchCandidate",
+        "1.2",
+        "patch-source",
+    ),
+    "test-runner": SkillValidationPolicy(
+        "devflow-tester",
+        "TesterAgent",
+        "PatchCandidate",
+        "1.2",
+        "TestEvidence",
+        "1.0",
+        "inline",
+    ),
+    "pr-reviewer": SkillValidationPolicy(
+        "devflow-reviewer",
+        "ReviewerAgent",
+        "TestEvidence",
+        "1.0",
+        "ReviewDecision",
+        "1.0",
+        "none",
+    ),
+    "experience-distiller": SkillValidationPolicy(
+        "devflow-reviewer",
+        "ReviewerAgent",
+        "VerifiedRunBundle",
+        "1.0",
+        "ExperiencePattern",
+        "1.0",
+        "none",
+    ),
+}
+DEVFLOW_RUNTIME_SKILLS = {
+    runtime: frozenset(
+        skill
+        for skill, policy in SKILL_VALIDATION_POLICIES.items()
+        if policy.runtime_name == runtime
+    )
+    for runtime in {policy.runtime_name for policy in SKILL_VALIDATION_POLICIES.values()}
+}
+SKILL_RESULT_STATUSES: dict[str, frozenset[str]] = {
+    skill: (
+        frozenset({"ready", "retry"})
+        if skill == "test-runner"
+        else frozenset({"ready", "retry", "blocked"})
+        if skill == "pr-reviewer"
+        else frozenset({"ready"})
+    )
+    for skill in SKILL_VALIDATION_POLICIES
+}
+SKILL_VALIDATOR_FILES: dict[str, dict[str, tuple[int, str]]] = {
+    "issue-classifier": {
+        "scripts/validate.py": (
+            2_358,
+            "74f9eac32a26b90aa0cfe757c4083a507e62b2fc962cfc406d1bd4b85a300eb6",
+        ),
+        "scripts/_contract.py": (
+            2_829,
+            "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
+        ),
+        "references/contract.yaml": (
+            3_106,
+            "2040f999c0250108cd014de3bfd0e97d39e83dbd67c2e9d7cd948f80fe839077",
+        ),
+    },
+    "code-root-cause": {
+        "scripts/validate.py": (
+            2_358,
+            "74f9eac32a26b90aa0cfe757c4083a507e62b2fc962cfc406d1bd4b85a300eb6",
+        ),
+        "scripts/_contract.py": (
+            2_829,
+            "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
+        ),
+        "references/contract.yaml": (
+            2_988,
+            "1e8e21735b355e8f9cce5c036a863685f6842a328757658f88302cf83d6738b1",
+        ),
+    },
+    "github-evidence": {
+        "scripts/validate.py": (
+            12_110,
+            "668e5bb30e25aab809cf42e49247d5326f26856a7ce5bd4fdadc91a917e59ce4",
+        ),
+        "scripts/_contract.py": (
+            2_829,
+            "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
+        ),
+        "references/contract.yaml": (
+            5_519,
+            "3446d6183a315f260900bbdb5ea77f8fb4aabb13be3a328cf8e41e94c4e4230c",
+        ),
+    },
+    "patch-generator": {
+        "scripts/validate.py": (
+            35_947,
+            "02c701ffa03981448d15f4917d41e4791d8f58e29a47c87258f044664fdb8771",
+        ),
+        "scripts/_contract.py": (
+            2_829,
+            "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
+        ),
+        "references/contract.yaml": (
+            6_376,
+            "f4eb6b6ac6e153ebf2bb7a888d582ca1c850a4e5bb3a4a8102d714461df58402",
+        ),
+    },
+    "test-runner": {
+        "scripts/validate.py": (
+            34_340,
+            "f1397f3faa9d8fa1b6a4f0290826ea38440ff05c165e75cb4c0d626957905334",
+        ),
+        "scripts/_contract.py": (
+            2_829,
+            "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
+        ),
+        "references/contract.yaml": (
+            7_457,
+            "7041dfe8cb5eedc26c6eaf3fc35de0c589690272163e7290465e9940f162cc74",
+        ),
+    },
+    "pr-reviewer": {
+        "scripts/validate.py": (
+            2_358,
+            "74f9eac32a26b90aa0cfe757c4083a507e62b2fc962cfc406d1bd4b85a300eb6",
+        ),
+        "scripts/_contract.py": (
+            2_829,
+            "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
+        ),
+        "references/contract.yaml": (
+            3_457,
+            "2a4489a020037c2b80f086f7c82c2c9257b62ccfb2d8e2677c914fcc8cb1dd6b",
+        ),
+    },
+    "experience-distiller": {
+        "scripts/validate.py": (
+            8_296,
+            "1f804f01838e49c28eb14c8917da74b99518b654d07b9a836405c76a5e1458f6",
+        ),
+        "scripts/_contract.py": (
+            2_829,
+            "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
+        ),
+        "references/contract.yaml": (
+            4_178,
+            "e2d1d1f751456d4db52424ac7ed0d573d1bccd76aade0195f8bfad165c5ddc19",
+        ),
+    },
+}
 
 ROLE_TOOLS = {
     "leader": frozenset(
@@ -1725,18 +1927,32 @@ def _task_room_invitees(arguments: dict[str, Any], identity: dict[str, str]) -> 
     if "invite" in arguments or not isinstance(payload.get("invite"), list):
         raise GuardPolicyError("task_room_invite_invalid")
     raw = cast(list[Any], payload["invite"])
-    if len(raw) != 1 or not isinstance(raw[0], str):
-        raise GuardPolicyError("task_room_invite_invalid")
-    invitee = raw[0]
-    if (
-        invitee != invitee.strip()
-        or MATRIX_USER_RE.fullmatch(invitee) is None
-        or invitee == identity["matrixUserId"]
+    worker_names = frozenset(DEVFLOW_RUNTIME_SKILLS)
+    if not 1 <= len(raw) <= len(worker_names) or any(
+        not isinstance(item, str) for item in raw
     ):
         raise GuardPolicyError("task_room_invite_invalid")
+    invitees = cast(list[str], raw)
+    leader_id = identity["matrixUserId"]
+    if MATRIX_USER_RE.fullmatch(leader_id) is None or ":" not in leader_id:
+        raise GuardPolicyError("task_room_invite_invalid")
+    leader_domain = leader_id.split(":", 1)[1]
+    seen: set[str] = set()
+    for invitee in invitees:
+        if (
+            invitee != invitee.strip()
+            or MATRIX_USER_RE.fullmatch(invitee) is None
+            or invitee == leader_id
+            or ":" not in invitee
+        ):
+            raise GuardPolicyError("task_room_invite_invalid")
+        localpart, domain = invitee[1:].split(":", 1)
+        if localpart not in worker_names or domain != leader_domain or invitee in seen:
+            raise GuardPolicyError("task_room_invite_invalid")
+        seen.add(invitee)
     if arguments.get("dryRun") is not None or payload.get("dryRun") is not None:
         raise GuardPolicyError("task_room_dry_run_forbidden")
-    return [invitee]
+    return list(invitees)
 
 
 def _upstream_admin() -> str:
@@ -2219,6 +2435,518 @@ def _existing_submission_digest(probe: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def _stable_skill_file(path: Path, root: Path, maximum: int) -> bytes:
+    """Read one canonical regular file without trusting a caller-selected path."""
+
+    try:
+        if (
+            not root.is_absolute()
+            or root.is_symlink()
+            or root.resolve(strict=True) != root
+            or not root.is_dir()
+        ):
+            raise GuardPolicyError("skill_artifact_path_invalid")
+        path.relative_to(root)
+        before = path.lstat()
+        if (
+            path.is_symlink()
+            or path.resolve(strict=True) != path
+            or not stat.S_ISREG(before.st_mode)
+            or int(before.st_nlink) != 1
+            or not 1 <= int(before.st_size) <= maximum
+        ):
+            raise GuardPolicyError("skill_artifact_path_invalid")
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+    except GuardPolicyError:
+        raise
+    except (OSError, ValueError):
+        raise GuardPolicyError("skill_artifact_path_invalid") from None
+    try:
+        opened = os.fstat(descriptor)
+        identity = (
+            int(before.st_dev),
+            int(before.st_ino),
+            stat.S_IFMT(before.st_mode),
+            int(before.st_nlink),
+            int(before.st_size),
+            int(before.st_mtime_ns),
+        )
+        if identity != (
+            int(opened.st_dev),
+            int(opened.st_ino),
+            stat.S_IFMT(opened.st_mode),
+            int(opened.st_nlink),
+            int(opened.st_size),
+            int(opened.st_mtime_ns),
+        ):
+            raise GuardPolicyError("skill_artifact_changed")
+        data = b""
+        while len(data) <= maximum:
+            block = os.read(descriptor, min(65_536, maximum + 1 - len(data)))
+            if not block:
+                break
+            data += block
+        after_open = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        after_path = path.lstat()
+    except OSError:
+        raise GuardPolicyError("skill_artifact_changed") from None
+    after_identity = (
+        int(after_open.st_dev),
+        int(after_open.st_ino),
+        stat.S_IFMT(after_open.st_mode),
+        int(after_open.st_nlink),
+        int(after_open.st_size),
+        int(after_open.st_mtime_ns),
+    )
+    path_identity = (
+        int(after_path.st_dev),
+        int(after_path.st_ino),
+        stat.S_IFMT(after_path.st_mode),
+        int(after_path.st_nlink),
+        int(after_path.st_size),
+        int(after_path.st_mtime_ns),
+    )
+    if (
+        identity != after_identity
+        or identity != path_identity
+        or len(data) != identity[4]
+        or len(data) > maximum
+    ):
+        raise GuardPolicyError("skill_artifact_changed")
+    return data
+
+
+def _skill_json(data: bytes, error: str) -> dict[str, Any]:
+    try:
+        value = _strict_json_document(data.decode("utf-8"), error)
+    except (GitHubCapabilityError, UnicodeError):
+        raise GuardPolicyError(error) from None
+    if not isinstance(value, dict):
+        raise GuardPolicyError(error)
+    return value
+
+
+def _skill_timestamp(value: Any, now: dt.datetime) -> dt.datetime:
+    if not isinstance(value, str) or len(value) > 64:
+        raise GuardPolicyError("skill_route_invalid")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise GuardPolicyError("skill_route_invalid") from None
+    if parsed.tzinfo is None:
+        raise GuardPolicyError("skill_route_invalid")
+    parsed = parsed.astimezone(dt.timezone.utc)
+    if (
+        parsed < now - dt.timedelta(seconds=SKILL_ROUTE_MAX_AGE_SECONDS)
+        or parsed > now + dt.timedelta(seconds=SKILL_CLOCK_SKEW_SECONDS)
+    ):
+        raise GuardPolicyError("skill_route_stale")
+    return parsed
+
+
+def _skill_envelope(
+    value: dict[str, Any],
+    *,
+    artifact_type: str,
+    artifact_schema: str,
+    status: frozenset[str],
+    now: dt.datetime,
+) -> tuple[dict[str, Any], dict[str, Any], dt.datetime]:
+    required = {
+        "envelope_version",
+        "run_id",
+        "issue_id",
+        "task_id",
+        "producer",
+        "consumer",
+        "skill",
+        "trace_id",
+        "idempotency_key",
+        "created_at",
+        "status",
+        "artifact",
+    }
+    optional = {"parent_task_id", "parent_handoff_sha256"}
+    if not required <= set(value) or set(value) - required - optional:
+        raise GuardPolicyError("skill_route_invalid")
+    if value["envelope_version"] != "1.0" or value["status"] not in status:
+        raise GuardPolicyError("skill_route_invalid")
+    for field in (
+        "run_id",
+        "task_id",
+        "producer",
+        "consumer",
+        "skill",
+        "trace_id",
+        "idempotency_key",
+    ):
+        item = value[field]
+        if (
+            not isinstance(item, str)
+            or not 1 <= len(item) <= 512
+            or CONTROL_CHARACTER_RE.search(item) is not None
+        ):
+            raise GuardPolicyError("skill_route_invalid")
+    issue_id = value["issue_id"]
+    if isinstance(issue_id, bool) or not isinstance(issue_id, int) or issue_id < 1:
+        raise GuardPolicyError("skill_route_invalid")
+    if value["trace_id"] != f'{value["run_id"]}:{value["task_id"]}':
+        raise GuardPolicyError("skill_route_invalid")
+    if value["idempotency_key"] != (
+        f'{value["run_id"]}:{value["task_id"]}:{value["consumer"]}:{value["skill"]}'
+    ):
+        raise GuardPolicyError("skill_route_invalid")
+    parent_task = value.get("parent_task_id")
+    parent_digest = value.get("parent_handoff_sha256")
+    if (parent_task is None) != (parent_digest is None):
+        raise GuardPolicyError("skill_route_invalid")
+    if parent_task is not None and (
+        not isinstance(parent_task, str)
+        or not 1 <= len(parent_task) <= 512
+        or not isinstance(parent_digest, str)
+        or DIGEST_RE.fullmatch(parent_digest) is None
+    ):
+        raise GuardPolicyError("skill_route_invalid")
+    artifact = value["artifact"]
+    if not isinstance(artifact, dict) or set(artifact) not in (
+        {"type", "schema_version", "inline", "sha256"},
+        {"type", "schema_version", "inline", "ref", "sha256"},
+    ):
+        raise GuardPolicyError("skill_artifact_invalid")
+    inline = artifact.get("inline")
+    if (
+        artifact.get("type") != artifact_type
+        or artifact.get("schema_version") != artifact_schema
+        or not isinstance(inline, dict)
+        or artifact.get("ref") is not None
+        or not isinstance(artifact.get("sha256"), str)
+        or DIGEST_RE.fullmatch(artifact["sha256"]) is None
+        or hashlib.sha256(_canonical_json(inline)).hexdigest() != artifact["sha256"]
+    ):
+        raise GuardPolicyError("skill_artifact_invalid")
+    return value, inline, _skill_timestamp(value["created_at"], now)
+
+
+def _skill_relative_path(value: str, task_id: str, *, suffix: str) -> str:
+    path = PurePosixPath(value.replace("\\", "/"))
+    normalized = path.as_posix()
+    expected_root = PurePosixPath("shared", "tasks", task_id)
+    if (
+        not value
+        or normalized != value
+        or path.is_absolute()
+        or ".." in path.parts
+        or tuple(path.parts[:3]) != tuple(expected_root.parts)
+        or len(path.parts) <= 3
+        or not path.name.endswith(suffix)
+        or any(FILESYNC_SEGMENT_RE.fullmatch(part) is None for part in path.parts)
+    ):
+        raise GuardPolicyError("skill_artifact_path_invalid")
+    return normalized
+
+
+def _skill_spec(probe: dict[str, Any], task: dict[str, Any], workspace: Path) -> dict[str, Any]:
+    specs = {
+        item["spec"]
+        for item in _walk(probe)
+        if isinstance(item, dict) and isinstance(item.get("spec"), str)
+    }
+    if len(specs) > 1:
+        raise GuardPolicyError("skill_route_invalid")
+    if specs:
+        data = next(iter(specs)).encode("utf-8")
+        if not 1 <= len(data) <= SKILL_ARTIFACT_MAX_BYTES:
+            raise GuardPolicyError("skill_route_invalid")
+    else:
+        spec_path = task.get("spec_path") or task.get("specPath")
+        task_id = str(task.get("task_id") or task.get("taskId") or "")
+        if not isinstance(spec_path, str):
+            raise GuardPolicyError("skill_route_invalid")
+        relative = _skill_relative_path(spec_path, task_id, suffix="spec.md")
+        data = _stable_skill_file(
+            workspace.joinpath(*PurePosixPath(relative).parts),
+            workspace,
+            SKILL_ARTIFACT_MAX_BYTES,
+        )
+    return _skill_json(data, "skill_route_invalid")
+
+
+def _skill_result(
+    arguments: dict[str, Any],
+    task: dict[str, Any],
+    workspace: Path,
+) -> dict[str, Any]:
+    payload = _payload_object(arguments)
+    deliverables = payload.get("deliverables", arguments.get("deliverables"))
+    if deliverables is None:
+        deliverables = task.get("deliverables")
+    if not isinstance(deliverables, list) or not 1 <= len(deliverables) <= 16:
+        raise GuardPolicyError("skill_artifact_path_invalid")
+    task_id = str(task.get("task_id") or task.get("taskId") or "")
+    candidates: list[str] = []
+    for item in deliverables:
+        if not isinstance(item, str) or len(item) > 1_024:
+            raise GuardPolicyError("skill_artifact_path_invalid")
+        if item.endswith(".handoff.json"):
+            candidates.append(_skill_relative_path(item, task_id, suffix=".handoff.json"))
+    if len(candidates) != 1:
+        raise GuardPolicyError("skill_artifact_path_invalid")
+    data = _stable_skill_file(
+        workspace.joinpath(*PurePosixPath(candidates[0]).parts),
+        workspace,
+        SKILL_ARTIFACT_MAX_BYTES,
+    )
+    return _skill_json(data, "skill_artifact_invalid")
+
+
+def _skill_root(identity: dict[str, str], skill: str, policy: SkillValidationPolicy) -> Path:
+    workspace = _workspace_path()
+    if identity["runtimeName"] == policy.runtime_name:
+        return workspace / "skills" / skill
+    if identity["runtimeName"] != "devflow-lead":
+        raise GuardPolicyError("skill_assignment_mismatch")
+    base = PRODUCTION_WORKSPACE_ROOT if PRODUCTION_MODE else workspace.parent
+    return base / policy.runtime_name / "skills" / skill
+
+
+def _packaged_validator_bytes(
+    identity: dict[str, str], skill: str, policy: SkillValidationPolicy
+) -> dict[str, bytes]:
+    root = _skill_root(identity, skill, policy)
+    expected = SKILL_VALIDATOR_FILES[skill]
+    checked: dict[str, bytes] = {}
+    for relative, (size, digest) in expected.items():
+        data = _stable_skill_file(
+            root.joinpath(*PurePosixPath(relative).parts),
+            root,
+            max(size, 1),
+        )
+        if len(data) != size or hashlib.sha256(data).hexdigest() != digest:
+            raise GuardPolicyError("skill_validator_untrusted")
+        checked[relative] = data
+    return checked
+
+
+def _run_packaged_validator(
+    identity: dict[str, str],
+    skill: str,
+    policy: SkillValidationPolicy,
+    artifact: dict[str, Any],
+    source: dict[str, Any],
+) -> str:
+    files = _packaged_validator_bytes(identity, skill, policy)
+    with tempfile.TemporaryDirectory(prefix="devflow-skill-verify-") as temporary:
+        root = Path(temporary) / skill
+        for relative, data in files.items():
+            target = root.joinpath(*PurePosixPath(relative).parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        artifact_path = root / "artifact.json"
+        artifact_path.write_bytes(_canonical_json(artifact))
+        command = [
+            sys.executable,
+            "-S",
+            str(root / "scripts" / "validate.py"),
+            "output",
+            str(artifact_path),
+        ]
+        if policy.source_argument != "none":
+            source_artifact = cast(dict[str, Any], source["artifact"])["inline"]
+            if policy.source_argument == "patch-source":
+                if source["status"] == "retry":
+                    validator_source = source
+                elif isinstance(source_artifact, dict) and isinstance(
+                    source_artifact.get("input"), dict
+                ):
+                    validator_source = source_artifact["input"]
+                else:
+                    raise GuardPolicyError("skill_route_invalid")
+            else:
+                validator_source = source_artifact
+            source_path = root / "source.json"
+            source_path.write_bytes(_canonical_json(validator_source))
+            command.append(str(source_path))
+        environment = {
+            name: os.environ[name]
+            for name in ("SystemRoot", "WINDIR")
+            if name in os.environ
+        }
+        environment["PYTHONIOENCODING"] = "utf-8"
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=root,
+                env=environment,
+                capture_output=True,
+                check=False,
+                timeout=SKILL_VALIDATOR_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.SubprocessError):
+            raise GuardPolicyError("skill_validator_failed") from None
+    if completed.returncode != 0 or not 1 <= len(completed.stdout) <= 4_096:
+        raise GuardPolicyError("skill_validation_failed")
+    result = _skill_json(completed.stdout, "skill_validation_failed")
+    if result != {"valid": True, "skill": skill, "mode": "output"}:
+        raise GuardPolicyError("skill_validation_failed")
+    return hashlib.sha256(files["scripts/validate.py"]).hexdigest()
+
+
+def _verify_skill_transition(
+    arguments: dict[str, Any],
+    probe: dict[str, Any],
+    task: dict[str, Any],
+    identity: dict[str, str],
+) -> dict[str, str]:
+    task_id = str(task.get("task_id") or task.get("taskId") or "").strip()
+    if SAFE_ID_RE.fullmatch(task_id) is None:
+        raise GuardPolicyError("skill_contract_missing")
+    workspace = _workspace_path()
+    source_raw = _skill_spec(probe, task, workspace)
+    skill = source_raw.get("skill")
+    task_skill = task.get("skill")
+    if not isinstance(skill, str) or (
+        task_skill is not None and task_skill != skill
+    ):
+        raise GuardPolicyError("skill_contract_missing")
+    policy = SKILL_VALIDATION_POLICIES.get(skill)
+    if policy is None:
+        raise GuardPolicyError("skill_contract_unknown")
+    assigned_to = str(task.get("assigned_to") or task.get("assignedTo") or "")
+    if assigned_to not in {
+        policy.runtime_name,
+        f"@{policy.runtime_name}:matrix.test",
+        identity.get("matrixUserId", "") if identity["runtimeName"] == policy.runtime_name else "",
+    } and not assigned_to.startswith(f"@{policy.runtime_name}:"):
+        raise GuardPolicyError("skill_assignment_mismatch")
+    if identity["runtimeName"] != "devflow-lead" and (
+        identity["runtimeName"] != policy.runtime_name
+        or skill not in DEVFLOW_RUNTIME_SKILLS.get(identity["runtimeName"], frozenset())
+    ):
+        raise GuardPolicyError("skill_assignment_mismatch")
+    now = dt.datetime.now(dt.timezone.utc)
+    result_raw = _skill_result(arguments, task, workspace)
+    source, _source_inline, source_time = _skill_envelope(
+        source_raw,
+        artifact_type=policy.input_type,
+        artifact_schema=policy.input_schema,
+        status=frozenset({"ready", "retry"}),
+        now=now,
+    )
+    result, result_inline, result_time = _skill_envelope(
+        result_raw,
+        artifact_type=policy.output_type,
+        artifact_schema=policy.output_schema,
+        status=SKILL_RESULT_STATUSES[skill],
+        now=now,
+    )
+    expected_result_status = "SUCCESS" if result["status"] == "ready" else "FAILED"
+    submission_payload = _payload_object(arguments)
+    claimed_result_statuses = {
+        str(container.get(alias)).strip()
+        for container in (arguments, submission_payload)
+        for alias in ("status", "resultStatus", "result_status")
+        if container.get(alias) is not None and str(container.get(alias)).strip()
+    }
+    if claimed_result_statuses != {expected_result_status}:
+        raise GuardPolicyError("skill_result_status_invalid")
+    source_producers = {"devflow-lead", "TeamLeader"}
+    source_consumers = {policy.runtime_name, policy.agent_name}
+    result_producers = {policy.runtime_name, policy.agent_name}
+    result_consumers = {"devflow-lead", "TeamLeader"}
+    if (
+        source["producer"] not in source_producers
+        or source["consumer"] not in source_consumers
+        or result["producer"] not in result_producers
+        or result["consumer"] not in result_consumers
+        or source["skill"] != skill
+        or result["skill"] != skill
+        or source["task_id"] != task_id
+        or result["task_id"] != task_id
+        or source["run_id"] != result["run_id"]
+        or source["issue_id"] != result["issue_id"]
+        or result_time < source_time
+    ):
+        raise GuardPolicyError("skill_task_mismatch")
+    source_digest = hashlib.sha256(_canonical_json(source)).hexdigest()
+    if (
+        result.get("parent_task_id") != source["task_id"]
+        or result.get("parent_handoff_sha256") != source_digest
+    ):
+        raise GuardPolicyError("skill_source_route_mismatch")
+    _validate_skill_result_semantics(skill, result["status"], result_inline)
+    validator_digest = _run_packaged_validator(identity, skill, policy, result_inline, source)
+    return {
+        "schema": "devflow.agentteams.skill-validation/v1",
+        "taskId": task_id,
+        "skill": skill,
+        "sourceRouteSha256": source_digest,
+        "resultHandoffSha256": hashlib.sha256(_canonical_json(result)).hexdigest(),
+        "artifactSha256": cast(dict[str, Any], result["artifact"])["sha256"],
+        "validatorSha256": validator_digest,
+    }
+
+
+def _validate_skill_result_semantics(
+    skill: str,
+    status: str,
+    inline: dict[str, Any],
+) -> None:
+    """Bind transport status to the Skill's typed decision facts."""
+
+    if skill == "test-runner":
+        test_result = inline.get("test_result")
+        if not isinstance(test_result, dict):
+            raise GuardPolicyError("skill_validation_failed")
+        comparison = test_result.get("baseline_comparison")
+        attestation = test_result.get("integrity_attestation")
+        passed = bool(
+            isinstance(comparison, dict)
+            and isinstance(attestation, dict)
+            and attestation.get("verified") is True
+            and test_result.get("failed") == 0
+            and test_result.get("errors") == 0
+            and comparison.get("regression") is False
+            and comparison.get("new_failures") == []
+        )
+        if (status == "ready") != passed:
+            raise GuardPolicyError("skill_result_status_invalid")
+        if status == "retry" and not isinstance(inline.get("failure_evidence"), dict):
+            raise GuardPolicyError("skill_validation_failed")
+        return
+
+    if skill != "pr-reviewer":
+        return
+    if set(inline) != {"issue_id", "tier", "review"}:
+        raise GuardPolicyError("skill_validation_failed")
+    review = inline.get("review")
+    if not isinstance(review, dict) or set(review) != {
+        "decision",
+        "findings",
+        "summary",
+        "pr_url",
+        "requires_human_approval",
+    }:
+        raise GuardPolicyError("skill_validation_failed")
+    decision = review.get("decision")
+    requires_human = review.get("requires_human_approval")
+    tier = inline.get("tier")
+    expected = {
+        "ready": ("approved", False),
+        "retry": ("changes_requested", False),
+        "blocked": ("human_approval_required", True),
+    }[status]
+    if (decision, requires_human) != expected:
+        raise GuardPolicyError("skill_result_status_invalid")
+    if status == "blocked" and tier not in {"T4", "T5"}:
+        raise GuardPolicyError("skill_result_status_invalid")
+    if status == "ready" and tier in {"T4", "T5"}:
+        raise GuardPolicyError("skill_result_status_invalid")
+
+
 def _check_task(
     request_id: Any,
     arguments: dict[str, Any],
@@ -2256,6 +2984,40 @@ def _check_task(
     if not status:
         return None, "task_probe_failed"
     return probe, status
+
+
+def _accept_task_probe(
+    request_id: Any,
+    arguments: dict[str, Any],
+    workspace: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read the exact submitted task before a Leader acceptance transition."""
+
+    task_id = _bound_value(arguments, ("taskId", "task_id"), "taskId")
+    probe_arguments = dict(arguments)
+    probe_arguments["action"] = "check_task"
+    probe_arguments["role"] = "leader"
+    probe_arguments["workspaceDir"] = workspace
+    probe = upstream.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {"name": "taskflow", "arguments": probe_arguments},
+        }
+    )
+    if not isinstance(probe, dict):
+        raise GuardPolicyError("skill_task_probe_failed")
+    task = _checked_task(probe)
+    if task is None:
+        raise GuardPolicyError("skill_task_probe_failed")
+    probed_id = str(task.get("task_id") or task.get("taskId") or "").strip()
+    state = str(task.get("status") or "").strip().lower()
+    if probed_id != task_id:
+        raise GuardPolicyError("skill_task_mismatch")
+    if state not in SUCCESSFUL_SUBMIT_STATES:
+        raise GuardPolicyError("skill_task_not_submitted")
+    return probe, task
 
 
 def _idempotent_response(
@@ -2813,6 +3575,8 @@ def handle_request(
 ) -> dict[str, Any] | None:
     """Enforce attested identity, capability and safe task transitions."""
 
+    skill_validation: dict[str, str] | None = None
+
     try:
         if len(_canonical_json(request)) > MAX_REQUEST_BYTES:
             return _error(None, tool="", error="request_too_large")
@@ -2909,6 +3673,40 @@ def handle_request(
                 error=state,
                 role=role,
             )
+        if action == "submit_task" and identity["runtimeName"] in DEVFLOW_RUNTIME_SKILLS:
+            task = _checked_task(probe or {})
+            # Historical terminal tasks may predate task.skill. They cannot
+            # transition again and retain the existing digest-conflict path.
+            # Every new DevFlow submission, and every terminal task that does
+            # declare a Skill, is validated before any upstream mutation.
+            if task is None or isinstance(task.get("skill"), str) or state not in SUCCESSFUL_SUBMIT_STATES:
+                try:
+                    payload = _payload_object(arguments)
+                    result_status = payload.get("status", arguments.get("status", "SUCCESS"))
+                    if task is None or result_status not in {"SUCCESS", "FAILED"}:
+                        raise GuardPolicyError("skill_result_status_invalid")
+                    skill_validation = _verify_skill_transition(
+                        arguments,
+                        probe or {},
+                        task,
+                        identity,
+                    )
+                except GuardPolicyError as exc:
+                    return _error(
+                        request_id,
+                        tool=tool,
+                        action=action,
+                        error=exc.code,
+                        role=role,
+                    )
+                except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+                    return _error(
+                        request_id,
+                        tool=tool,
+                        action=action,
+                        error="skill_guard_internal_error",
+                        role=role,
+                    )
         if action == "submit_task" and state in SUCCESSFUL_SUBMIT_STATES:
             try:
                 task_id = _bound_value(arguments, ("taskId", "task_id"), "taskId")
@@ -3173,6 +3971,19 @@ def handle_request(
                     return missing_response
                 raise GuardPolicyError("unbound_project_state") from None
 
+            if action == "accept_task_result" and identity["runtimeName"] == "devflow-lead":
+                task_probe, submitted_task = _accept_task_probe(
+                    request_id,
+                    arguments,
+                    workspace,
+                )
+                _verify_skill_transition(
+                    arguments,
+                    task_probe,
+                    submitted_task,
+                    identity,
+                )
+
             if action == "resume_project":
                 ledger_path = Path(str(policy["ledgerPath"]))
                 with _ledger_lock(ledger_path):
@@ -3311,7 +4122,20 @@ def handle_request(
     params["arguments"] = arguments
     guarded = dict(request)
     guarded["params"] = params
-    return cast(dict[str, Any] | None, upstream.handle_request(guarded))
+    response = cast(dict[str, Any] | None, upstream.handle_request(guarded))
+    if skill_validation is None or not isinstance(response, dict) or not _response_succeeded(response):
+        return response
+    response_payload = _action_payload(response)
+    if response_payload is None or "skillValidation" in response_payload:
+        return _error(
+            request_id,
+            tool=tool,
+            action=action,
+            error="upstream_response_invalid",
+            role=role,
+        )
+    response_payload["skillValidation"] = skill_validation
+    return _replace_action_payload(response, response_payload)
 
 
 def main() -> int:

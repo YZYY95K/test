@@ -1,5 +1,6 @@
 schema_version: "1.0"
 benchmark: repository-grounded-collaboration-boundary
+evaluation_kind: routing_boundary
 repositories:
   requests:
     url: https://github.com/psf/requests.git

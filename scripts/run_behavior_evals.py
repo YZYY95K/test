@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,8 +14,13 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field
 
-from devflow.llm_client import LLMClient
-from devflow.skills.catalog import load_catalog
+ROOT = Path(__file__).resolve().parents[1]
+for import_path in (ROOT, ROOT / "src"):
+    if str(import_path) not in sys.path:
+        sys.path.insert(0, str(import_path))
+
+from devflow.llm_client import LLMClient  # noqa: E402
+from devflow.skills.catalog import load_catalog  # noqa: E402
 
 
 class Decision(BaseModel):

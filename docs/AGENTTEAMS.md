@@ -1,8 +1,12 @@
 # AgentTeams mapping
 
-DevFlow targets AgentTeams `agentteams.io/v1beta1` and uses a native `Team`
+The currently proven deployment targets the exact AgentTeams
+`v1.2.0-beta.1` `agentteams.io/v1beta1` contract and uses a native `Team`
 instead of pretending that an internal Python event bus is the production
-multi-agent transport.
+multi-agent transport. `agentteams/upstream.lock.yaml` binds the official tag,
+commit and Team-CRD digest, and `scripts/verify_agentteams_upstream.py` verifies
+them. This release's inline `leader/workers` compatibility path is not confused
+with current upstream `workerMembers`; that API requires a separate migration.
 
 | AgentTeams concept | DevFlow role |
 |---|---|
@@ -26,17 +30,17 @@ multi-agent transport.
    python scripts/build_agentteams_package.py
    ```
 
-   Version `1.3.0` deliberately gives each runtime only its owned DevFlow
+   Version `2.0.0` deliberately gives each runtime only its owned DevFlow
    Skills; built-in AgentTeams Skills are unaffected:
 
    | Runtime | DevFlow Skills | SHA-256 |
    |---|---|---|
-   | `devflow-lead` | none | `5ec6e76a43a6b4a5cf55fd0321f82be2f81b294c75081c18a139ec32c5757661` |
-   | `devflow-triage` | `issue-classifier` | `bcb84afa4004a1b1c208a83bee8fdc7ef8bdea289b740b909677e2f152ca02da` |
-   | `devflow-locator` | `code-root-cause`, `github-evidence` | `2d59b7d1533165009596167bc6470a0ba473895c835a390e083e967cddd2ff53` |
-   | `devflow-coder` | `patch-generator` | `5425868754f5539eb5568fdfb5900d7fa0bcee6f724f92cf26bb2a289ac3de7f` |
-   | `devflow-tester` | `test-runner` | `68ad37e009c5485230dc38065c2095d751d6298943ebe88bbc471040b2488de2` |
-   | `devflow-reviewer` | `pr-reviewer`, `experience-distiller` | `6e2c4a4a76b9860e1931275d820cff3f961133257567d6eed417ae7cf896e947` |
+   | `devflow-lead` | none | `c082670199dcefcbbcaf6afd888c364999ccca5a8cd243979c399238253d97f2` |
+   | `devflow-triage` | `issue-classifier` | `7c14a62a0dce3c774b7e0e4fcff969ed9ba8fdcabc4356ef7a080c47dcd51bca` |
+   | `devflow-locator` | `code-root-cause`, `github-evidence` | `b0e9422d16202cdea690deeef3f7629f5b400333b00fbd329d61c6f9da521019` |
+   | `devflow-coder` | `patch-generator` | `23469bd358c0044f20877bb7035734d724742ad8dde34e35ce11035cd502e643` |
+   | `devflow-tester` | `test-runner` | `011524dc5f839fb9157da82a9a30bdd1debb31e58d9371fda37c0f67a9e1ac7e` |
+   | `devflow-reviewer` | `pr-reviewer`, `experience-distiller` | `c25b44efee849740f92390d4e9de2773ee6a6392ef0e3301217aa1563994702a` |
 
 3. Preflight the source-attested archives, create the immutable ConfigMap,
    and publish it on the private namespace-local package service:
@@ -51,7 +55,7 @@ multi-agent transport.
    The Service is `ClusterIP` only, the container has no service-account token,
    runs non-root with a read-only filesystem, and accepts traffic only from the
    `agentteams-system` namespace. It must not be exposed through Higress.
-   The package ConfigMap is `devflow-worker-packages-v1-3-0`. Package object
+   The package ConfigMap is `devflow-worker-packages-v2-0-0`. Package object
    names are versioned so a controller cannot silently reuse a previously
    downloaded ZIP after a Skill bundle upgrade. Reusing the version with
    different bytes fails; publish a new version instead.
@@ -300,10 +304,10 @@ AgentTeams MinIO service, and `/usr/local/bin/mc.bin` must match the recorded
 release version and SHA-256. Every helper invocation creates a private `0700`
 configuration directory, initializes and reads back only the `agentteams`
 alias, and never consults the worker's writable `$HOME/.mc` configuration.
-Before contacting Kubernetes it validates all six `dist/*-v1.3.0.zip` files,
+Before contacting Kubernetes it validates all six `dist/*-v2.0.0.zip` files,
 their sidecars, canonical ZIP and internal manifests, exact per-file hashes,
 the current release source reconstruction, and six version-pinned outer ZIP
-hashes. Changing source while retaining version `1.3.0` therefore fails; a
+hashes. Changing source while retaining version `2.0.0` therefore fails; a
 different release requires a version and pinned-digest update.
 Its JSON result exposes only the fixed known-Skill sets, counts, and
 `needsApply`; it does not return Skill contents, MinIO configuration, or
@@ -355,7 +359,7 @@ release overlay is:
   `scripts/reconcile_teamharness_openclaw.py`;
 - `agentteams/worker-package/`;
 - all seven directories under `skills/` named by the fixed policy; and
-- all six `dist/devflow-*-v1.3.0.zip` files and their `.sha256` sidecars.
+- all six `dist/devflow-*-v2.0.0.zip` files and their `.sha256` sidecars.
 
 Keep their repository-relative layout. Package loading reconstructs the
 release from the source root derived from the package reconciler's own path;

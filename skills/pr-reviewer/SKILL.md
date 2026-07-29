@@ -26,7 +26,9 @@ invoke the Skill and block on `approval.required`.
    for T4/T5 regardless of automated confidence.
 5. Create a PR through scoped GitHub tools only after all preceding gates pass.
 6. Run `python scripts/validate.py output <artifact.json>` before emitting
-   `review.approved`, `review.rejected`, or `approval.required`.
+   `review.approved`, `review.rejected`, or `approval.required` to TeamLeader.
+   Reviewer never sends an executable transition directly to a human or
+   accepts approval evidence itself; Leader creates the exact signed target.
 
 ## Decision rules
 

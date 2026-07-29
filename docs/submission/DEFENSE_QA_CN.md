@@ -58,10 +58,10 @@ Reviewer 入口均返回 403，Locator 直连 Broker 被 NetworkPolicy 阻断。
 ## 10. 为什么不直接用覆盖率证明系统可靠？
 
 覆盖率只说明哪些代码被执行，不证明职责边界正确或现场闭环真实。2026-07-28
-当前 v1.3.0 候选工作树的完整结果是 846 passed、17 skipped、84.40%
-（3,874/4,590），但尚未
-绑定最终 commit，提交前必须在冻结版本上复跑。最终证据还要同时包含行为评测、
-拒绝测试、真实服务器状态和人工门记录。
+决赛分支冻结前一次完整结果是 971 passed、17 skipped、84.75%（6,314
+statements / 963 missed），但其后代码仍有变化，不能当作最终 tag 证据。提交前
+必须在冻结版本上复跑；最终证据还要包含行为评测、拒绝测试、真实服务器状态和
+人工门记录。
 
 ## 11. 三仓库 24 项是否等于完整补丁解决基准？
 
@@ -97,9 +97,10 @@ TeamLeader 校验，但当前没有候选绑定的修复契约，因此 fail-clo
 验证 generic execution retry 的 route-level claim，以及每个 canonical Coder
 route 只授权一次模型调用。候选验证失败与 Tester 语义失败共享由 TeamLeader
 顺序签发的 issue-global 1..3 预算，不会产生第四次调用，也不会再叠加通用执行
-重试。route claim 是进程内状态，不是
-跨重启或多副本 exactly-once。基准只在 provider 返回可用数据时记录 token 与
-p50/p95 时延；不能用配置中的 exponential backoff 字段冒充已观察到的运行行为。
+重试。SQLite 调度路由租约可跨进程持久和过期恢复，但 Worker replay slot、失败
+路由去重与生成预算仍含进程内状态，外部副作用也不是多副本 exactly-once。基准
+只在 provider 返回可用数据时记录 token 与 p50/p95 时延；不能用配置中的
+exponential backoff 字段冒充已观察到的运行行为。
 
 ## 15. 开源复用价值在哪里？
 

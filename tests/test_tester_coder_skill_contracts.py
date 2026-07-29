@@ -45,6 +45,25 @@ def _digest(value: dict[str, Any]) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
+def _integrity_attestation(*, full_suite: bool = False) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "policy": "immutable-baseline-tests/v1",
+        "policy_digest": "e30d5b49b5bbde322301604354d21f604687483b54d1b4dd0f2e86473462516c",
+        "command_digest": "a" * 64,
+        "baseline_manifest_digest": "b" * 64,
+        "candidate_baseline_manifest_digest": "b" * 64,
+        "candidate_pre_run_manifest_digest": "c" * 64,
+        "candidate_post_run_manifest_digest": "c" * 64,
+        "added_tests_manifest_digest": "d" * 64,
+        "baseline_protected_file_count": 1,
+        "added_test_file_count": 0,
+        "full_suite": full_suite,
+        "verified": True,
+        "isolation_boundary": "stdlib-temporary-directory-process-only-not-os-sandbox",
+    }
+
+
 def _run_validator(
     tmp_path: Path,
     validator: Path,
@@ -198,6 +217,7 @@ def _sanitized_result() -> dict[str, Any]:
             "fixed_tests": [],
             "regression": True,
         },
+        "integrity_attestation": _integrity_attestation(),
     }
 
 
@@ -232,6 +252,7 @@ def _passing_result() -> dict[str, Any]:
             "fixed_tests": ["tests/test_calc.py::test_add"],
             "regression": False,
         },
+        "integrity_attestation": _integrity_attestation(),
     }
 
 
@@ -414,8 +435,8 @@ def test_contracts_publish_compatible_retry_protocol() -> None:
         (ROOT / "skills/patch-generator/references/contract.yaml").read_text(encoding="utf-8")
     )
 
-    assert test_contract["version"] == "3.2.0"
-    assert patch_contract["version"] == "2.3.0"
+    assert test_contract["version"] == "4.0.0"
+    assert patch_contract["version"] == "3.0.0"
     assert patch_contract["input"] == {
         "type": "SkillInvocation",
         "schema_version": "1.0",
@@ -808,6 +829,57 @@ def test_new_failures_cannot_pass_without_failure_evidence(tmp_path: Path) -> No
 
     assert process.returncode == 1
     assert "failure_evidence" in process.stderr
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (
+            lambda result, source: result.update(integrity_attestation=None),
+            "requires verified integrity evidence",
+        ),
+        (
+            lambda result, source: result["integrity_attestation"].update(verified=False),
+            "requires verified integrity evidence",
+        ),
+        (
+            lambda result, source: result["integrity_attestation"].update(
+                candidate_baseline_manifest_digest="e" * 64
+            ),
+            "changed the immutable baseline",
+        ),
+        (
+            lambda result, source: source.update(tier="T3"),
+            "full-suite attestation",
+        ),
+    ],
+)
+def test_test_runner_pass_requires_exact_integrity_attestation(
+    tmp_path: Path,
+    mutate: Callable[[dict[str, Any], dict[str, Any]], None],
+    expected: str,
+) -> None:
+    result = _passing_result()
+    source = _patch_candidate()
+    mutate(result, source)
+    artifact = {
+        "issue_id": 42,
+        "candidate_digest": source["candidate_digest"],
+        "test_result": result,
+        "test_result_redacted": False,
+        "failing_tests": [],
+    }
+
+    process = _run_validator(
+        tmp_path,
+        TEST_VALIDATOR,
+        "output",
+        artifact,
+        source,
+    )
+
+    assert process.returncode == 1
+    assert expected in process.stderr
 
 
 def test_test_runner_validates_failure_evidence_and_sanitized_handoff(

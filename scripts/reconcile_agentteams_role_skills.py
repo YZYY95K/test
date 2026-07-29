@@ -149,12 +149,12 @@ ROLE_SKILLS: dict[str, tuple[str, ...]] = {
     "devflow-reviewer": ("pr-reviewer", "experience-distiller"),
 }
 RELEASE_ARCHIVE_DIGESTS = {
-    "devflow-lead": "5ec6e76a43a6b4a5cf55fd0321f82be2f81b294c75081c18a139ec32c5757661",
-    "devflow-triage": "bcb84afa4004a1b1c208a83bee8fdc7ef8bdea289b740b909677e2f152ca02da",
-    "devflow-locator": "2d59b7d1533165009596167bc6470a0ba473895c835a390e083e967cddd2ff53",
-    "devflow-coder": "5425868754f5539eb5568fdfb5900d7fa0bcee6f724f92cf26bb2a289ac3de7f",
-    "devflow-tester": "68ad37e009c5485230dc38065c2095d751d6298943ebe88bbc471040b2488de2",
-    "devflow-reviewer": "6e2c4a4a76b9860e1931275d820cff3f961133257567d6eed417ae7cf896e947",
+    "devflow-lead": "82ffe34e3f02162febe4d1e88c5ed68b4676d4917007d6f8a2cf13e0cb9741a5",
+    "devflow-triage": "d5297a1741b0279310dc1adbe36cc02c5c33c8cf5897f4ea1532b4761f21630f",
+    "devflow-locator": "cab3503cd3100bf42238cf3b53ad65deca95e9e9e6b99551a81bb0f506daf54b",
+    "devflow-coder": "a54c323f4599899b8bee7950a759ec0e9cd0c56ae27fd091e559853ed9d41b16",
+    "devflow-tester": "684de72825bb0fdc9a0435c7e568934ce85dc8a37d30e17aa67d1eb7d3833563",
+    "devflow-reviewer": "e3d5513508f49b288384fbf47b746dbb52760de997388450f5636c640895842a",
 }
 ALL_DEVFLOW_SKILLS = frozenset(skill for skills in ROLE_SKILLS.values() for skill in skills)
 COMMON_SKILL_FILES = frozenset(

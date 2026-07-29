@@ -1,0 +1,30 @@
+schema_version: "1.0"
+project: AgentTeams
+repository: https://github.com/agentscope-ai/AgentTeams.git
+release_tag: v1.2.0-beta.1
+commit: 78d0ceda336befa6e62bf89fc1a6b08b965e128d
+release_url: https://github.com/agentscope-ai/AgentTeams/releases/tag/v1.2.0-beta.1
+license:
+  spdx: Apache-2.0
+  source_path: LICENSE
+  source_url: https://raw.githubusercontent.com/agentscope-ai/AgentTeams/v1.2.0-beta.1/LICENSE
+  utf8_bytes: 10770
+  sha256: d27b69cf7cd0a9fc3f4a04b1ee44e43ab4ebf517d85a1ea197f9ee96826196c7
+team_crd:
+  api_version: agentteams.io/v1beta1
+  source_path: hiclaw-controller/config/crd/teams.agentteams.io.yaml
+  source_url: https://raw.githubusercontent.com/agentscope-ai/AgentTeams/v1.2.0-beta.1/hiclaw-controller/config/crd/teams.agentteams.io.yaml
+  sha256: 153859173674e5b64987cc4e203eaf5f9e31322b33a27ee50fb2f0007f70fae6
+  bytes: 27309
+devflow_manifest:
+  path: agentteams/team.yaml
+  schema_mode: deprecated-inline-leader-workers
+  compatibility_patch: scripts/patch_agentteams_beta.sh
+  live_evidence: docs/evidence/AGENTTEAMS_LIVE_20260727.md
+compatibility:
+  supported: exact-pinned-release-only
+  current_main: >-
+    AgentTeams main uses separately managed Worker resources and Team
+    spec.workerMembers. The pinned beta manifest must not be represented as
+    current-main compatible; migration requires a separately validated manifest.
+verified_at: "2026-07-28"

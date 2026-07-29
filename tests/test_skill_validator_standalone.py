@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -200,9 +201,88 @@ def _test_evidence() -> dict[str, Any]:
                 "fixed_tests": ["tests/test_calculator.py::test_add"],
                 "regression": False,
             },
+            "integrity_attestation": {
+                "schema_version": "1.0",
+                "policy": "immutable-baseline-tests/v1",
+                "policy_digest": "e30d5b49b5bbde322301604354d21f604687483b54d1b4dd0f2e86473462516c",
+                "command_digest": "a" * 64,
+                "baseline_manifest_digest": "b" * 64,
+                "candidate_baseline_manifest_digest": "b" * 64,
+                "candidate_pre_run_manifest_digest": "c" * 64,
+                "candidate_post_run_manifest_digest": "c" * 64,
+                "added_tests_manifest_digest": "d" * 64,
+                "baseline_protected_file_count": 1,
+                "added_test_file_count": 0,
+                "full_suite": False,
+                "verified": True,
+                "isolation_boundary": "stdlib-temporary-directory-process-only-not-os-sandbox",
+            },
         },
         "test_result_redacted": False,
         "failing_tests": [],
+    }
+
+
+def _experience_input() -> dict[str, Any]:
+    patch = _patch()
+    test_result = _test_evidence()["test_result"]
+    review: dict[str, Any] = {
+        "decision": "approved",
+        "findings": [],
+        "summary": "The candidate is regression-free and within scope.",
+        "pr_url": None,
+        "requires_human_approval": False,
+    }
+    receipt_body: dict[str, Any] = {
+        "schema_version": "1.0",
+        "issuer": "TeamLeader",
+        "run_id": "run-7",
+        "issue_id": 7,
+        "repository_revision": "a" * 40,
+        "terminal_state": "review_approved",
+        "candidate_digest": _canonical_digest(patch),
+        "test_result_digest": _canonical_digest(test_result),
+        "review_digest": _canonical_digest(review),
+        "approval_digest": None,
+    }
+    return {
+        "issue_id": 7,
+        "issue": _patch_generator_input()["issue"],
+        "tier": "T2",
+        "repository_revision": "a" * 40,
+        "located_context": _patch_generator_input()["located_context"],
+        "patch": patch,
+        "test_result": test_result,
+        "review": review,
+        "trace_id": "run-7",
+        "terminal_receipt": {
+            **receipt_body,
+            "receipt_sha256": _canonical_digest(receipt_body),
+        },
+    }
+
+
+def _experience_output() -> dict[str, Any]:
+    return {
+        "pattern_id": "exp-7-aaaaaaaaaaaa",
+        "schema_version": "1.0",
+        "outcome": "approved",
+        "summary": "A bounded fix passed the regression gate.",
+        "reusable_lesson": "Bind fixes to exact reviewed evidence.",
+        "provenance": {
+            "trace_id": "run-7",
+            "issue_id": 7,
+            "repository_revision": "a" * 40,
+            "candidate_digest": "b" * 64,
+            "review_digest": "c" * 64,
+            "terminal_receipt_sha256": "d" * 64,
+        },
+        "redaction": {
+            "policy_version": "1.0",
+            "secret_scan_passed": True,
+            "pii_scan_passed": True,
+        },
+        "stored": True,
     }
 
 
@@ -213,6 +293,8 @@ def _artifact(skill: str, mode: str) -> dict[str, Any]:
         return _patch_generator_input() if mode == "input" else _patch_candidate()
     if skill == "test-runner":
         return _patch_candidate() if mode == "input" else _test_evidence()
+    if skill == "experience-distiller":
+        return _experience_input() if mode == "input" else _experience_output()
     contract = yaml.safe_load(
         (ROOT / "skills" / skill / "references" / "contract.yaml").read_text(encoding="utf-8")
     )
@@ -370,6 +452,36 @@ def test_patch_generator_binds_model_call_ordinal_to_verified_source(
 
     assert completed.returncode == 1
     assert "model_call_attempt does not match" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda value: value["test_result"]["baseline_comparison"].update(
+            regression=True,
+            new_failures=["hidden_regression"],
+        ),
+        lambda value: value["review"].update(decision="changes_requested"),
+        lambda value: value["terminal_receipt"].update(receipt_sha256="0" * 64),
+        lambda value: value["terminal_receipt"].update(issue_id=8),
+    ),
+)
+def test_experience_validator_rejects_untrusted_terminal_evidence(
+    tmp_path: Path,
+    mutation: Any,
+) -> None:
+    artifact = copy.deepcopy(_experience_input())
+    mutation(artifact)
+    artifact_path = tmp_path / "experience-untrusted.json"
+    artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+    completed = _run_validator(
+        "experience-distiller",
+        "input",
+        artifact_path,
+    )
+
+    assert completed.returncode != 0
 
 
 def test_worker_package_contains_each_skill_local_contract_reader(tmp_path: Path) -> None:

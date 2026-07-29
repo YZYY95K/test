@@ -26,7 +26,6 @@ class TesterAgent(BaseAgent):
         description="Execute isolated tests and report evidence without editing code.",
         model="glm-5.2",
         temperature=0.1,
-        system_prompt_ref="prompts/tester.md",
     )
     _CAPABILITIES = (
         "test_execution",
@@ -40,14 +39,12 @@ class TesterAgent(BaseAgent):
         "Cannot approve a patch",
         "Must run the full suite for T3+ issues",
     )
-    _WATCHES = ("coder.patch_ready", "pipeline.completed")
+    _WATCHES: tuple[str, ...] = ()
     _OWNED_SKILLS = ("test-runner",)
     # Coder owns the typed PatchCandidate result.  TeamLeader may re-issue that
     # already-validated candidate as a scheduler route; no other producer may
     # invoke this Skill through an envelope.
-    _HANDOFF_PRODUCERS = {
-        "test-runner": frozenset({"CoderAgent", "TeamLeader"})
-    }
+    _HANDOFF_PRODUCERS = {"test-runner": frozenset({"TeamLeader"})}
     _FORBIDDEN_ACTIONS = {
         "modify_source": "Cannot modify source code",
         "modify_tests": "Cannot modify test files",
@@ -94,6 +91,13 @@ class TesterAgent(BaseAgent):
                 result = TestRunResult.model_validate(result_payload)
             except (TypeError, ValueError) as exc:
                 raise AgentError("CI/CD returned an invalid TestRunResult.") from exc
+            attestation = result.integrity_attestation
+            if (
+                attestation is None
+                or not attestation.verified
+                or attestation.full_suite is not full_suite
+            ):
+                raise AgentError("CI/CD did not attest the requested immutable-test execution.")
             passed = self._passes_gate(result)
             event = "test.passed" if passed else "test.failed"
             candidate_digest = canonical_artifact_digest(patch)
@@ -118,7 +122,7 @@ class TesterAgent(BaseAgent):
             await self._emit_handoff(
                 event,
                 issue_id=issue_id,
-                consumer=("ReviewerAgent" if event == "test.passed" else "TeamLeader"),
+                consumer="TeamLeader",
                 skill="test-runner",
                 artifact_type="TestEvidence",
                 status=(HandoffStatus.READY if event == "test.passed" else HandoffStatus.RETRY),
@@ -136,6 +140,7 @@ class TesterAgent(BaseAgent):
                         else {}
                     ),
                 },
+                task_id=(f"{issue_id}-testeragent-test-runner-{candidate_digest[:12]}"),
             )
             # Raw CI strings are Tester-local.  Even the direct Python return
             # follows the same redacted boundary as the inter-Agent hand-off.
@@ -144,8 +149,11 @@ class TesterAgent(BaseAgent):
     @staticmethod
     def _passes_gate(result: TestRunResult) -> bool:
         comparison = result.baseline_comparison
+        attestation = result.integrity_attestation
         return bool(
-            comparison is not None
+            attestation is not None
+            and attestation.verified
+            and comparison is not None
             and result.failed == 0
             and result.errors == 0
             and not comparison.regression

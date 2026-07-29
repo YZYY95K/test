@@ -661,7 +661,8 @@ def _validate_retry_envelope(
     missing = sorted(required - set(envelope))
     if missing:
         raise ValueError(f"missing retry envelope fields: {', '.join(missing)}")
-    if set(envelope) - required - {"agent"}:
+    optional = {"agent", "parent_task_id", "parent_handoff_sha256"}
+    if set(envelope) - required - optional:
         raise ValueError("retry envelope contains unknown fields")
     if envelope["envelope_version"] != "1.0":
         raise ValueError("envelope_version must be 1.0")
@@ -674,6 +675,18 @@ def _validate_retry_envelope(
         raise ValueError("retry envelope producer, consumer, skill, or status is invalid")
     if envelope.get("agent", "TeamLeader") != "TeamLeader":
         raise ValueError("enriched retry envelope agent must be TeamLeader")
+    parent_task_id = envelope.get("parent_task_id")
+    parent_digest = envelope.get("parent_handoff_sha256")
+    if (parent_task_id is None) != (parent_digest is None):
+        raise ValueError("retry envelope parent correlation is incomplete")
+    if parent_task_id is not None:
+        if not isinstance(parent_task_id, str) or not parent_task_id:
+            raise ValueError("retry envelope parent task id is invalid")
+        if (
+            not isinstance(parent_digest, str)
+            or re.fullmatch(r"[a-f0-9]{64}", parent_digest) is None
+        ):
+            raise ValueError("retry envelope parent digest is invalid")
     _require_integer(envelope["issue_id"], "envelope issue_id", minimum=1)
 
     run_id = envelope["run_id"]

@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from devflow.skills.catalog import (
+ROOT = Path(__file__).resolve().parents[1]
+for import_path in (ROOT, ROOT / "src"):
+    if str(import_path) not in sys.path:
+        sys.path.insert(0, str(import_path))
+
+from devflow.skills.catalog import (  # noqa: E402
     load_catalog,
     validate_agent_alignment,
     validate_collaboration,
@@ -157,7 +163,7 @@ def evaluate(skill_dir: Path) -> SkillScore:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--root", type=Path, default=Path(__file__).resolve().parents[1]
+        "--root", type=Path, default=ROOT
     )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()

@@ -25,7 +25,8 @@ after a valid invocation starts.
 5. Keep the payload within the declared token budget; store large context by
    reference with a digest.
 6. Run `python scripts/validate.py output <artifact.json>`, emit
-   `locator.completed`, and hand off to CoderAgent.
+   `locator.completed`, and return the artifact to TeamLeader. TeamLeader alone
+   may issue the next Coder route.
 
 ## Decision rules
 

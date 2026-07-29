@@ -24,6 +24,14 @@ from devflow.models.patch import (
     Patch,
     RiskLevel,
 )
+from devflow.models.test_integrity import (
+    TEST_INTEGRITY_POLICY,
+    TEST_INTEGRITY_POLICY_DIGEST,
+    TEST_ISOLATION_BOUNDARY,
+)
+from devflow.models.test_integrity import (
+    TestIntegrityAttestation as IntegrityAttestation,
+)
 from devflow.models.test_result import (
     BaselineComparison,
     canonical_artifact_digest,
@@ -80,7 +88,26 @@ class _StaticResultMCP:
     ) -> dict[str, Any]:
         assert (server, tool) == ("cicd", "run_tests")
         assert arguments["issue_id"] == 42
-        return self.result.model_dump(mode="json")
+        attested = self.result.model_copy(
+            update={
+                "integrity_attestation": IntegrityAttestation(
+                    policy=TEST_INTEGRITY_POLICY,
+                    policy_digest=TEST_INTEGRITY_POLICY_DIGEST,
+                    command_digest="a" * 64,
+                    baseline_manifest_digest="b" * 64,
+                    candidate_baseline_manifest_digest="b" * 64,
+                    candidate_pre_run_manifest_digest="c" * 64,
+                    candidate_post_run_manifest_digest="c" * 64,
+                    added_tests_manifest_digest="d" * 64,
+                    baseline_protected_file_count=1,
+                    added_test_file_count=0,
+                    full_suite=bool(arguments["full_suite"]),
+                    verified=True,
+                    isolation_boundary=TEST_ISOLATION_BOUNDARY,
+                )
+            }
+        )
+        return attested.model_dump(mode="json")
 
 
 class _RawResultMCP:
@@ -248,7 +275,27 @@ async def test_failure_handoff_and_coder_prompt_never_contain_raw_secrets() -> N
         located_context=_located_context(),
         previous_patch=patch,
     )
-    await leader._on_test_failed(envelope.model_dump(mode="json"))
+    await leader.route_task(
+        Task(
+            task_id="42-redaction-testeragent",
+            agent="TesterAgent",
+            skill="test-runner",
+            input_data={
+                "issue_id": 42,
+                **candidate.model_dump(mode="json", exclude_none=True),
+            },
+            tier=ComplexityLevel.T2,
+        )
+    )
+    parent = HandoffEnvelope.model_validate(event_bus.history()[-1].payload)
+    assert leader.claim_execution_route(parent)
+    correlated = envelope.model_copy(
+        update={
+            "parent_task_id": parent.task_id,
+            "parent_handoff_sha256": TeamLeader._handoff_sha256(parent),
+        }
+    )
+    await leader._on_test_failed(correlated.model_dump(mode="json"))
     routed = event_bus.history()[-1]
     assert routed.event_type == "task.route.coderagent"
     retry_envelope = HandoffEnvelope.model_validate(routed.payload)
@@ -312,9 +359,9 @@ async def test_tester_redacts_named_credential_from_diagnostic_handoff() -> None
         located=_located_context(),
     )
 
-    returned = await DevFlowTesterAgent(
-        mcp_client=_StaticResultMCP(result)
-    ).execute(candidate.model_dump(mode="json", exclude_none=True))
+    returned = await DevFlowTesterAgent(mcp_client=_StaticResultMCP(result)).execute(
+        candidate.model_dump(mode="json", exclude_none=True)
+    )
 
     serialized_history = json.dumps(
         [record.payload for record in event_bus.history()],

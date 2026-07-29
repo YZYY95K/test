@@ -1,0 +1,168 @@
+{
+  "outputSlides": [
+    {
+      "outputSlide": 1,
+      "sourceSlide": 1,
+      "narrativeRole": "opening thesis",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/7qp4be9c", "action": "rewrite"},
+        {"sourceElementId": "sh/547294r6", "action": "rewrite"},
+        {"sourceElementId": "sh/k3yl0zql", "action": "rewrite"}
+      ]
+    },
+    {
+      "outputSlide": 2,
+      "sourceSlide": 2,
+      "narrativeRole": "enterprise problem and system scale",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/a10jqpsj", "action": "rewrite"},
+        {"sourceElementId": "sh/x4r21kru", "action": "rewrite"},
+        {"sourceElementId": "sh/w3i1sfa9", "action": "rewrite"},
+        {"sourceElementId": "sh/r65knqtk", "action": "rewrite"},
+        {"sourceElementId": "sh/q5wjelsz", "action": "rewrite"},
+        {"sourceElementId": "sh/ove9o7yd", "action": "rewrite"},
+        {"sourceElementId": "sh/9wnqhczy", "action": "rewrite"},
+        {"sourceElementId": "sh/mtwrmxg7", "action": "rewrite"}
+      ]
+    },
+    {
+      "outputSlide": 3,
+      "sourceSlide": 3,
+      "narrativeRole": "identity and responsibility boundaries",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/cza94vmx", "action": "rewrite"},
+        {"sourceElementId": "sh/d0jax03i", "action": "rewrite"},
+        {"sourceElementId": "sh/298ryl4v", "action": "rewrite"},
+        {"sourceElementId": "sh/3ah8rqlg", "action": "rewrite"},
+        {"sourceElementId": "sh/obq90bml", "action": "rewrite"},
+        {"sourceElementId": "sh/pcjqtg36", "action": "rewrite"},
+        {"sourceElementId": "sh/m5cra54z", "action": "rewrite"},
+        {"sourceElementId": "sh/n6ls3alk", "action": "rewrite"},
+        {"sourceElementId": "sh/n2l4fq98", "action": "rewrite"}
+      ]
+    },
+    {
+      "outputSlide": 4,
+      "sourceSlide": 4,
+      "narrativeRole": "collaboration contract",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/1cj2d8b6", "action": "rewrite"},
+        {"sourceElementId": "sh/0ba143al", "action": "rewrite"},
+        {"sourceElementId": "sh/rm1k7yt4", "action": "rewrite"},
+        {"sourceElementId": "sh/ql8jytsj", "action": "rewrite"}
+      ]
+    },
+    {
+      "outputSlide": 5,
+      "sourceSlide": 5,
+      "narrativeRole": "AgentTeams state protocol",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/dgbulwnm", "action": "rewrite"},
+        {"sourceElementId": "sh/032tgr6d", "action": "rewrite"},
+        {"sourceElementId": "sh/n6dcr65o", "action": "rewrite"},
+        {"sourceElementId": "sh/m5kbi1oj", "action": "rewrite"},
+        {"sourceElementId": "sh/w32dkbuh", "action": "rewrite"},
+        {"sourceElementId": "sh/x4vedgvm", "action": "rewrite"},
+        {"sourceElementId": "sh/ahkvi1cb", "action": "rewrite"}
+      ]
+    },
+    {
+      "outputSlide": 6,
+      "sourceSlide": 6,
+      "narrativeRole": "MCP trust chain",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/yhg7epsj", "action": "rewrite"},
+        {"sourceElementId": "sh/7m98ru9g", "action": "rewrite"}
+      ]
+    },
+    {
+      "outputSlide": 7,
+      "sourceSlide": 7,
+      "narrativeRole": "Skill engineering system",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/cb2tkvap", "action": "rewrite"},
+        {"sourceElementId": "sh/dcbud0ra", "action": "rewrite"},
+        {"sourceElementId": "sh/ydkbm5sv", "action": "rewrite"},
+        {"sourceElementId": "sh/zedcfa9g", "action": "rewrite"},
+        {"sourceElementId": "sh/kzmdova1", "action": "rewrite"},
+        {"sourceElementId": "sh/l0vuh0rm", "action": "rewrite"},
+        {"sourceElementId": "sh/eh0ba1sr", "action": "rewrite"},
+        {"sourceElementId": "sh/fi9c369c", "action": "rewrite"},
+        {"sourceElementId": "sh/baxkjqlk", "action": "rewrite"}
+      ]
+    },
+    {
+      "outputSlide": 8,
+      "sourceSlide": 8,
+      "narrativeRole": "runtime verification",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/6h0fypgb", "action": "rewrite"},
+        {"sourceElementId": "sh/tkby9kzm", "action": "rewrite"},
+        {"sourceElementId": "sh/sjix0zy1", "action": "rewrite"},
+        {"sourceElementId": "sh/je9g3ahk", "action": "rewrite"},
+        {"sourceElementId": "sh/id0fu50z", "action": "rewrite"},
+        {"sourceElementId": "sh/o7ydoret", "action": "rewrite"},
+        {"sourceElementId": "sh/98rehwve", "action": "rewrite"},
+        {"sourceElementId": "sh/m5gvmhwn", "action": "rewrite"}
+      ]
+    },
+    {
+      "outputSlide": 9,
+      "sourceSlide": 9,
+      "narrativeRole": "evidence maturity matrix",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/1cfmhgne", "action": "rewrite"},
+        {"sourceElementId": "sh/0b65obm9", "action": "rewrite"},
+        {"sourceElementId": "tb/g7uhcbqt", "action": "rewrite"}
+      ]
+    },
+    {
+      "outputSlide": 10,
+      "sourceSlide": 10,
+      "narrativeRole": "official score alignment",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/xc3mho32", "action": "rewrite"},
+        {"sourceElementId": "sh/cbu58j2h", "action": "rewrite"},
+        {"sourceElementId": "sh/zelojyl8", "action": "rewrite"},
+        {"sourceElementId": "sh/ydcnatkn", "action": "rewrite"}
+      ]
+    },
+    {
+      "outputSlide": 11,
+      "sourceSlide": 11,
+      "narrativeRole": "three live proof chains",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/xcryxg7y", "action": "rewrite"},
+        {"sourceElementId": "sh/o7ih0r6h", "action": "rewrite"},
+        {"sourceElementId": "sh/72t03qp0", "action": "rewrite"},
+        {"sourceElementId": "sh/61kzalof", "action": "rewrite"},
+        {"sourceElementId": "sh/ofqtgnyt", "action": "rewrite"},
+        {"sourceElementId": "sh/9gza9sze", "action": "rewrite"},
+        {"sourceElementId": "sh/mdobedg3", "action": "rewrite"}
+      ]
+    },
+    {
+      "outputSlide": 12,
+      "sourceSlide": 12,
+      "narrativeRole": "closing synthesis",
+      "reuseMode": "duplicate-slide",
+      "editTargets": [
+        {"sourceElementId": "sh/ra943il8", "action": "rewrite"},
+        {"sourceElementId": "sh/1gbm9s3a", "action": "rewrite"},
+        {"sourceElementId": "sh/0f2lgnmp", "action": "rewrite"}
+      ]
+    }
+  ],
+  "omittedSourceSlides": []
+}

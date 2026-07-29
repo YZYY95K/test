@@ -41,6 +41,31 @@ from scripts.reconcile_agentteams_packages import CONFIGMAP_NAME, NAMESPACE
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_agentteams_manifest_is_bound_to_the_exact_upstream_beta_contract() -> None:
+    lock = yaml.safe_load((ROOT / "agentteams" / "upstream.lock.yaml").read_text(encoding="utf-8"))
+    resource = yaml.safe_load((ROOT / "agentteams" / "team.yaml").read_text(encoding="utf-8"))
+
+    assert lock["schema_version"] == "1.0"
+    assert lock["repository"] == "https://github.com/agentscope-ai/AgentTeams.git"
+    assert lock["release_tag"] == "v1.2.0-beta.1"
+    assert lock["commit"] == "78d0ceda336befa6e62bf89fc1a6b08b965e128d"
+    assert lock["team_crd"] == {
+        "api_version": "agentteams.io/v1beta1",
+        "source_path": "hiclaw-controller/config/crd/teams.agentteams.io.yaml",
+        "source_url": (
+            "https://raw.githubusercontent.com/agentscope-ai/AgentTeams/"
+            "v1.2.0-beta.1/hiclaw-controller/config/crd/teams.agentteams.io.yaml"
+        ),
+        "sha256": "153859173674e5b64987cc4e203eaf5f9e31322b33a27ee50fb2f0007f70fae6",
+        "bytes": 27309,
+    }
+    assert lock["devflow_manifest"]["schema_mode"] == "deprecated-inline-leader-workers"
+    assert lock["compatibility"]["supported"] == "exact-pinned-release-only"
+    assert resource["apiVersion"] == lock["team_crd"]["api_version"]
+    assert "leader" in resource["spec"] and "workers" in resource["spec"]
+    assert "workerMembers" not in resource["spec"]
+
+
 def test_team_manifest_maps_all_domain_workers() -> None:
     resource = yaml.safe_load((ROOT / "agentteams" / "team.yaml").read_text(encoding="utf-8"))
 
@@ -76,9 +101,7 @@ def test_package_server_team_urls_and_configmap_projection_are_one_contract() ->
     policy = by_kind["NetworkPolicy"]
     container = deployment["spec"]["template"]["spec"]["containers"][0]
     volume = deployment["spec"]["template"]["spec"]["volumes"][0]["configMap"]
-    expected_names = {
-        f"{role}-v{PACKAGE_VERSION}.zip" for role in ROLE_SKILLS
-    }
+    expected_names = {f"{role}-v{PACKAGE_VERSION}.zip" for role in ROLE_SKILLS}
 
     assert deployment["metadata"]["namespace"] == NAMESPACE
     assert service["metadata"] == {
@@ -93,9 +116,7 @@ def test_package_server_team_urls_and_configmap_projection_are_one_contract() ->
         "busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
     )
     assert container["securityContext"]["readOnlyRootFilesystem"] is True
-    assert container["volumeMounts"] == [
-        {"name": "package", "mountPath": "/www", "readOnly": True}
-    ]
+    assert container["volumeMounts"] == [{"name": "package", "mountPath": "/www", "readOnly": True}]
     assert volume["name"] == CONFIGMAP_NAME
     assert volume["defaultMode"] == 0o444
     assert [item["key"] for item in volume["items"]] == [
@@ -104,12 +125,8 @@ def test_package_server_team_urls_and_configmap_projection_are_one_contract() ->
     assert {item["key"] for item in volume["items"]} == expected_names
     assert {item["path"] for item in volume["items"]} == expected_names
     assert all(item["key"] == item["path"] for item in volume["items"])
-    assert service["spec"]["ports"] == [
-        {"name": "http", "port": 8080, "targetPort": "http"}
-    ]
-    assert policy["spec"]["ingress"][0]["ports"] == [
-        {"protocol": "TCP", "port": 8080}
-    ]
+    assert service["spec"]["ports"] == [{"name": "http", "port": 8080, "targetPort": "http"}]
+    assert policy["spec"]["ingress"][0]["ports"] == [{"protocol": "TCP", "port": 8080}]
 
     team = yaml.safe_load((ROOT / "agentteams/team.yaml").read_text(encoding="utf-8"))
     members = [team["spec"]["leader"], *team["spec"]["workers"]]
@@ -120,17 +137,11 @@ def test_package_server_team_urls_and_configmap_projection_are_one_contract() ->
 
 
 def test_ci_uploads_all_versioned_role_packages_and_digest_sidecars() -> None:
-    workflow = yaml.safe_load(
-        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    )
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["verify"]["steps"]
-    upload = next(
-        step for step in steps if step.get("uses") == "actions/upload-artifact@v4"
-    )
+    upload = next(step for step in steps if step.get("uses") == "actions/upload-artifact@v4")
 
-    assert upload["with"]["name"].startswith(
-        f"devflow-role-packages-v{PACKAGE_VERSION}-python-"
-    )
+    assert upload["with"]["name"].startswith(f"devflow-role-packages-v{PACKAGE_VERSION}-python-")
     assert set(upload["with"]["path"].splitlines()) == {
         f"dist/devflow-*-v{PACKAGE_VERSION}.zip",
         f"dist/devflow-*-v{PACKAGE_VERSION}.zip.sha256",
@@ -200,19 +211,13 @@ def test_runtime_agent_skill_ownership_matches_contracts() -> None:
 def test_release_role_skill_map_matches_runtime_and_contract_owners() -> None:
     configured = yaml.safe_load((ROOT / "config/agents.yaml").read_text(encoding="utf-8"))
     configured_skills = {
-        agent["name"]: tuple(agent.get("depends_on_skills", []))
-        for agent in configured["agents"]
+        agent["name"]: tuple(agent.get("depends_on_skills", [])) for agent in configured["agents"]
     }
-    assert {
-        role: configured_skills[owner]
-        for role, owner in ROLE_OWNERS.items()
-    } == ROLE_SKILLS
+    assert {role: configured_skills[owner] for role, owner in ROLE_OWNERS.items()} == ROLE_SKILLS
     for role, skills in ROLE_SKILLS.items():
         for skill in skills:
             contract = yaml.safe_load(
-                (ROOT / "skills" / skill / "references/contract.yaml").read_text(
-                    encoding="utf-8"
-                )
+                (ROOT / "skills" / skill / "references/contract.yaml").read_text(encoding="utf-8")
             )
             assert contract["name"] == skill
             assert contract["owner"] == ROLE_OWNERS[role]
@@ -234,10 +239,7 @@ def test_role_packages_are_reproducible_minimal_and_manifested(tmp_path: Path) -
         assert first_path.read_bytes() == second_path.read_bytes()
         with zipfile.ZipFile(first_path) as archive:
             names = archive.namelist()
-            assert all(
-                entry.compress_type == zipfile.ZIP_STORED
-                for entry in archive.infolist()
-            )
+            assert all(entry.compress_type == zipfile.ZIP_STORED for entry in archive.infolist())
             manifest = json.loads(archive.read("manifest.json"))
             assert manifest["role"] == role
             assert manifest["skills"] == list(expected_skills)

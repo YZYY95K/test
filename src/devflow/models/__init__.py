@@ -10,6 +10,7 @@ from devflow.models.experience import (
     ExperienceProvenance,
     RedactionEvidence,
 )
+from devflow.models.human_approval import HumanApprovalTarget
 from devflow.models.issue import (
     ComplexityLevel,
     IssueCategory,
@@ -29,6 +30,7 @@ from devflow.models.review import (
     ReviewFinding,
     ReviewResult,
 )
+from devflow.models.test_integrity import TestIntegrityAttestation
 from devflow.models.test_result import (
     BaselineComparison,
     TestCaseResult,
@@ -48,6 +50,7 @@ __all__ = [
     # Issue models
     "ExperiencePattern",
     "ExperienceProvenance",
+    "HumanApprovalTarget",
     "RedactionEvidence",
     "ComplexityLevel",
     "IssueCategory",
@@ -68,6 +71,7 @@ __all__ = [
     "TestCaseResult",
     "BaselineComparison",
     "TestRunResult",
+    "TestIntegrityAttestation",
     # Trace models
     "SpanStatus",
     "LogLevel",

@@ -1,0 +1,18 @@
+schema_version: "1.0"
+provider: "Z.AI"
+model: "glm-5.2"
+currency: "USD"
+unit_tokens: 1000000
+prices:
+  input: 1.4
+  cached_input: 0.26
+  output: 4.4
+cost_method:
+  prompt_tokens: "ordinary input price unless provider usage separately reports cached tokens"
+  completion_tokens: "output price"
+  billing_claim: "estimated list-price cost, not an invoice"
+source:
+  url: "https://docs.z.ai/guides/overview/pricing.md"
+  retrieved_at: "2026-07-28"
+  utf8_bytes: 3396
+  sha256: "43852209f790f89766a36fbecb1be2febb40f02aa122ad2e7ea0b679ac133dae"

@@ -8,21 +8,40 @@ The indexer is decoupled from the file source via a ``FileFetcher`` callable:
 the caller decides whether files come from the GitHub API, a local clone, or
 a test fixture. Embeddings are produced via an OpenAI-compatible endpoint
 (``embedding-3`` by default).
+
+Every operation is bound to one tenant, canonical repository identity, and
+immutable Git object id. Records live in a scope-specific collection, carry
+expiry metadata, and are authenticated (including the stored vector) before
+they are released to an agent.
 """
 
 from __future__ import annotations
 
 import ast
+import hashlib
 import os
-from collections.abc import Awaitable
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from devflow.exceptions import LLMError, SkillError
+from devflow.models.patch import canonical_repository_path
 from devflow.observability import logger, metrics, tracer
 from devflow.rag.embeddings import EmbeddingProvider, build_embedding_provider
+from devflow.rag.scope import (
+    RepositoryScope,
+    cosine_similarity,
+    embedding_sha256,
+    query_result_row,
+    require_integrity_key,
+    resolve_scope,
+    seal_record,
+    utc_epoch,
+    verify_record,
+)
 
 # ---------------------------------------------------------------------------
 # Public models
@@ -46,6 +65,12 @@ class CodeChunk:
     end_line: int
     content: str
     language: str
+    tenant_id: str = ""
+    repository_id: str = ""
+    repository_revision: str = ""
+    namespace: str = ""
+    record_hmac_sha256: str = ""
+    similarity: float = 0.0
 
 
 class FileFetcher(Protocol):
@@ -56,9 +81,9 @@ class FileFetcher(Protocol):
     """
 
     def __call__(
-        self, repo_owner: str, repo_name: str
+        self, repo_owner: str, repo_name: str, exact_revision: str
     ) -> Awaitable[list[tuple[str, str]]]:
-        """Return a list of ``(file_path, file_content)`` tuples."""
+        """Return files fetched from the exact immutable revision."""
         ...
 
 
@@ -234,8 +259,8 @@ class CodebaseIndexer:
     """Indexes repository source code into ChromaDB for RAG retrieval.
 
     The indexer computes embeddings via an OpenAI-compatible API and stores
-    them alongside chunk metadata so that LocatorAgent can query for relevant
-    code regions by natural-language description.
+    them alongside authenticated chunk metadata so that LocatorAgent can
+    query an exact repository revision without cross-tenant fallback.
     """
 
     COLLECTION_NAME = "codebase_index"
@@ -248,6 +273,10 @@ class CodebaseIndexer:
         embedding_api_key: str | None = None,
         embedding_base_url: str | None = None,
         file_fetcher: FileFetcher | None = None,
+        scope: RepositoryScope | None = None,
+        record_ttl_seconds: int = 2_592_000,
+        clock: Callable[[], float] = time.time,
+        integrity_key: bytes | None = None,
     ) -> None:
         """Initialize the codebase indexer.
 
@@ -260,7 +289,18 @@ class CodebaseIndexer:
                 Defaults to ``LLM_BASE_URL`` env var.
             file_fetcher: Callable that retrieves ``(path, content)`` pairs
                 for a repository. Required for ``index_repository``.
+            scope: Optional repository scope bound for this indexer instance.
+            record_ttl_seconds: Lifetime of indexed records before retrieval fails.
+            clock: Time source, injectable for deterministic verification.
+            integrity_key: HMAC key for authenticating stored records. Defaults
+                to ``DEVFLOW_RAG_HMAC_KEY`` and must be at least 32 bytes.
         """
+        if (
+            not isinstance(record_ttl_seconds, int)
+            or isinstance(record_ttl_seconds, bool)
+            or record_ttl_seconds <= 0
+        ):
+            raise ValueError("record_ttl_seconds must be a positive integer")
         self._persist_path = persist_path or os.getenv(
             "CHROMADB_PATH", ".devflow/chromadb"
         ) or ".devflow/chromadb"
@@ -276,7 +316,15 @@ class CodebaseIndexer:
         )
         self._embedding_model = os.getenv("EMBEDDING_MODEL", self.EMBEDDING_MODEL)
         self._file_fetcher = file_fetcher
+        self._scope = scope
+        self._record_ttl_seconds = record_ttl_seconds
+        self._clock = clock
+        configured_key = os.getenv("DEVFLOW_RAG_HMAC_KEY", "").encode()
+        self._integrity_key = require_integrity_key(
+            integrity_key if integrity_key is not None else configured_key
+        )
         self._client: Any | None = None
+        self._collections: dict[str, Any] = {}
         self._collection: Any | None = None
         self._embedding_provider: EmbeddingProvider | None = None
 
@@ -296,14 +344,31 @@ class CodebaseIndexer:
             )
         return self._client
 
-    def _get_collection(self) -> Any:
-        """Lazily create or retrieve the codebase index collection."""
+    @staticmethod
+    def _collection_name(scope: RepositoryScope) -> str:
+        return f"{CodebaseIndexer.COLLECTION_NAME}_{scope.namespace.removeprefix('rag-v1:')}"
+
+    def _get_collection(self, scope: RepositoryScope) -> Any:
+        """Lazily create a physically scoped codebase collection."""
+        # Kept as an explicit test/integration injection seam. Production
+        # clients use the namespace-keyed collection cache below.
         if self._collection is None:
+            cached = self._collections.get(scope.namespace)
+            if cached is not None:
+                return cached
             client = self._get_chroma_client()
-            self._collection = client.get_or_create_collection(
-                name=self.COLLECTION_NAME,
-                metadata={"description": "Codebase chunks for RAG retrieval"},
+            collection = client.get_or_create_collection(
+                name=self._collection_name(scope),
+                metadata={
+                    "description": "Exact-revision codebase chunks for RAG",
+                    "namespace": scope.namespace,
+                    "repository_id": scope.repository_id,
+                    "repository_revision": scope.revision,
+                    "tenant_id": scope.tenant_id,
+                },
             )
+            self._collections[scope.namespace] = collection
+            return collection
         return self._collection
 
     def _get_embedding_provider(self) -> EmbeddingProvider:
@@ -341,19 +406,17 @@ class CodebaseIndexer:
             if isinstance(exc, LLMError):
                 raise
             raise LLMError(
-                f"Embedding API call failed: {exc}"
+                f"Embedding API call failed: {type(exc).__name__}"
             ) from exc
 
     # -- public API ---------------------------------------------------------
 
-    async def index_repository(
-        self, repo_owner: str, repo_name: str
-    ) -> int:
+    async def index_repository(self, scope: RepositoryScope | None = None) -> int:
         """Index all source files in a repository into ChromaDB.
 
         Args:
-            repo_owner: GitHub repository owner (user or org).
-            repo_name: GitHub repository name.
+            scope: Tenant, repository, and exact immutable revision. This may
+                be omitted only when the indexer was constructed with a scope.
 
         Returns:
             Number of code chunks indexed.
@@ -361,9 +424,12 @@ class CodebaseIndexer:
         Raises:
             SkillError: If no file fetcher is configured or indexing fails.
         """
+        repository_scope = resolve_scope(scope, self._scope)
         with tracer.start_as_current_span("codebase_indexer.index_repository") as span:
-            span.set_attribute("repo.owner", repo_owner)
-            span.set_attribute("repo.name", repo_name)
+            span.set_attribute("repo.owner", repository_scope.repo_owner)
+            span.set_attribute("repo.name", repository_scope.repo_name)
+            span.set_attribute("repo.revision", repository_scope.revision)
+            span.set_attribute("rag.namespace", repository_scope.namespace)
 
             if self._file_fetcher is None:
                 raise SkillError(
@@ -373,43 +439,64 @@ class CodebaseIndexer:
 
             logger.info(
                 "codebase_indexer.indexing_started",
-                repo_owner=repo_owner,
-                repo_name=repo_name,
+                repo_owner=repository_scope.repo_owner,
+                repo_name=repository_scope.repo_name,
+                repository_revision=repository_scope.revision,
             )
 
             try:
-                files = await self._file_fetcher(repo_owner, repo_name)
+                files = await self._file_fetcher(
+                    repository_scope.repo_owner,
+                    repository_scope.repo_name,
+                    repository_scope.revision,
+                )
             except Exception as exc:
                 raise SkillError(
-                    f"File fetcher failed for {repo_owner}/{repo_name}: {exc}"
+                    f"File fetcher failed for {repository_scope.repository_id}: "
+                    f"{type(exc).__name__}"
                 ) from exc
 
             all_chunks: list[CodeChunk] = []
+            seen_paths: set[str] = set()
             for file_path, content in files:
-                if _should_ignore(file_path):
+                try:
+                    canonical_path = canonical_repository_path(file_path)
+                except (TypeError, ValueError) as exc:
+                    raise SkillError(
+                        "File fetcher returned a non-canonical repository path"
+                    ) from exc
+                if canonical_path in seen_paths:
+                    raise SkillError(
+                        "File fetcher returned duplicate repository paths"
+                    )
+                seen_paths.add(canonical_path)
+                if not isinstance(content, str):
+                    raise SkillError("File fetcher returned non-text file content")
+                if _should_ignore(canonical_path):
                     continue
                 if not content or not content.strip():
                     continue
-                chunks = _chunk_file(file_path, content)
+                chunks = _chunk_file(canonical_path, content)
                 all_chunks.extend(chunks)
 
             if not all_chunks:
                 logger.warning(
                     "codebase_indexer.no_chunks",
-                    repo_owner=repo_owner,
-                    repo_name=repo_name,
+                    repo_owner=repository_scope.repo_owner,
+                    repo_name=repository_scope.repo_name,
                 )
                 metrics.record(
                     name="devflow_codebase_chunks_indexed",
                     value=0,
                     unit="count",
-                    tags={"repo": f"{repo_owner}/{repo_name}"},
+                    tags={"repo": repository_scope.repository_id},
                 )
                 return 0
 
             # Batch embedding (ChromaDB has a batch limit; embed in groups).
             batch_size = 100
-            collection = self._get_collection()
+            collection = self._get_collection(repository_scope)
+            indexed_at = utc_epoch(self._clock)
 
             for i in range(0, len(all_chunks), batch_size):
                 batch = all_chunks[i : i + batch_size]
@@ -417,20 +504,47 @@ class CodebaseIndexer:
                 embeddings = self._create_embeddings(texts)
 
                 ids = [
-                    f"{chunk.file_path}:{chunk.start_line}:{chunk.end_line}"
+                    "code:"
+                    f"{repository_scope.namespace}:"
+                    + hashlib.sha256(
+                        (
+                            f"{chunk.file_path}\0{chunk.start_line}\0"
+                            f"{chunk.end_line}\0{chunk.content}"
+                        ).encode()
+                    ).hexdigest()
                     for chunk in batch
                 ]
-                metadatas = [
-                    {
+                metadatas = []
+                for record_id, chunk, embedding in zip(
+                    ids,
+                    batch,
+                    embeddings,
+                    strict=True,
+                ):
+                    metadata = {
+                        **repository_scope.metadata(
+                            now=indexed_at,
+                            ttl_seconds=self._record_ttl_seconds,
+                        ),
                         "file_path": chunk.file_path,
                         "start_line": chunk.start_line,
                         "end_line": chunk.end_line,
                         "language": chunk.language,
+                        "content_sha256": hashlib.sha256(
+                            chunk.content.encode("utf-8")
+                        ).hexdigest(),
+                        "embedding_sha256": embedding_sha256(embedding),
                     }
-                    for chunk in batch
-                ]
+                    metadatas.append(
+                        seal_record(
+                            record_id=record_id,
+                            document=chunk.content,
+                            metadata=metadata,
+                            integrity_key=self._integrity_key,
+                        )
+                    )
 
-                collection.add(
+                collection.upsert(
                     ids=ids,
                     embeddings=embeddings,
                     documents=texts,
@@ -442,22 +556,31 @@ class CodebaseIndexer:
                 name="devflow_codebase_chunks_indexed",
                 value=len(all_chunks),
                 unit="count",
-                tags={"repo": f"{repo_owner}/{repo_name}"},
+                tags={"repo": repository_scope.repository_id},
             )
             logger.info(
                 "codebase_indexer.indexing_complete",
-                repo_owner=repo_owner,
-                repo_name=repo_name,
+                repo_owner=repository_scope.repo_owner,
+                repo_name=repository_scope.repo_name,
+                repository_revision=repository_scope.revision,
                 chunks_indexed=len(all_chunks),
             )
             return len(all_chunks)
 
-    async def search(self, query: str, top_k: int = 5) -> list[CodeChunk]:
+    async def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        *,
+        scope: RepositoryScope | None = None,
+    ) -> list[CodeChunk]:
         """Search the codebase index for chunks relevant to *query*.
 
         Args:
             query: Natural-language query describing the code of interest.
             top_k: Maximum number of chunks to return.
+            scope: Exact RAG scope. This may be omitted only when the indexer
+                was constructed with a scope.
 
         Returns:
             List of :class:`CodeChunk` objects ranked by relevance.
@@ -465,9 +588,20 @@ class CodebaseIndexer:
         Raises:
             SkillError: If the search fails.
         """
+        repository_scope = resolve_scope(scope, self._scope)
+        if not isinstance(query, str) or not query.strip():
+            raise SkillError("RAG search query must be non-empty text")
+        if (
+            not isinstance(top_k, int)
+            or isinstance(top_k, bool)
+            or top_k < 1
+            or top_k > 100
+        ):
+            raise SkillError("RAG top_k must be between 1 and 100")
         with tracer.start_as_current_span("codebase_indexer.search") as span:
             span.set_attribute("query_length", len(query))
             span.set_attribute("top_k", top_k)
+            span.set_attribute("rag.namespace", repository_scope.namespace)
 
             try:
                 query_embedding = self._create_embeddings([query])[0]
@@ -476,39 +610,121 @@ class CodebaseIndexer:
             except Exception as exc:
                 raise SkillError(f"Failed to create query embedding: {exc}") from exc
 
-            collection = self._get_collection()
+            collection = self._get_collection(repository_scope)
             try:
                 results = collection.query(
                     query_embeddings=[query_embedding],
                     n_results=top_k,
+                    where={"namespace": repository_scope.namespace},
+                    include=["documents", "metadatas", "embeddings"],
                 )
             except Exception as exc:
-                raise SkillError(f"ChromaDB query failed: {exc}") from exc
+                raise SkillError(
+                    f"ChromaDB query failed: {type(exc).__name__}"
+                ) from exc
 
             chunks: list[CodeChunk] = []
-            documents = results.get("documents", [[]])
-            metadatas = results.get("metadatas", [[]])
-
-            if documents and documents[0]:
-                for doc, meta in zip(
-                    documents[0],
-                    metadatas[0] if metadatas else [],
-                    strict=False,
+            row_documents = query_result_row(results, "documents")
+            row_metadatas = query_result_row(results, "metadatas")
+            row_ids = query_result_row(results, "ids")
+            row_embeddings = query_result_row(results, "embeddings")
+            if not (
+                len(row_documents)
+                == len(row_metadatas)
+                == len(row_ids)
+                == len(row_embeddings)
+            ):
+                raise SkillError(
+                    "RAG backend returned incomplete result provenance"
+                )
+            now = utc_epoch(self._clock)
+            for record_id, doc, meta, embedding in zip(
+                row_ids,
+                row_documents,
+                row_metadatas,
+                row_embeddings,
+                strict=True,
+            ):
+                verified_doc, verified_meta = verify_record(
+                    record_id=record_id,
+                    document=doc,
+                    metadata=meta,
+                    scope=repository_scope,
+                    integrity_key=self._integrity_key,
+                    now=now,
+                )
+                if verified_meta.get("embedding_sha256") != embedding_sha256(
+                    embedding
                 ):
-                    chunks.append(
-                        CodeChunk(
-                            file_path=meta.get("file_path", "unknown"),
-                            start_line=meta.get("start_line", 1),
-                            end_line=meta.get("end_line", 1),
-                            content=doc,
-                            language=meta.get("language", "text"),
-                        )
+                    raise SkillError(
+                        "RAG record failed closed: embedding digest mismatch"
                     )
+                similarity = cosine_similarity(query_embedding, embedding)
+                content_digest = verified_meta.get("content_sha256")
+                if (
+                    not isinstance(content_digest, str)
+                    or content_digest
+                    != hashlib.sha256(verified_doc.encode("utf-8")).hexdigest()
+                ):
+                    raise SkillError(
+                        "RAG record failed closed: content digest mismatch"
+                    )
+                file_path = verified_meta.get("file_path")
+                start_line = verified_meta.get("start_line")
+                end_line = verified_meta.get("end_line")
+                language = verified_meta.get("language")
+                if not isinstance(file_path, str):
+                    raise SkillError(
+                        "RAG record failed closed: invalid repository path"
+                    )
+                try:
+                    canonical_path = canonical_repository_path(file_path)
+                except (TypeError, ValueError) as exc:
+                    raise SkillError(
+                        "RAG record failed closed: invalid repository path"
+                    ) from exc
+                if (
+                    not isinstance(start_line, int)
+                    or isinstance(start_line, bool)
+                    or not isinstance(end_line, int)
+                    or isinstance(end_line, bool)
+                    or start_line < 1
+                    or end_line < start_line
+                    or not isinstance(language, str)
+                    or not language
+                ):
+                    raise SkillError(
+                        "RAG record failed closed: invalid code chunk metadata"
+                    )
+                chunks.append(
+                    CodeChunk(
+                        file_path=canonical_path,
+                        start_line=start_line,
+                        end_line=end_line,
+                        content=verified_doc,
+                        language=language,
+                        tenant_id=repository_scope.tenant_id,
+                        repository_id=repository_scope.repository_id,
+                        repository_revision=repository_scope.revision,
+                        namespace=repository_scope.namespace,
+                        record_hmac_sha256=str(
+                            verified_meta["record_hmac_sha256"]
+                        ),
+                        similarity=similarity,
+                    )
+                )
 
+            chunks.sort(
+                key=lambda chunk: (
+                    -chunk.similarity,
+                    chunk.file_path,
+                    chunk.start_line,
+                )
+            )
             span.set_attribute("results_count", len(chunks))
             logger.debug(
                 "codebase_indexer.search_complete",
-                query=query[:100],
+                query_sha256=hashlib.sha256(query.encode("utf-8")).hexdigest(),
                 results=len(chunks),
             )
             return chunks

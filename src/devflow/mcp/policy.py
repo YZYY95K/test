@@ -5,9 +5,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import importlib
 import json
+import os
 import re
-from collections.abc import Mapping
+import sqlite3
+import threading
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -24,12 +29,51 @@ from devflow.models.patch import Patch
 from devflow.security.secrets import contains_secret
 
 _PROTECTED_BRANCHES = {"main", "master"}
+_AUDIT_LOCKS_GUARD = threading.Lock()
+_AUDIT_LOCKS: dict[Path, threading.RLock] = {}
+
+
+def _audit_thread_lock(path: Path) -> threading.RLock:
+    resolved = path.resolve()
+    with _AUDIT_LOCKS_GUARD:
+        return _AUDIT_LOCKS.setdefault(resolved, threading.RLock())
+
+
+@contextmanager
+def _audit_file_lock(path: Path) -> Iterator[None]:
+    """Serialize appenders across processes using a sidecar byte lock."""
+
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl: Any = importlib.import_module("fcntl")
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 class RawMCPTransport(Protocol):
     """Untrusted transport invoked only after policy authorization."""
 
-    async def call_tool(
-        self, server: str, tool: str, arguments: dict[str, Any]
-    ) -> Any: ...
+    async def call_tool(self, server: str, tool: str, arguments: dict[str, Any]) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -83,7 +127,7 @@ class HashChainAuditLog:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._lock = asyncio.Lock()
+        self._lock = _audit_thread_lock(path)
         self._previous_hash = self._load_previous_hash()
 
     def _load_previous_hash(self) -> str:
@@ -96,9 +140,20 @@ class HashChainAuditLog:
         raise ConfigError(f"Audit chain is unreadable or invalid: {self.path}")
 
     async def record(self, entry: MCPAuditRecord) -> None:
-        async with self._lock:
+        await asyncio.to_thread(self._record_sync, entry)
+
+    def _record_sync(self, entry: MCPAuditRecord) -> None:
+        with self._lock, _audit_file_lock(self.path):
+            try:
+                previous_hash = (
+                    _verify_audit_chain(self.path)
+                    if self.path.exists() and self.path.stat().st_size
+                    else "0" * 64
+                )
+            except (OSError, IndexError, KeyError, json.JSONDecodeError, ValueError) as exc:
+                raise ConfigError(f"Audit chain is unreadable or invalid: {self.path}") from exc
             payload = entry.model_dump(mode="json")
-            payload["previous_hash"] = self._previous_hash
+            payload["previous_hash"] = previous_hash
             serialized = json.dumps(
                 payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
             )
@@ -107,7 +162,90 @@ class HashChainAuditLog:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
             self._previous_hash = entry_hash
+
+
+class DestructiveCallLedger:
+    """Durably consume approval and idempotency identities exactly once.
+
+    Only SHA-256 identities and action metadata are stored.  The approval,
+    arguments, provider response, and credentials never enter this database.
+    SQLite ``BEGIN IMMEDIATE`` makes the one-shot claim process-safe.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS destructive_call_consumptions (
+                        approval_sha256 TEXT PRIMARY KEY,
+                        idempotency_sha256 TEXT NOT NULL UNIQUE,
+                        action TEXT NOT NULL,
+                        arguments_sha256 TEXT NOT NULL,
+                        consumed_at TEXT NOT NULL
+                    )
+                    """
+                )
+        except sqlite3.Error as exc:
+            raise ConfigError("destructive-call ledger is unavailable") from exc
+
+    def consume(
+        self,
+        context: MCPCallContext,
+        *,
+        server: str,
+        tool: str,
+        arguments_sha256: str,
+    ) -> None:
+        approval = context.approval
+        if approval is None:
+            raise MCPAuthorizationError("destructive call has no approval identity")
+        approval_sha256 = hashlib.sha256(approval.approval_id.encode()).hexdigest()
+        idempotency_sha256 = hashlib.sha256(context.idempotency_key.encode()).hexdigest()
+        try:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    connection.execute(
+                        """
+                        INSERT INTO destructive_call_consumptions(
+                            approval_sha256,
+                            idempotency_sha256,
+                            action,
+                            arguments_sha256,
+                            consumed_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            approval_sha256,
+                            idempotency_sha256,
+                            f"{server}:{tool}",
+                            arguments_sha256,
+                            datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    connection.rollback()
+                    raise MCPAuthorizationError(
+                        "destructive approval or idempotency identity was already consumed"
+                    ) from exc
+                connection.commit()
+        except MCPAuthorizationError:
+            raise
+        except sqlite3.Error as exc:
+            raise MCPAuthorizationError("destructive-call replay ledger is unavailable") from exc
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.path, timeout=5, isolation_level=None)
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = FULL")
+        return connection
 
 
 class MCPPolicy:
@@ -209,9 +347,7 @@ class MCPPolicy:
         return grant
 
     @staticmethod
-    def _validate_tool_arguments(
-        server: str, tool: str, arguments: dict[str, Any]
-    ) -> None:
+    def _validate_tool_arguments(server: str, tool: str, arguments: dict[str, Any]) -> None:
         if server == "github" and tool == "get_file_contents":
             _require_safe_path(arguments.get("path"))
         elif server == "github" and tool == "create_pull_request":
@@ -227,9 +363,7 @@ class MCPPolicy:
                 raise MCPAuthorizationError("pipeline suite is unsupported")
         elif server == "cicd" and tool in {"get_test_results", "get_coverage"}:
             pipeline_id = arguments.get("pipeline_id")
-            if not isinstance(pipeline_id, str) or not re.fullmatch(
-                r"[a-f0-9]{32}", pipeline_id
-            ):
+            if not isinstance(pipeline_id, str) or not re.fullmatch(r"[a-f0-9]{32}", pipeline_id):
                 raise MCPAuthorizationError("pipeline id is invalid")
 
 
@@ -266,9 +400,7 @@ class PolicyEnforcedMCPClient:
         if grant.propagate_context:
             if self._context_signer is None:
                 detail = "internal MCP context signer is unavailable"
-                await self._record(
-                    context, server, tool, grant.readonly, "denied", digest, detail
-                )
+                await self._record(context, server, tool, grant.readonly, "denied", digest, detail)
                 raise MCPAuthorizationError(detail)
             signed_context = self._context_signer.sign(context)
             outbound["devflow_context"] = signed_context.model_dump(mode="json")
@@ -331,9 +463,7 @@ def _verify_audit_chain(path: Path) -> str:
         claimed = parsed.pop("entry_hash")
         if parsed.get("previous_hash") != previous:
             raise ValueError(f"audit chain link mismatch at line {line_number}")
-        serialized = json.dumps(
-            parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        )
+        serialized = json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         actual = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
         if not isinstance(claimed, str) or not hmac.compare_digest(claimed, actual):
             raise ValueError(f"audit chain digest mismatch at line {line_number}")
@@ -361,7 +491,7 @@ def _require_safe_branch(value: Any) -> str:
     branch = value.strip()
     if branch in _PROTECTED_BRANCHES or branch.startswith("refs/heads/main"):
         raise MCPAuthorizationError("write operations cannot target a protected branch")
-    if ".." in branch or branch.startswith(('/', '-')) or branch.endswith(('/', '.')):
+    if ".." in branch or branch.startswith(("/", "-")) or branch.endswith(("/", ".")):
         raise MCPAuthorizationError("unsafe branch name")
     return branch
 
@@ -392,6 +522,7 @@ def _approval_target(server: str, tool: str, arguments: dict[str, Any]) -> str:
 
 
 __all__ = [
+    "DestructiveCallLedger",
     "HashChainAuditLog",
     "MCPAuditRecord",
     "MCPPolicy",

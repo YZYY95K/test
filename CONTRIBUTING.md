@@ -28,4 +28,3 @@ python -m devflow.cli demo
 
 Pull requests must explain the user-visible effect, risk, verification
 evidence, compatibility impact, and rollback path.
-

@@ -55,7 +55,6 @@ agents:
         arbitrates conflicts across the agent team.
       model: "glm-5.2"
       temperature: 0.3  # low temperature for stable, reproducible planning
-      system_prompt_ref: "prompts/team_leader.md"
     capabilities:
       - task_decomposition   # split T1-T5 issues into ordered sub-tasks
       - state_tracking       # maintain issue lifecycle state machine
@@ -71,8 +70,13 @@ agents:
       - "issue.created"        # kick off decomposition
       - "agent.completed"      # advance state machine
       - "agent.failed"         # trigger re-plan or re-assignment
+      - "triage.completed"     # validate classification and route Locator
+      - "locator.completed"    # validate evidence and route Coder
       - "coder.patch_ready"    # bind an emitted candidate to its Coder route
+      - "test.passed"          # validate regression evidence and route Reviewer
       - "review.rejected"      # validate and fail closed unless revision-bound
+      - "review.approved"      # route approved evidence to memory capture
+      - "experience.completed" # seal the verified workflow receipt
       - "test.failed"          # route back to CoderAgent with context
       - "approval.required"    # pause pipeline pending human input
     # Routing hints for the scheduler: which agents this leader dispatches to.
@@ -99,7 +103,6 @@ agents:
         against historical issues, and assigns priority.
       model: "glm-5.2"
       temperature: 0.2  # very low — classification must be deterministic
-      system_prompt_ref: "prompts/triage.md"
     capabilities:
       - issue_classification  # T1 (trivial) .. T5 (critical/architectural)
       - deduplication         # match against ChromaDB experience store
@@ -109,9 +112,7 @@ agents:
       - "Cannot modify issue body or title"
       - "Cannot assign complexity higher than T5"
       - "Cannot skip deduplication step"
-    watches:
-      - "issue.created"
-      - "issue.updated"   # re-classify if the body changes materially
+    watches: []            # task intake only through TeamLeader routes
     depends_on_skills:
       - "issue-classifier"
 
@@ -131,7 +132,6 @@ agents:
         CoderAgent.
       model: "glm-5.2"
       temperature: 0.4  # slightly higher to explore candidate locations
-      system_prompt_ref: "prompts/locator.md"
     capabilities:
       - code_root_cause    # identify faulty code region
       - impact_assessment  # enumerate affected call sites / tests
@@ -142,8 +142,7 @@ agents:
       - "Cannot execute repository code"
       - "Context payload must stay under the CoderAgent input token budget"
     watches:
-      - "triage.completed"
-      - "codebase.indexed"   # rebuild context after re-index
+      - "codebase.indexed"   # notification only; never a task hand-off
     depends_on_skills:
       - "code-root-cause"
       - "github-evidence"
@@ -170,7 +169,6 @@ agents:
         deployment-pinned model, with an explicit same-model retry fallback.
       model: "glm-5.2"
       temperature: 0.2          # low for syntactically stable diffs
-      system_prompt_ref: "prompts/coder.md"
       model_fallback:           # ordered fallback chain
         - "glm-5.2"
     capabilities:
@@ -183,8 +181,7 @@ agents:
       - "Cannot run tests — that is TesterAgent's responsibility"
       - "Cannot approve its own patch"
       - "One model call per canonical route; TeamLeader caps each issue at 3 calls"
-    watches:
-      - "locator.completed"
+    watches: []
       # Tester failures are verified and re-routed by TeamLeader; Coder never
       # consumes the original TestEvidence event directly.
     depends_on_skills:
@@ -205,7 +202,6 @@ agents:
         coverage to gate patch promotion.
       model: "glm-5.2"
       temperature: 0.1  # near-deterministic — test orchestration must be stable
-      system_prompt_ref: "prompts/tester.md"
     capabilities:
       - test_execution        # invoke test runner via CI/CD MCP
       - baseline_comparison   # diff pass/fail/coverage vs baseline
@@ -216,9 +212,7 @@ agents:
       - "Cannot modify test files"
       - "Cannot mark a patch as approved — only report pass/fail"
       - "Must run full suite, not a subset, for T3+ issues"
-    watches:
-      - "coder.patch_ready"
-      - "pipeline.completed"   # react to CI results
+    watches: []            # task intake only through TeamLeader routes
     depends_on_skills:
       - "test-runner"
 
@@ -240,7 +234,6 @@ agents:
         PR creation is optional and requires an explicit deployment grant.
       model: "glm-5.2"
       temperature: 0.3
-      system_prompt_ref: "prompts/reviewer.md"
     capabilities:
       - pr_creation          # portable profile only; absent from AgentTeams deployment
       - code_review          # static analysis + style + correctness
@@ -251,11 +244,7 @@ agents:
       - "Cannot merge when CI is red"
       - "Cannot bypass security scan findings classified critical/high"
       - "Cannot self-approve a PR it authored"
-    watches:
-      - "test.passed"
-      - "review.requested"
-      - "security.finding"
-      - "human.approved"     # unblock T4/T5 after human sign-off
+    watches: []            # task intake only through TeamLeader routes
     depends_on_skills:
       - "pr-reviewer"
       - "experience-distiller"
@@ -273,9 +262,12 @@ agents:
 #              -> CoderAgent (patch-generator)
 #                 -> TesterAgent (test-runner)
 #                    -> ReviewerAgent (pr-reviewer)
-#                       -> experience-distiller (post-merge, async)
+#                       -> experience-distiller (after VERIFIED terminal receipt)
 #
 # Reversal edge: verified test.failed -> TeamLeader -> CoderAgent.
 # review.rejected fails closed for a human re-plan until a candidate-bound
-# review-remediation contract exists; human.approved -> ReviewerAgent.
+# review-remediation contract exists. A T4/T5 blocked review returns only to
+# TeamLeader, which pauses on an exact digest target; an external authority's
+# fresh approval is verified and consumed by TeamLeader before it routes the
+# terminal bundle to ReviewerAgent's experience-distiller.
 # =============================================================================

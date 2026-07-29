@@ -33,6 +33,9 @@ def demo(output_dir: Path | None) -> None:
     report, report_path = asyncio.run(run_demo(output_dir))
     tests = report["test_result"]
     review = report["review"]
+    collaboration = report["collaboration_ledger"]
+    route_snapshot = collaboration["snapshot"]
+    audit_chain = collaboration["audit_chain"]
     table = Table(title="DevFlow demo result")
     table.add_column("Gate")
     table.add_column("Result")
@@ -43,6 +46,15 @@ def demo(output_dir: Path | None) -> None:
     table.add_row(
         "Experience",
         "stored" if report["experience"]["stored"] else "degraded",
+    )
+    table.add_row(
+        "Agent routes",
+        f'{route_snapshot["succeeded"]}/6 sealed',
+    )
+    table.add_row(
+        "Audit chain",
+        f'{audit_chain["entries"]} entries / '
+        f'{"valid" if audit_chain["valid"] else "INVALID"}',
     )
     table.add_row("Events", str(len(report["events"])))
     console.print(table)

@@ -29,7 +29,9 @@ after a valid invocation starts.
 
 ## Decision rules
 
-- Fall back to conservative T3 when classification generation fails.
+- Fall back to T4 when classification generation fails, confidence is absent
+  or low, or deterministic rules conflict with the model. A model proposal may
+  raise the risk tier but can never lower the deterministic floor.
 - Continue with explicit degraded evidence when experience search is
   unavailable.
 - Refuse malformed or identity-less input; do not invent repository context.

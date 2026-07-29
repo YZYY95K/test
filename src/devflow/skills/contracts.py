@@ -24,6 +24,15 @@ class ArtifactContract(StrictContractModel):
     type: str = Field(min_length=1)
     schema_version: str = Field(pattern=r"^\d+\.\d+$")
     required_fields: list[str] = Field(min_length=1)
+    optional_fields: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _require_disjoint_fields(self) -> ArtifactContract:
+        if set(self.required_fields).intersection(self.optional_fields):
+            raise ValueError("required and optional artifact fields must be disjoint")
+        if len(self.optional_fields) != len(set(self.optional_fields)):
+            raise ValueError("optional artifact fields must be unique")
+        return self
 
 
 class HandoffRule(StrictContractModel):
@@ -343,9 +352,20 @@ class HandoffEnvelope(StrictContractModel):
     skill: str = Field(pattern=r"^[a-z0-9-]+$")
     trace_id: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
+    parent_task_id: str | None = Field(default=None, min_length=1)
+    parent_handoff_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
     created_at: datetime
     status: HandoffStatus
     artifact: HandoffArtifact
+
+    @model_validator(mode="after")
+    def _validate_parent_correlation(self) -> HandoffEnvelope:
+        if (self.parent_task_id is None) != (self.parent_handoff_sha256 is None):
+            raise ValueError("parent task and hand-off digest must be supplied together")
+        return self
 
     @classmethod
     def create(
@@ -361,6 +381,8 @@ class HandoffEnvelope(StrictContractModel):
         payload: dict[str, Any],
         artifact_schema_version: str = "1.0",
         status: HandoffStatus = HandoffStatus.READY,
+        parent_task_id: str | None = None,
+        parent_handoff_sha256: str | None = None,
     ) -> HandoffEnvelope:
         return cls(
             run_id=run_id,
@@ -371,6 +393,8 @@ class HandoffEnvelope(StrictContractModel):
             skill=skill,
             trace_id=f"{run_id}:{task_id}",
             idempotency_key=f"{run_id}:{task_id}:{consumer}:{skill}",
+            parent_task_id=parent_task_id,
+            parent_handoff_sha256=parent_handoff_sha256,
             created_at=datetime.now(timezone.utc),
             status=status,
             artifact=HandoffArtifact.from_inline(

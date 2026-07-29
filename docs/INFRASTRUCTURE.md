@@ -23,9 +23,12 @@ records contain argument digests rather than secret values.
 ## Observability
 
 - `configure_otlp_tracing` installs an OTLP/gRPC exporter with a batch span
-  processor and an explicit `service.name` resource.
+  processor and an explicit `service.name` resource. The production exporter is
+  exercised over a real loopback gRPC connection against an OTLP TraceService
+  receiver in `test_trace_provider_reaches_a_real_otlp_grpc_collector`; this is
+  local network evidence, not an external production-collector claim.
 - `/metrics` renders Prometheus 0.0.4 text from thread-safe counters, gauges,
-  and summaries.
+  and histograms, and the integration test retrieves that text over HTTP.
 - The metric listener refuses non-loopback binds. External access belongs at a
   separately authenticated collector or reverse proxy.
 - Pipeline activity is represented by the `devflow_pipeline_active` gauge.
@@ -51,6 +54,13 @@ secret. The trusted adapter resolves a handle only when all of these match:
 5. server-side capability-to-environment-variable mapping.
 
 The handle carries no token, API key, or environment variable value.
+
+`test_fastmcp_rollback_closes_policy_credential_health_and_audit_loop` joins
+FastMCP dispatch, signed identity, digest-bound approval, one-shot replay
+protection, credential resolution inside the trusted adapter, provider health,
+atomic release state and offline audit-chain verification in one local
+integration. It does not replace a clean-server run against a real deployment
+provider.
 
 ## RAG modes
 

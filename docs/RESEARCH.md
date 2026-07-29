@@ -10,10 +10,20 @@ The competition requires AgentTeams (formerly HiClaw) as the collaboration
 design basis. The current upstream architecture is a Manager–Workers platform
 using Matrix rooms for visible collaboration, a controller for desired-state
 reconciliation, shared object storage, and Higress for scoped credentials.
-The implementation review was pinned to upstream commit
-`2540c968a642845c4b9382afd75d8c80ed861137` (2026-07-21), including the
-v1beta1 Team CRD, Team DAG integration test, Worker package format, built-in
-Skill conventions, and room/delegation boundaries.
+The live deployment baseline is pinned to the official prerelease
+`v1.2.0-beta.1`, commit `78d0ceda336befa6e62bf89fc1a6b08b965e128d`.
+`agentteams/upstream.lock.yaml` additionally binds the exact v1beta1 Team CRD
+bytes and SHA-256; `scripts/verify_agentteams_upstream.py` can recheck the
+official raw source. This release still supports the deprecated inline
+`spec.leader` / `spec.workers` path used by the live DevFlow manifest after the
+documented beta compatibility patch.
+
+The 2026-07-28 review of upstream `main` found that the current Team API instead
+references independently managed Worker resources through
+`spec.workerMembers`. DevFlow therefore does not claim that its pinned beta
+manifest is current-main compatible. A migration must render and server-side
+validate separate Worker CRs and a membership-only Team before changing the
+runtime baseline.
 
 DevFlow maps onto its native Team topology:
 
@@ -30,8 +40,8 @@ Upstream sources:
 
 - [AgentTeams repository](https://github.com/agentscope-ai/AgentTeams)
 - [Architecture](https://github.com/agentscope-ai/AgentTeams/blob/main/docs/architecture.md)
-- [Declarative resource management](https://github.com/agentscope-ai/AgentTeams/blob/main/docs/declarative-resource-management.md)
-- [Worker import/package format](https://github.com/agentscope-ai/AgentTeams/blob/main/docs/import-worker.md)
+- [Kubernetes-native orchestration and CRDs](https://github.com/agentscope-ai/AgentTeams/blob/main/docs/k8s-native-agent-orch.md)
+- [Pinned v1.2.0-beta.1 Team CRD](https://raw.githubusercontent.com/agentscope-ai/AgentTeams/v1.2.0-beta.1/hiclaw-controller/config/crd/teams.agentteams.io.yaml)
 
 ## Software-engineering agent literature
 
@@ -94,7 +104,7 @@ criteria.
 
 | Evidence | DevFlow decision | Verification |
 |---|---|---|
-| AgentTeams | Native Team manifest; Leader delegates to five workers | `agentteams/team.yaml` |
+| AgentTeams | Release-locked Team manifest; Leader delegates to five workers; API migration is explicit | `agentteams/upstream.lock.yaml`, `scripts/verify_agentteams_upstream.py` |
 | Good interfaces matter | Typed models and narrow MCP calls | model and agent tests |
 | Structure improves retrieval | AST code chunks plus targeted broadening | indexer tests |
 | Modular roles shorten context | Role-specific identity, capabilities, boundaries | agent configs and Skills |
@@ -107,7 +117,9 @@ criteria.
 The offline fixture proves plumbing, not general software repair quality.
 Competition-ready evaluation should include:
 
-1. a pinned set of 20–50 repository issues with reproducible containers;
+1. execute the checked-in 21-task mutation-repair set across three exact
+   repository commits in isolated work copies; fixture prevalidation alone is
+   not a solution result;
 2. resolved rate and test pass rate;
 3. localization top-1/top-5 accuracy;
 4. regression rate;

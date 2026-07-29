@@ -63,13 +63,7 @@ def _patch(
                 change_type=ChangeType.MODIFY,
                 original_content="fixed = False\n",
                 new_content=content,
-                diff=(
-                    f"--- a/{path}\n"
-                    f"+++ b/{path}\n"
-                    "@@ -1 +1 @@\n"
-                    "-fixed = False\n"
-                    f"+{content}"
-                ),
+                diff=(f"--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-fixed = False\n+{content}"),
             )
         ],
         commit_message="fix: correct state",
@@ -191,6 +185,23 @@ def test_shared_secret_policy_covers_named_high_entropy_credentials() -> None:
         "token=example-token",
     ):
         assert not contains_secret(placeholder)
+
+
+def test_shared_secret_policy_does_not_treat_a_bare_python_call_as_a_secret() -> None:
+    public_source = "password=get_auth_from_url(proxy)"
+    credential = "".join(("Ab9_", "Zy8-", "Xq7.", "Wm6+", "Tr5/", "Ku4="))
+
+    assert not contains_secret(public_source)
+    assert redact_text(public_source) == (public_source, False)
+
+    for candidate in (
+        'password="get_auth_from_url(proxy)"',
+        f"password={credential}",
+    ):
+        assert contains_secret(candidate)
+        sanitized, changed = redact_text(candidate)
+        assert changed
+        assert "[REDACTED]" in sanitized
 
 
 @pytest.mark.asyncio

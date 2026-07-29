@@ -7,6 +7,15 @@ Team reconciliation. They are captured in
 `scripts/patch_openclaw_matrix_bots.sh` so the live repairs are reproducible
 after a Helm upgrade or a fresh cluster installation.
 
+The exact upstream contract is locked in `agentteams/upstream.lock.yaml`: tag
+`v1.2.0-beta.1`, commit `78d0ceda336befa6e62bf89fc1a6b08b965e128d`, and the
+raw Team CRD SHA-256. `agentteams/team.yaml` intentionally uses that release's
+deprecated inline `spec.leader` / `spec.workers` compatibility path. Current
+AgentTeams `main` uses independently managed Worker resources plus
+`spec.workerMembers`; therefore this beta manifest is **not** described as
+current-main compatible. Moving to that API requires a separately rendered,
+server-side validated migration rather than silently reinterpreting this file.
+
 ## Covered repairs
 
 | Gap | Fail-closed repair |

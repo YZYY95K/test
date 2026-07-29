@@ -8,24 +8,25 @@ import re
 from typing import Any, Protocol
 
 from devflow.event_bus import publish
+from devflow.mcp.contracts import ApprovalEvidence
 from devflow.models.experience import (
     ExperiencePattern,
     ExperienceProvenance,
     RedactionEvidence,
+    VerifiedTerminalReceipt,
 )
 from devflow.models.issue import IssueData
 from devflow.models.patch import Patch
 from devflow.models.review import ReviewResult
 from devflow.models.test_result import TestRunResult
+from devflow.security.secrets import contains_secret
 from devflow.skills.base import BaseSkill, SkillSpec
 
 
 class ExperienceWriter(Protocol):
     """Minimal persistence port; ChromaDB and tests can both implement it."""
 
-    async def store(
-        self, pattern_id: str, summary: str, metadata: dict[str, Any]
-    ) -> None: ...
+    async def store(self, pattern_id: str, summary: str, metadata: dict[str, Any]) -> None: ...
 
 
 class ExperienceDistillerSkill(BaseSkill):
@@ -43,6 +44,7 @@ class ExperienceDistillerSkill(BaseSkill):
                 "test_result",
                 "review",
                 "trace_id",
+                "terminal_receipt",
             ]
         },
         output_schema={
@@ -78,12 +80,28 @@ class ExperienceDistillerSkill(BaseSkill):
         patch = Patch.model_validate(kwargs["patch"])
         tests = TestRunResult.model_validate(kwargs["test_result"])
         review = ReviewResult.model_validate(kwargs["review"])
+        human_approval = (
+            ApprovalEvidence.model_validate(kwargs["human_approval"])
+            if kwargs.get("human_approval") is not None
+            else None
+        )
+        receipt = VerifiedTerminalReceipt.model_validate(kwargs["terminal_receipt"])
         located = kwargs["located_context"]
         if not isinstance(located, dict):
             raise ValueError("located_context must be a mapping")
         root_cause = located.get("root_cause")
         if not isinstance(root_cause, dict) or not root_cause.get("summary"):
             raise ValueError("located_context requires a supported root_cause")
+        repository_revision = str(kwargs["repository_revision"])
+        if not receipt.verifies(
+            issue_id=issue.issue_number,
+            repository_revision=repository_revision,
+            patch=patch,
+            test_result=tests,
+            review=review,
+            approval=human_approval,
+        ):
+            raise ValueError("terminal receipt does not verify the reviewed run evidence")
 
         candidate_digest = self._digest(patch.model_dump(mode="json"))
         review_digest = self._digest(review.model_dump(mode="json"))
@@ -102,6 +120,10 @@ class ExperienceDistillerSkill(BaseSkill):
             "Bind the smallest evidence-backed change to its source revision, "
             "then compare isolated candidate tests with the trusted baseline."
         )
+        secret_scan_passed = not contains_secret(summary) and not contains_secret(lesson)
+        pii_scan_passed = self._EMAIL.search(summary) is None
+        if not secret_scan_passed or not pii_scan_passed:
+            raise ValueError("distilled memory did not pass redaction gates")
         pattern = ExperiencePattern(
             pattern_id=pattern_id,
             outcome=outcome,
@@ -110,14 +132,15 @@ class ExperienceDistillerSkill(BaseSkill):
             provenance=ExperienceProvenance(
                 trace_id=str(kwargs["trace_id"]),
                 issue_id=issue.issue_number,
-                repository_revision=str(kwargs["repository_revision"]),
+                repository_revision=repository_revision,
                 candidate_digest=candidate_digest,
                 review_digest=review_digest,
+                terminal_receipt_sha256=receipt.receipt_sha256,
             ),
             redaction=RedactionEvidence(
                 policy_version="1.0",
-                secret_scan_passed=True,
-                pii_scan_passed=True,
+                secret_scan_passed=secret_scan_passed,
+                pii_scan_passed=pii_scan_passed,
             ),
             stored=False,
         )
@@ -137,6 +160,8 @@ class ExperienceDistillerSkill(BaseSkill):
                     "candidate_digest": candidate_digest,
                     "schema_version": pattern.schema_version,
                     "outcome": outcome,
+                    "terminal_receipt_sha256": receipt.receipt_sha256,
+                    "human_approval_digest": receipt.approval_digest or "none",
                 },
             )
             pattern.stored = True

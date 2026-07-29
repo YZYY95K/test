@@ -1,0 +1,996 @@
+{
+  "benchmark": "devflow-fixed-repository-mutation-repair",
+  "generated_at": "2026-07-28T12:00:00+00:00",
+  "records": [
+    {
+      "acceptance_argv_sha256": [
+        "a65babfcd70db7ef96ffe8c39ba413c54aacf1cba708836b53d6297fd5ff3d14"
+      ],
+      "baseline": {
+        "argv_sha256": "a65babfcd70db7ef96ffe8c39ba413c54aacf1cba708836b53d6297fd5ff3d14",
+        "completed": true,
+        "duration_ms": 947,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.03s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "20ee3f7b7e36d0f92a6c8c7a068f6ae5d7546cd4a3fd061d2250832019002977"
+      },
+      "changed_paths": [
+        "src/requests/adapters.py"
+      ],
+      "commit": "0e322af87745eff34caffe4df68456ebc20d9068",
+      "execution_ready": true,
+      "mutation_sha256": "7efc8dd9c9f8374b789b74a2de2cb4325d53930101639b62e5834800f271e27f",
+      "mutant": {
+        "argv_sha256": "a65babfcd70db7ef96ffe8c39ba413c54aacf1cba708836b53d6297fd5ff3d14",
+        "completed": true,
+        "duration_ms": 993,
+        "exit_code": 1,
+        "output_summary": "E | E         - //v:h | E         ? - | E         + /v:h | tests\\test_adapters.py:8: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_adapters.py::test_request_url_trims_leading_path_separators | 1 failed in 0.13s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "1a9f498fa351015c4714d0f457923658684dd4326b303f5ac05c4b569dc52f8b"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "a65babfcd70db7ef96ffe8c39ba413c54aacf1cba708836b53d6297fd5ff3d14",
+        "completed": true,
+        "duration_ms": 813,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.04s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "a23e4e23ff133452cbbea2116bde11299e8cd6492bc70e3d90b69afbfa735e28"
+      },
+      "repository": "requests",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "requests-adapter-leading-slash",
+      "tree": "9474485f84c7244930abc1b8023f847486572091",
+      "record_sha256": "42b651085261ea2d6b3311c38ea06afe69394aa601bc447b4d9b7d333695a519"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "caca3fd4f56e600819c23f3923d6ad679a4e63b55ca38831f6d9376d573b9cac"
+      ],
+      "baseline": {
+        "argv_sha256": "caca3fd4f56e600819c23f3923d6ad679a4e63b55ca38831f6d9376d573b9cac",
+        "completed": true,
+        "duration_ms": 852,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.03s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "20ee3f7b7e36d0f92a6c8c7a068f6ae5d7546cd4a3fd061d2250832019002977"
+      },
+      "changed_paths": [
+        "src/requests/hooks.py"
+      ],
+      "commit": "0e322af87745eff34caffe4df68456ebc20d9068",
+      "execution_ready": true,
+      "mutation_sha256": "7838e7b65d4754e13eaf912e670ecc7d5053e80684837d77fa1c8eaa9d6df9fe",
+      "mutant": {
+        "argv_sha256": "caca3fd4f56e600819c23f3923d6ad679a4e63b55ca38831f6d9376d573b9cac",
+        "completed": true,
+        "duration_ms": 995,
+        "exit_code": 1,
+        "output_summary": "E | E         Right contains 1 more item: | E         {'response': []} | E         Use -v to get more diff | tests\\test_hooks.py:22: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_hooks.py::test_default_hooks - AssertionError: assert {} ==... | 1 failed in 0.14s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "80f4d945b633979d758d0fe87ad1706eb5f790b1586589d84edcb96ac14c4d4b"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "caca3fd4f56e600819c23f3923d6ad679a4e63b55ca38831f6d9376d573b9cac",
+        "completed": true,
+        "duration_ms": 842,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.03s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "20ee3f7b7e36d0f92a6c8c7a068f6ae5d7546cd4a3fd061d2250832019002977"
+      },
+      "repository": "requests",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "requests-default-hook-map",
+      "tree": "9474485f84c7244930abc1b8023f847486572091",
+      "record_sha256": "1ef9e0a7b28bcbe977c7ce43fc70256837d28cb855734f89e5dca2268aab5a9d"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "9f22d18414c32a1454291951fade020b18fb43cc5552bd5802751b742c8de6b9"
+      ],
+      "baseline": {
+        "argv_sha256": "9f22d18414c32a1454291951fade020b18fb43cc5552bd5802751b742c8de6b9",
+        "completed": true,
+        "duration_ms": 804,
+        "exit_code": 0,
+        "output_summary": "..                                                                       [100%] | 2 passed in 0.03s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "c34282110065ae616ccc4d12dd09a855d9a8466d0aff478a12b8481798191f18"
+      },
+      "changed_paths": [
+        "src/requests/hooks.py"
+      ],
+      "commit": "0e322af87745eff34caffe4df68456ebc20d9068",
+      "execution_ready": true,
+      "mutation_sha256": "0db927369df8dcb7a9d29b2891e47a56915a7b3317260033017fed885dcb8f94",
+      "mutant": {
+        "argv_sha256": "9f22d18414c32a1454291951fade020b18fb43cc5552bd5802751b742c8de6b9",
+        "completed": true,
+        "duration_ms": 913,
+        "exit_code": 1,
+        "output_summary": "def hook(value): | >       return value[1:] | E       TypeError: 'NoneType' object is not subscriptable | tests\\test_hooks.py:7: TypeError | =========================== short test summary info =========================== | FAILED tests/test_hooks.py::test_hooks[hook-ata] - AssertionError: assert 'Da... | FAILED tests/test_hooks.py::test_hooks[hooks_list1-ta] - TypeError: 'NoneType... | 2 failed in 0.14s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "7bdefcc14cecac76f210c2a664a66b5466b4790bade0dc99f070ab53bad28442"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "9f22d18414c32a1454291951fade020b18fb43cc5552bd5802751b742c8de6b9",
+        "completed": true,
+        "duration_ms": 865,
+        "exit_code": 0,
+        "output_summary": "..                                                                       [100%] | 2 passed in 0.04s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "1b46759158c2885a65ab958edb7a667137c6e15f1ea3f5b048e450839888494f"
+      },
+      "repository": "requests",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "requests-hook-result-propagation",
+      "tree": "9474485f84c7244930abc1b8023f847486572091",
+      "record_sha256": "35e38062592749f89fae2a965ee1c399e47e956dd427909ab47b6df6d59c943e"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "f0ff9224b62ab5bd695c674dbc565f5b4766cb38f0a19597c4e635d144490c6d"
+      ],
+      "baseline": {
+        "argv_sha256": "f0ff9224b62ab5bd695c674dbc565f5b4766cb38f0a19597c4e635d144490c6d",
+        "completed": true,
+        "duration_ms": 1068,
+        "exit_code": 0,
+        "output_summary": "..                                                                       [100%] | 2 passed in 0.11s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "a228f9e63bbed401ad5b89bb97c0b30ec1cd5fe7590d823644de7a0536d5a387"
+      },
+      "changed_paths": [
+        "src/requests/utils.py"
+      ],
+      "commit": "0e322af87745eff34caffe4df68456ebc20d9068",
+      "execution_ready": true,
+      "mutation_sha256": "00b1dbc4b54869c5facb066d96f6cba5643042d45c8dfec479ce7077b35586e1",
+      "mutant": {
+        "argv_sha256": "f0ff9224b62ab5bd695c674dbc565f5b4766cb38f0a19597c4e635d144490c6d",
+        "completed": true,
+        "duration_ms": 1001,
+        "exit_code": 1,
+        "output_summary": "result = guess_filename(obj) | >       assert result == value | E       AssertionError: assert None == 'value' | tests\\test_utils.py:309: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_utils.py::TestGuessFilename::test_guess_filename_valid[value-bytes] | FAILED tests/test_utils.py::TestGuessFilename::test_guess_filename_valid[value-str] | 2 failed in 0.21s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "6f3024ca86547191f7130af3b3d8c91b46dc1562c7c0fb13e9edcffaf44509d1"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "f0ff9224b62ab5bd695c674dbc565f5b4766cb38f0a19597c4e635d144490c6d",
+        "completed": true,
+        "duration_ms": 923,
+        "exit_code": 0,
+        "output_summary": "..                                                                       [100%] | 2 passed in 0.10s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "fc3f634a394467412c7733d0b0fb8796f5e2caebfb5caa708ac29c72fc64d260"
+      },
+      "repository": "requests",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "requests-filename-detection",
+      "tree": "9474485f84c7244930abc1b8023f847486572091",
+      "record_sha256": "306cae063dded40563774c5f3bdb3c5a5f6f09624fc3aa38d1027f0a759b817f"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "7115c35ada5945efc6228dc3dfaacdef1384b9a881d10dc176558d3c088f7329"
+      ],
+      "baseline": {
+        "argv_sha256": "7115c35ada5945efc6228dc3dfaacdef1384b9a881d10dc176558d3c088f7329",
+        "completed": true,
+        "duration_ms": 1133,
+        "exit_code": 0,
+        "output_summary": ".......                                                                  [100%] | 7 passed in 0.12s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "effb5d4d10ef44c702f1919c0f362b88eac878c4e2526ad1633cc457f7f6e52b"
+      },
+      "changed_paths": [
+        "src/requests/utils.py"
+      ],
+      "commit": "0e322af87745eff34caffe4df68456ebc20d9068",
+      "execution_ready": true,
+      "mutation_sha256": "3845397aa1ff8aa32379fc50a39a5a5017bbe08471468469e7b85fae22d67e42",
+      "mutant": {
+        "argv_sha256": "7115c35ada5945efc6228dc3dfaacdef1384b9a881d10dc176558d3c088f7329",
+        "completed": true,
+        "duration_ms": 1255,
+        "exit_code": 1,
+        "output_summary": "=========================== short test summary info =========================== | FAILED tests/test_utils.py::test_get_auth_from_url[http://[REDACTED]@request.com/url.html#test-auth0] | FAILED tests/test_utils.py::test_get_auth_from_url[http://[REDACTED]@complex.url.com/path?query=yes-auth1] | FAILED tests/test_utils.py::test_get_auth_from_url[http://[REDACTED]@complex.url.com/path?query=yes-auth2] | FAILED tests/test_utils.py::test_get_auth_from_url[http://user:pass pass@complex.url.com/path?query=yes-auth3] | FAILED tests/test_utils.py::test_get_auth_from_url[http://[REDACTED]@complex.url.com/path?query=yes-auth4] | FAILED tests/test_utils.py::test_get_auth_from_url[http://[REDACTED]@complex.url.com/path?query=yes-auth5] | 6 failed, 1 passed in 0.30s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "dec7cf2a15eba8cfc60bfbce2ccdd6ac3a1a8230fde7461c890c853a392d9335"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "7115c35ada5945efc6228dc3dfaacdef1384b9a881d10dc176558d3c088f7329",
+        "completed": true,
+        "duration_ms": 1026,
+        "exit_code": 0,
+        "output_summary": ".......                                                                  [100%] | 7 passed in 0.11s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "c1054d8db75938435d817dcf900383df3bd171f829a46dd388ae4a23fe2ed49f"
+      },
+      "repository": "requests",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "requests-url-auth-decoding",
+      "tree": "9474485f84c7244930abc1b8023f847486572091",
+      "record_sha256": "faedfe9662f8e677c4cc4ad28c6d1cd763cf08b3286fa0574e8212952b3c10e6"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "a2abd51e1257c683ae68590ae828312f95f95c16dac27ddf044f681604a1d1ca"
+      ],
+      "baseline": {
+        "argv_sha256": "a2abd51e1257c683ae68590ae828312f95f95c16dac27ddf044f681604a1d1ca",
+        "completed": true,
+        "duration_ms": 1138,
+        "exit_code": 0,
+        "output_summary": "..                                                                       [100%] | 2 passed in 0.10s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "fc3f634a394467412c7733d0b0fb8796f5e2caebfb5caa708ac29c72fc64d260"
+      },
+      "changed_paths": [
+        "src/requests/utils.py"
+      ],
+      "commit": "0e322af87745eff34caffe4df68456ebc20d9068",
+      "execution_ready": true,
+      "mutation_sha256": "f3f873bd8505f32c99fcdb7e8746dc4b3a346c3a7e7d025c3032b1aefd34b986",
+      "mutant": {
+        "argv_sha256": "a2abd51e1257c683ae68590ae828312f95f95c16dac27ddf044f681604a1d1ca",
+        "completed": true,
+        "duration_ms": 1097,
+        "exit_code": 1,
+        "output_summary": "E | E         - http://example.com/fiz?buz=%25ppicture | E         ?                             -- | E         + http://example.com/fiz?buz=%ppicture | tests\\test_utils.py:461: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_utils.py::test_requote_uri_with_unquoted_percents[http://example.com/fiz?buz=%ppicture-http://example.com/fiz?buz=%25ppicture] | 1 failed, 1 passed in 0.22s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "d9e43b1257c99d78555ac4df98ed154d420d2a6a9b30cc0c3d4e1379b12ed181"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "a2abd51e1257c683ae68590ae828312f95f95c16dac27ddf044f681604a1d1ca",
+        "completed": true,
+        "duration_ms": 981,
+        "exit_code": 0,
+        "output_summary": "..                                                                       [100%] | 2 passed in 0.11s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "a228f9e63bbed401ad5b89bb97c0b30ec1cd5fe7590d823644de7a0536d5a387"
+      },
+      "repository": "requests",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "requests-invalid-percent-requote",
+      "tree": "9474485f84c7244930abc1b8023f847486572091",
+      "record_sha256": "9114f23139fa522036574bf94501d1935e6a13f223e76a9ba1e68bf5bb501c7e"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "b36bbcf8642003addbe501dd26ec1dccecb45d1042cf6d71dd2426ff72db149e"
+      ],
+      "baseline": {
+        "argv_sha256": "b36bbcf8642003addbe501dd26ec1dccecb45d1042cf6d71dd2426ff72db149e",
+        "completed": true,
+        "duration_ms": 948,
+        "exit_code": 0,
+        "output_summary": ".....                                                                    [100%] | 5 passed in 0.10s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "0e658b1cf5fdc415e724c6e0ad5eaf6a177061c51588c92fb01a90d0667a25d8"
+      },
+      "changed_paths": [
+        "src/requests/utils.py"
+      ],
+      "commit": "0e322af87745eff34caffe4df68456ebc20d9068",
+      "execution_ready": true,
+      "mutation_sha256": "170033578a6c3c5871df6e0991f8aaab03273b85657e44c3ffa59d9ab12494ba",
+      "mutant": {
+        "argv_sha256": "b36bbcf8642003addbe501dd26ec1dccecb45d1042cf6d71dd2426ff72db149e",
+        "completed": true,
+        "duration_ms": 1026,
+        "exit_code": 1,
+        "output_summary": "E         + https://example.com:80 | E         ?     + | tests\\test_utils.py:682: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_utils.py::test_prepend_scheme_if_needed[example.com/path-http://example.com/path] | FAILED tests/test_utils.py::test_prepend_scheme_if_needed[//example.com/path-http://example.com/path] | FAILED tests/test_utils.py::test_prepend_scheme_if_needed[example.com:80-http://example.com:80] | 3 failed, 2 passed in 0.22s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "a6e5a9ef92e7d54090272b5984ec26a06543c64803a5c2703c08fb89094e0735"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "b36bbcf8642003addbe501dd26ec1dccecb45d1042cf6d71dd2426ff72db149e",
+        "completed": true,
+        "duration_ms": 897,
+        "exit_code": 0,
+        "output_summary": ".....                                                                    [100%] | 5 passed in 0.10s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "0e658b1cf5fdc415e724c6e0ad5eaf6a177061c51588c92fb01a90d0667a25d8"
+      },
+      "repository": "requests",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "requests-scheme-prepend",
+      "tree": "9474485f84c7244930abc1b8023f847486572091",
+      "record_sha256": "7f6014a9efcde1ae14900757bd8cc6da345ef73617da5e8564dd2be010e1467e"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "d8679cfa2b9c8dec92de70e880771aded5e49a1f9d9d718cf7198eab4a7ab7d4"
+      ],
+      "baseline": {
+        "argv_sha256": "d8679cfa2b9c8dec92de70e880771aded5e49a1f9d9d718cf7198eab4a7ab7d4",
+        "completed": true,
+        "duration_ms": 991,
+        "exit_code": 0,
+        "output_summary": ".....                                                                    [100%] | 5 passed in 0.05s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "06b748150b9d22ead6e85895503497ac95ec3dd55fa061ce09798c4ded3cb39d"
+      },
+      "changed_paths": [
+        "src/flask/helpers.py"
+      ],
+      "commit": "7fff56f5172c48b6f3aedf17ee14ef5c2533dfd1",
+      "execution_ready": true,
+      "mutation_sha256": "164b067d0cfc7af3f00226cc2989e086df118949eefd7656c8037c831fbb7276",
+      "mutant": {
+        "argv_sha256": "d8679cfa2b9c8dec92de70e880771aded5e49a1f9d9d718cf7198eab4a7ab7d4",
+        "completed": true,
+        "duration_ms": 985,
+        "exit_code": 1,
+        "output_summary": "E        +  where False = get_debug_flag() | tests\\test_helpers.py:323: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_helpers.py::TestHelpers::test_get_debug_flag[0-False] - ass... | FAILED tests/test_helpers.py::TestHelpers::test_get_debug_flag[False-False] | FAILED tests/test_helpers.py::TestHelpers::test_get_debug_flag[No-False] - as... | FAILED tests/test_helpers.py::TestHelpers::test_get_debug_flag[True-True] - a... | 4 failed, 1 passed in 0.15s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "55c64c7b5228a9489404ac7cd56f51e2a40c41023364f64253c5acc0e95e8cbf"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "d8679cfa2b9c8dec92de70e880771aded5e49a1f9d9d718cf7198eab4a7ab7d4",
+        "completed": true,
+        "duration_ms": 881,
+        "exit_code": 0,
+        "output_summary": ".....                                                                    [100%] | 5 passed in 0.05s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "06b748150b9d22ead6e85895503497ac95ec3dd55fa061ce09798c4ded3cb39d"
+      },
+      "repository": "flask",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "flask-debug-flag",
+      "tree": "29bd3ef8420dce3b374185783edd3e5dcb9a8407",
+      "record_sha256": "cbff36813f72d066c064c1a2e1280e6f7aff63bda477f0c2eca26e3b6569ab72"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "466d2b908cab8f1a5d7708f8435d752497bd590a2db7436fc8927aca71392282"
+      ],
+      "baseline": {
+        "argv_sha256": "466d2b908cab8f1a5d7708f8435d752497bd590a2db7436fc8927aca71392282",
+        "completed": true,
+        "duration_ms": 854,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.04s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "a23e4e23ff133452cbbea2116bde11299e8cd6492bc70e3d90b69afbfa735e28"
+      },
+      "changed_paths": [
+        "src/flask/helpers.py"
+      ],
+      "commit": "7fff56f5172c48b6f3aedf17ee14ef5c2533dfd1",
+      "execution_ready": true,
+      "mutation_sha256": "a70b1b1ad48757d9f5f217e8313aecf5747e33b52547dc3aa10d2feea9e162db",
+      "mutant": {
+        "argv_sha256": "466d2b908cab8f1a5d7708f8435d752497bd590a2db7436fc8927aca71392282",
+        "completed": true,
+        "duration_ms": 977,
+        "exit_code": 1,
+        "output_summary": "raise ValueError | app.redirect = redirect | >       with app.app_context(), pytest.raises(ValueError): | E       Failed: DID NOT RAISE <class 'ValueError'> | tests\\test_helpers.py:184: Failed | =========================== short test summary info =========================== | FAILED tests/test_helpers.py::test_redirect_with_app - Failed: DID NOT RAISE ... | 1 failed in 0.15s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "d091945370575d6468a033f3ea96c6f91ca3109e485e79772f6aa5928e1f4b7b"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "466d2b908cab8f1a5d7708f8435d752497bd590a2db7436fc8927aca71392282",
+        "completed": true,
+        "duration_ms": 835,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.04s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "a23e4e23ff133452cbbea2116bde11299e8cd6492bc70e3d90b69afbfa735e28"
+      },
+      "repository": "flask",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "flask-app-redirect-delegation",
+      "tree": "29bd3ef8420dce3b374185783edd3e5dcb9a8407",
+      "record_sha256": "cfd140cf94ebb40fbc28476064b12fae4430efccef9c6773a52ee895b3e8157d"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "0c8f8ece9e53510dc5de389b5c0b0f90222e0084941fc507b027d475f399448a"
+      ],
+      "baseline": {
+        "argv_sha256": "0c8f8ece9e53510dc5de389b5c0b0f90222e0084941fc507b027d475f399448a",
+        "completed": true,
+        "duration_ms": 947,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.04s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "a23e4e23ff133452cbbea2116bde11299e8cd6492bc70e3d90b69afbfa735e28"
+      },
+      "changed_paths": [
+        "src/flask/json/provider.py"
+      ],
+      "commit": "7fff56f5172c48b6f3aedf17ee14ef5c2533dfd1",
+      "execution_ready": true,
+      "mutation_sha256": "e7905529c56853f39eec8ad372dfd76b1e09bc7ae80618adebf50cdd909cdcb3",
+      "mutant": {
+        "argv_sha256": "0c8f8ece9e53510dc5de389b5c0b0f90222e0084941fc507b027d475f399448a",
+        "completed": true,
+        "duration_ms": 966,
+        "exit_code": 1,
+        "output_summary": "if hasattr(o, \"__html__\"): | return str(o.__html__()) | >       raise TypeError(f\"Object of type {type(o).__name__} is not JSON serializable\") | E       TypeError: Object of type Decimal is not JSON serializable | src\\flask\\json\\provider.py:121: TypeError | =========================== short test summary info =========================== | FAILED tests/test_json.py::test_json_decimal - TypeError: Object of type Deci... | 1 failed in 0.14s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "7187f776ccb0135828d8ee9c991706a7b04db2dd6d3004a4f75b910d9e9a6213"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "0c8f8ece9e53510dc5de389b5c0b0f90222e0084941fc507b027d475f399448a",
+        "completed": true,
+        "duration_ms": 939,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.04s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "a23e4e23ff133452cbbea2116bde11299e8cd6492bc70e3d90b69afbfa735e28"
+      },
+      "repository": "flask",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "flask-decimal-json",
+      "tree": "29bd3ef8420dce3b374185783edd3e5dcb9a8407",
+      "record_sha256": "1853ce147cfb04bd3fcb780b19e03148a928317f04eafb6f4d41f20356e739a5"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "76f15fbf05e865c908a8ae6c80230e922443ad0e9a52b5415a7e2b79dbc1cc2d"
+      ],
+      "baseline": {
+        "argv_sha256": "76f15fbf05e865c908a8ae6c80230e922443ad0e9a52b5415a7e2b79dbc1cc2d",
+        "completed": true,
+        "duration_ms": 854,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.05s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "d124f9696ed40502b4b30c0104e7d254a7e35a3d854991f72025ba67c7e5c805"
+      },
+      "changed_paths": [
+        "src/flask/json/provider.py"
+      ],
+      "commit": "7fff56f5172c48b6f3aedf17ee14ef5c2533dfd1",
+      "execution_ready": true,
+      "mutation_sha256": "b495b90c24c4a6b39b6bb08d86fed0c2fd3d29444141029f5d0ef61f93e90b4e",
+      "mutant": {
+        "argv_sha256": "76f15fbf05e865c908a8ae6c80230e922443ad0e9a52b5415a7e2b79dbc1cc2d",
+        "completed": true,
+        "duration_ms": 935,
+        "exit_code": 1,
+        "output_summary": ">       assert app.json.sort_keys | E       AssertionError: assert False | E        +  where False = <flask.json.provider.DefaultJSONProvider object at 0x000001BA6F3BCCD0>.sort_keys | E        +    where <flask.json.provider.DefaultJSONProvider object at 0x000001BA6F3BCCD0> = <Flask 'flask_test'>.json | tests\\test_json.py:272: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_json.py::test_json_key_sorting - AssertionError: assert False | 1 failed in 0.14s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "46fb4bd0d012e11ec34fe150647e75b6ad94af86fd4f457b6c8954afe20dcd42"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "76f15fbf05e865c908a8ae6c80230e922443ad0e9a52b5415a7e2b79dbc1cc2d",
+        "completed": true,
+        "duration_ms": 894,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.05s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "d124f9696ed40502b4b30c0104e7d254a7e35a3d854991f72025ba67c7e5c805"
+      },
+      "repository": "flask",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "flask-json-key-sorting",
+      "tree": "29bd3ef8420dce3b374185783edd3e5dcb9a8407",
+      "record_sha256": "9a508065ad6406d82e51daf5f0c8d7c89599a750901956ba7a02a816bccafd39"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "0eda52f1901334e6fbfeb91087e1290c73fef91591932c7cdf6aba68b73eb9af"
+      ],
+      "baseline": {
+        "argv_sha256": "0eda52f1901334e6fbfeb91087e1290c73fef91591932c7cdf6aba68b73eb9af",
+        "completed": true,
+        "duration_ms": 970,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.16s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "2901e9dfa0b5714aa099acfe610f3c4dbfa0c352070d16e8a4538d7da5df8462"
+      },
+      "changed_paths": [
+        "src/flask/sessions.py"
+      ],
+      "commit": "7fff56f5172c48b6f3aedf17ee14ef5c2533dfd1",
+      "execution_ready": true,
+      "mutation_sha256": "d5c9216843c6e28d81a78ec116c0dfa8de15b0f5cf2780f1fd47ced615bb1602",
+      "mutant": {
+        "argv_sha256": "0eda52f1901334e6fbfeb91087e1290c73fef91591932c7cdf6aba68b73eb9af",
+        "completed": true,
+        "duration_ms": 1090,
+        "exit_code": 1,
+        "output_summary": "assert \"httponly\" not in cookie | assert \"samesite\" in cookie | >       assert \"partitioned\" in cookie | E       AssertionError: assert 'partitioned' in 'session=eyj0zxn0aw5nijo0mn0.amihvw.pyxpphm9cwbrkqiea9twobukrti; domain=example.com; secure; path=/; samesite=lax' | tests\\test_basic.py:321: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_basic.py::test_session_using_session_settings - AssertionEr... | 1 failed in 0.27s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "8996f0a14b57306e9a1dfd8ab769b59ebe4726017fe0fcf2425b69f0f0e03c07"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "0eda52f1901334e6fbfeb91087e1290c73fef91591932c7cdf6aba68b73eb9af",
+        "completed": true,
+        "duration_ms": 1009,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.17s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "8fe1a5ebe3bef9e75708f4835e8b369440d1a5a7b0bad4ed8a81513c7b8d4fc5"
+      },
+      "repository": "flask",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "flask-partitioned-cookie-flag",
+      "tree": "29bd3ef8420dce3b374185783edd3e5dcb9a8407",
+      "record_sha256": "ba96c988107a4e5c8da7a1512c4c033cb9c9e7c3f9f434e2577f5225735768e9"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "a78fc043a891ff1f5161bd41d0f771b5d4b77fd5429d0c625ba368158e25b082"
+      ],
+      "baseline": {
+        "argv_sha256": "a78fc043a891ff1f5161bd41d0f771b5d4b77fd5429d0c625ba368158e25b082",
+        "completed": true,
+        "duration_ms": 924,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.04s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "a23e4e23ff133452cbbea2116bde11299e8cd6492bc70e3d90b69afbfa735e28"
+      },
+      "changed_paths": [
+        "src/flask/ctx.py"
+      ],
+      "commit": "7fff56f5172c48b6f3aedf17ee14ef5c2533dfd1",
+      "execution_ready": true,
+      "mutation_sha256": "b68b024be44a7b6a029f3b7992b0a58142c875725179439df67dad95ef00639d",
+      "mutant": {
+        "argv_sha256": "a78fc043a891ff1f5161bd41d0f771b5d4b77fd5429d0c625ba368158e25b082",
+        "completed": true,
+        "duration_ms": 1050,
+        "exit_code": 1,
+        "output_summary": ">           assert flask.has_request_context() | E           assert False | E            +  where False = <function has_request_context at 0x000001F7692949D0>() | E            +    where <function has_request_context at 0x000001F7692949D0> = flask.has_request_context | tests\\test_reqctx.py:130: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_reqctx.py::test_context_test - assert False | 1 failed in 0.16s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "78fda55cb05ed79b979fc99e1b47539dedf5a16c03598d840210b1545ed795ed"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "a78fc043a891ff1f5161bd41d0f771b5d4b77fd5429d0c625ba368158e25b082",
+        "completed": true,
+        "duration_ms": 971,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.05s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "d124f9696ed40502b4b30c0104e7d254a7e35a3d854991f72025ba67c7e5c805"
+      },
+      "repository": "flask",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "flask-request-context-presence",
+      "tree": "29bd3ef8420dce3b374185783edd3e5dcb9a8407",
+      "record_sha256": "bcb746150d892d884979cf65e7819bdcd9f750760a288b6b14446708d2a443e4"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "d23ad9a466ee4f52a0d7a5ec12f1e192919c19dda7ab5f051eca631f4a188978"
+      ],
+      "baseline": {
+        "argv_sha256": "d23ad9a466ee4f52a0d7a5ec12f1e192919c19dda7ab5f051eca631f4a188978",
+        "completed": true,
+        "duration_ms": 918,
+        "exit_code": 0,
+        "output_summary": "..........                                                               [100%] | 10 passed in 0.08s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "68610110c848af094adc63bb44f50ae80753720ced5ba150142565277219fd7f"
+      },
+      "changed_paths": [
+        "src/flask/cli.py"
+      ],
+      "commit": "7fff56f5172c48b6f3aedf17ee14ef5c2533dfd1",
+      "execution_ready": true,
+      "mutation_sha256": "d6ccb0d9f41473fdd5db16623d7c4ace0a47e0423a02d0e73e2b0054a4d595f0",
+      "mutant": {
+        "argv_sha256": "d23ad9a466ee4f52a0d7a5ec12f1e192919c19dda7ab5f051eca631f4a188978",
+        "completed": true,
+        "duration_ms": 1125,
+        "exit_code": 1,
+        "output_summary": "FAILED tests/test_cli.py::test_prepare_import[test/__init__.py-path3-test] - ... | FAILED tests/test_cli.py::test_prepare_import[test/__init__-path4-test] - Ass... | FAILED tests/test_cli.py::test_prepare_import[value5-path5-cliapp.inner1] - A... | FAILED tests/test_cli.py::test_prepare_import[value6-path6-cliapp.inner1.inner2] | FAILED tests/test_cli.py::test_prepare_import[test.a.b-path7-test.a.b] - Asse... | FAILED tests/test_cli.py::test_prepare_import[value8-path8-cliapp.app] - Asse... | FAILED tests/test_cli.py::test_prepare_import[value9-path9-cliapp.message.txt] | 10 failed in 0.26s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "6a74ae09b900e008dda0f8e80cd352f02d4d76eeae6f3e94c8d71e6c497b6035"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "d23ad9a466ee4f52a0d7a5ec12f1e192919c19dda7ab5f051eca631f4a188978",
+        "completed": true,
+        "duration_ms": 981,
+        "exit_code": 0,
+        "output_summary": "..........                                                               [100%] | 10 passed in 0.08s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "68610110c848af094adc63bb44f50ae80753720ced5ba150142565277219fd7f"
+      },
+      "repository": "flask",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "flask-cli-import-name",
+      "tree": "29bd3ef8420dce3b374185783edd3e5dcb9a8407",
+      "record_sha256": "a059f76acc06d68c53a2ae50ab047f87b47105e832a2cda5fc850a3184d0ffbf"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "afa7709d84f7cc793dced3fe61c899937d8da443cb5ab01733666a9ca68a3751"
+      ],
+      "baseline": {
+        "argv_sha256": "afa7709d84f7cc793dced3fe61c899937d8da443cb5ab01733666a9ca68a3751",
+        "completed": true,
+        "duration_ms": 1145,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.28s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "88bd8dfdb7a94b6010ba5e505610de7af6f1c0243a48a0fdf1fe146c619a4fa4"
+      },
+      "changed_paths": [
+        "pydantic/fields.py"
+      ],
+      "commit": "5f033e46c54fea1b59b6894d6527daf49475e690",
+      "execution_ready": true,
+      "mutation_sha256": "5f16faaf898f976a7c29b065c07c9fa629b7bc87e6bb04583c00b0dbaf40bcd6",
+      "mutant": {
+        "argv_sha256": "afa7709d84f7cc793dced3fe61c899937d8da443cb5ab01733666a9ca68a3751",
+        "completed": true,
+        "duration_ms": 1147,
+        "exit_code": 1,
+        "output_summary": ">       assert fields['id'].is_required() is True | E       assert False is True | E        +  where False = is_required() | E        +    where is_required = FieldInfo(annotation=int, required=False, init=True, init_var=False, kw_only=False).is_required | tests\\test_dataclasses.py:530: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_dataclasses.py::test_fields - assert False is True | 1 failed in 0.35s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "49d2397022f3d5cbc3e0e92e88450467b7a4f1a381aa23781b5a8fa3a7c97b28"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "afa7709d84f7cc793dced3fe61c899937d8da443cb5ab01733666a9ca68a3751",
+        "completed": true,
+        "duration_ms": 1048,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.25s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "d821f20c04a12f9d1bd510aef0cb4b1ab9c00a29682deb7187f6986b6fb8ecfe"
+      },
+      "repository": "pydantic",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "pydantic-required-field",
+      "tree": "4200a6ef6753b863d35645c487449612c651b581",
+      "record_sha256": "50df6b58fd3b0d04a4d6c9114d0be81de7fefd559796202a843ff0a345813d32"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "a35489155d84933aad70518db1305f143d86b26e24d9790b8e2d45f4b14df602"
+      ],
+      "baseline": {
+        "argv_sha256": "a35489155d84933aad70518db1305f143d86b26e24d9790b8e2d45f4b14df602",
+        "completed": true,
+        "duration_ms": 1022,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.23s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "d8c86ff2390d5c0b0a3bcad71d7128e77c8592a4448e5ac2e0d3986f26a080d9"
+      },
+      "changed_paths": [
+        "pydantic/dataclasses.py"
+      ],
+      "commit": "5f033e46c54fea1b59b6894d6527daf49475e690",
+      "execution_ready": true,
+      "mutation_sha256": "2431e100714117095f93f961963f8e17b835f99599b5e9e207a9fb6dee66e538",
+      "mutant": {
+        "argv_sha256": "a35489155d84933aad70518db1305f143d86b26e24d9790b8e2d45f4b14df602",
+        "completed": true,
+        "duration_ms": 1198,
+        "exit_code": 1,
+        "output_summary": "b: int | >       assert is_pydantic_dataclass(PydanticDataclass) is True | E       AssertionError: assert False is True | E        +  where False = is_pydantic_dataclass(<class 'tests.test_dataclasses.test_is_pydantic_dataclass.<locals>.PydanticDataclass'>) | tests\\test_dataclasses.py:2707: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_dataclasses.py::test_is_pydantic_dataclass - AssertionError... | 1 failed in 0.35s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "ad198ec51bec2ae0d82190f2fde728e3a14cbf880365a2d53f6f0e00cd6fcf7c"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "a35489155d84933aad70518db1305f143d86b26e24d9790b8e2d45f4b14df602",
+        "completed": true,
+        "duration_ms": 1116,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.26s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "6c9294c723e8b4f0071bc1ed44f3dc172e3f96f376c22867366595be33b8d48c"
+      },
+      "repository": "pydantic",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "pydantic-dataclass-identity",
+      "tree": "4200a6ef6753b863d35645c487449612c651b581",
+      "record_sha256": "01b9917df048ec63efe95c60e88195d493b760811e6651eabcc5ee7d7e7a8497"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "6116b639f6c06b15d873f6cef81a284704ebc240a5c31bd75bf8283262d1975f"
+      ],
+      "baseline": {
+        "argv_sha256": "6116b639f6c06b15d873f6cef81a284704ebc240a5c31bd75bf8283262d1975f",
+        "completed": true,
+        "duration_ms": 970,
+        "exit_code": 0,
+        "output_summary": "...                                                                      [100%] | 3 passed in 0.14s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "96bc74a6e6538eaf1bf75cd4dac2bafee6d165a82efe3c56eba423fb3605d5c1"
+      },
+      "changed_paths": [
+        "pydantic/type_adapter.py"
+      ],
+      "commit": "5f033e46c54fea1b59b6894d6527daf49475e690",
+      "execution_ready": true,
+      "mutation_sha256": "bdaa91966bdb44e5906652138e3e0ddb80dfc4c67d9181cbf2378957b7a50f98",
+      "mutant": {
+        "argv_sha256": "6116b639f6c06b15d873f6cef81a284704ebc240a5c31bd75bf8283262d1975f",
+        "completed": true,
+        "duration_ms": 1040,
+        "exit_code": 1,
+        "output_summary": "E         - TypeAdapter(SimpleDataclass) | E         + TypeAdapter(mutated) | tests\\test_type_adapter.py:592: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_type_adapter.py::test_ta_repr[int-int] - AssertionError: as... | FAILED tests/test_type_adapter.py::test_ta_repr[list-list[int]] - AssertionEr... | FAILED tests/test_type_adapter.py::test_ta_repr[SimpleDataclass-SimpleDataclass] | 3 failed in 0.23s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "e39cd967a06e95e063b420565bc1a584dc6cb11ae8916585acf29f85bf3ad02d"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "6116b639f6c06b15d873f6cef81a284704ebc240a5c31bd75bf8283262d1975f",
+        "completed": true,
+        "duration_ms": 960,
+        "exit_code": 0,
+        "output_summary": "...                                                                      [100%] | 3 passed in 0.12s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "514af261e53715184f246cc5bb92e66847f92beb8ff2a801d311d49e204c3cb8"
+      },
+      "repository": "pydantic",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "pydantic-type-adapter-repr",
+      "tree": "4200a6ef6753b863d35645c487449612c651b581",
+      "record_sha256": "e82f802f1593115d715b4e61e0128c6b99b77bd26af5031e656dad48b8a85f57"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "5200e1779afeaf17041624783f4452497784bd0af99d469db6068202c1cb7298"
+      ],
+      "baseline": {
+        "argv_sha256": "5200e1779afeaf17041624783f4452497784bd0af99d469db6068202c1cb7298",
+        "completed": true,
+        "duration_ms": 959,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.12s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "97f5adfb2ec9975df6d998bc11af616286bd89a5feba3be34a12c5039d829f43"
+      },
+      "changed_paths": [
+        "pydantic/root_model.py"
+      ],
+      "commit": "5f033e46c54fea1b59b6894d6527daf49475e690",
+      "execution_ready": true,
+      "mutation_sha256": "9340b8f2c16af92df3658c01148c0115acc4d754afb3ee36efd66fba7898f1ed",
+      "mutant": {
+        "argv_sha256": "5200e1779afeaf17041624783f4452497784bd0af99d469db6068202c1cb7298",
+        "completed": true,
+        "duration_ms": 989,
+        "exit_code": 1,
+        "output_summary": ">       assert RootModel[int](42) == RootModel[int](42) | E       assert RootModel[int](root=42) == RootModel[int](root=42) | E | E         Use -v to get more diff | tests\\test_root_model.py:308: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_root_model.py::test_root_model_equality - assert RootModel[... | 1 failed in 0.21s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "14b2680424118bcbcbbb7bb091d279b37a4fbdd4a6fe0f0f6e26ffbc7e81986d"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "5200e1779afeaf17041624783f4452497784bd0af99d469db6068202c1cb7298",
+        "completed": true,
+        "duration_ms": 963,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.12s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "97f5adfb2ec9975df6d998bc11af616286bd89a5feba3be34a12c5039d829f43"
+      },
+      "repository": "pydantic",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "pydantic-root-model-equality",
+      "tree": "4200a6ef6753b863d35645c487449612c651b581",
+      "record_sha256": "5c0cf3099b9dcb3196783d7580b6deba5a8dff62576478089bbc90664f9f6562"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "7eb507ae4b2a7534139bb2bde8cb0d520ddc44bba1b8f6e8d384e0586fa7f535"
+      ],
+      "baseline": {
+        "argv_sha256": "7eb507ae4b2a7534139bb2bde8cb0d520ddc44bba1b8f6e8d384e0586fa7f535",
+        "completed": true,
+        "duration_ms": 968,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.17s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "8fe1a5ebe3bef9e75708f4835e8b369440d1a5a7b0bad4ed8a81513c7b8d4fc5"
+      },
+      "changed_paths": [
+        "pydantic/networks.py"
+      ],
+      "commit": "5f033e46c54fea1b59b6894d6527daf49475e690",
+      "execution_ready": true,
+      "mutation_sha256": "5e9ecd4666cc3da873d31848e379196b539b0140b462cf2ad13b2607b24f2203",
+      "mutant": {
+        "argv_sha256": "7eb507ae4b2a7534139bb2bde8cb0d520ddc44bba1b8f6e8d384e0586fa7f535",
+        "completed": true,
+        "duration_ms": 1092,
+        "exit_code": 1,
+        "output_summary": "E       AssertionError: assert 'mutated' == 'example.org' | E | E         - example.org | E         + mutated | tests\\test_networks.py:178: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_networks.py::test_any_url_parts - AssertionError: assert 'm... | 1 failed in 0.30s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "4fcd490ed5bd8bd7e6734ef8d8f3d9268b68de95292be1749f8099f7319f4fdf"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "7eb507ae4b2a7534139bb2bde8cb0d520ddc44bba1b8f6e8d384e0586fa7f535",
+        "completed": true,
+        "duration_ms": 968,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.15s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "4266e033210036ba8b31ee3a443436561f15f8d6019f9b409a683c576bc1774b"
+      },
+      "repository": "pydantic",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "pydantic-url-host",
+      "tree": "4200a6ef6753b863d35645c487449612c651b581",
+      "record_sha256": "9ea600693e8e98a9843b87ff89ab6e5e94c94d671cd615f9d62420d322ad2605"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "ddd757590ec137ef906dceff1bf809d5f97c2a34479a88c41a07080154ffd97c"
+      ],
+      "baseline": {
+        "argv_sha256": "ddd757590ec137ef906dceff1bf809d5f97c2a34479a88c41a07080154ffd97c",
+        "completed": true,
+        "duration_ms": 1138,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.32s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "c94f2add614de805d49dc30834f4f3a7b7a290a796a0367ac258887f78c1e786"
+      },
+      "changed_paths": [
+        "pydantic/main.py"
+      ],
+      "commit": "5f033e46c54fea1b59b6894d6527daf49475e690",
+      "execution_ready": true,
+      "mutation_sha256": "83d73bf71ed470c05283ed1eeef9dd10536923c11b1a4b89c4b70ec851dce81c",
+      "mutant": {
+        "argv_sha256": "ddd757590ec137ef906dceff1bf809d5f97c2a34479a88c41a07080154ffd97c",
+        "completed": true,
+        "duration_ms": 1316,
+        "exit_code": 1,
+        "output_summary": "E       AssertionError: assert [] == [('c', 3), ('...oo(a=1, b=2))] | E | E         Right contains 2 more items, first extra item: ('c', 3) | E         Use -v to get more diff | tests\\test_main.py:1235: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_main.py::test_model_iteration - AssertionError: assert [] =... | 1 failed in 0.45s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "27a758616b902de5b1dcb9d540176db0e2c65ea093c86ba1afa111d45a0e0b65"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "ddd757590ec137ef906dceff1bf809d5f97c2a34479a88c41a07080154ffd97c",
+        "completed": true,
+        "duration_ms": 1120,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.30s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "188c7d2c78e3347bd0649f49b266c0cd289fd68f9cfe0221f5ea1989c86953ff"
+      },
+      "repository": "pydantic",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "pydantic-model-iteration",
+      "tree": "4200a6ef6753b863d35645c487449612c651b581",
+      "record_sha256": "e3923b90f5102c65268ea4acc224ff788b0fd34a0842362d7828eeababf8d1e9"
+    },
+    {
+      "acceptance_argv_sha256": [
+        "62b88b1f459087172fc901272c5dc14f3517e7b11afaaa89a16bae984cee1bc2"
+      ],
+      "baseline": {
+        "argv_sha256": "62b88b1f459087172fc901272c5dc14f3517e7b11afaaa89a16bae984cee1bc2",
+        "completed": true,
+        "duration_ms": 850,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.08s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "8ad57cbc4d8db15412b66082549e8911659560cbb57b5b814b8a722c2227bc6f"
+      },
+      "changed_paths": [
+        "pydantic/color.py"
+      ],
+      "commit": "5f033e46c54fea1b59b6894d6527daf49475e690",
+      "execution_ready": true,
+      "mutation_sha256": "a43eba5f9f84910ade50963abca157dd7f0bfa55bee491686ce1a3e29c9a3ecc",
+      "mutant": {
+        "argv_sha256": "62b88b1f459087172fc901272c5dc14f3517e7b11afaaa89a16bae984cee1bc2",
+        "completed": true,
+        "duration_ms": 960,
+        "exit_code": 1,
+        "output_summary": "E       AssertionError: assert 'mutated' == 'red' | E | E         - red | E         + mutated | tests\\test_color.py:207: AssertionError | =========================== short test summary info =========================== | FAILED tests/test_color.py::test_str_repr - AssertionError: assert 'mutated' ... | 1 failed in 0.17s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "9d61d66f0a2e2bb22aaf3a19d9589c216783ebd9673e1de0e5b9af7e93edd6b2"
+      },
+      "oracle_restoration": {
+        "argv_sha256": "62b88b1f459087172fc901272c5dc14f3517e7b11afaaa89a16bae984cee1bc2",
+        "completed": true,
+        "duration_ms": 917,
+        "exit_code": 0,
+        "output_summary": ".                                                                        [100%] | 1 passed in 0.08s",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stdout_sha256": "8ad57cbc4d8db15412b66082549e8911659560cbb57b5b814b8a722c2227bc6f"
+      },
+      "repository": "pydantic",
+      "runtime": {
+        "implementation": "CPython",
+        "python_version": "3.10.11",
+        "executable_sha256": "b2c836c52cdf063180b9ee76f67ac42946101b79ac457f3494035a67c090d961"
+      },
+      "task_id": "pydantic-color-string",
+      "tree": "4200a6ef6753b863d35645c487449612c651b581",
+      "record_sha256": "7be9821ceb73b8ee2a60378ded162e34784fd136ac16612e3debab8018382082"
+    }
+  ],
+  "runner": "devflow-mutation-fixture-preflight/v1",
+  "schema_version": "1.0",
+  "evidence_sha256": "2bdbc9ec3534669f0d8de9194a6dba354c298aa3b1ce33c5022999c6eaf789d7"
+}

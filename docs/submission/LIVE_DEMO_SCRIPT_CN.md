@@ -64,12 +64,12 @@ Ready。屏幕同时
 屏幕角标始终标注“本地确定性演示”，不得把这段称为 AgentTeams Team Room
 执行结果。
 
-随后展示本地 Leader→Router→Worker 失败恢复聚焦测试：同一 canonical route
-即使并发收到不同 `failure_id`，也只产生一个 retry route 且两个结果均有审计；
-每个 canonical Coder route 只授权一次模型调用，验证失败与测试失败共享
-issue-global 1..3 预算且不产生第四次调用。Reviewer 拒绝经 TeamLeader 校验后
-fail-closed，不伪造 Coder 重试。画面必须同时标注“进程内 route claim；非跨
-重启/多副本 exactly-once”。
+随后展示本地 Leader→Router→Worker 失败恢复聚焦测试：SQLite 调度路由只允许
+一个进程取得租约，过期后可恢复并封存；每个 canonical Coder route 只授权一次
+模型调用，验证失败与测试失败共享 issue-global 1..3 预算且不产生第四次调用。
+Reviewer 拒绝经 TeamLeader 校验后 fail-closed，不伪造 Coder 重试。画面必须
+同时标注“调度租约可持久；Worker replay/失败去重含进程内状态；非外部副作用
+exactly-once”。
 
 ## 5:25–6:30｜MCP 与安全工程
 
@@ -93,9 +93,9 @@ content digest 可复核、receipt response digest 重算一致；同 capability
 
 展示三个固定 revision、24 项路由/边界基准的精确决策、安全率、p50/p95
 时延与 token。展示七个 Skill 的静态质量门；同时指出 GLM-5.2 成对行为评测
-只覆盖较早的六个 Skill，`github-evidence` 不沿用该分数。2026-07-28 候选
-工作树的覆盖率为 84.40%（846 passed、17 skipped，3,874/4,590）；只有演示版本未再变化且
-已绑定最终 commit 后复跑一致，才把它作为最终数字展示。
+只覆盖较早的六个 Skill，`github-evidence` 不沿用该分数。2026-07-28 决赛分支
+冻结前门为 971 passed、17 skipped、84.75%（6,314 statements / 963 missed）；
+此后代码仍有变化，只有绑定最终 commit 后复跑一致，才把数字作为最终证据展示。
 
 ## 7:20–8:00｜结论与缺口
 

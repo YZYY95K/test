@@ -26,7 +26,7 @@ tracing:
     protocol: "grpc"            # grpc for throughput; http/protobuf available
     insecure: true              # set false + set cert in prod
   service_name: "devflow"
-  service_version: "1.3.0"
+  service_version: "2.0.0"
   # Sampling: head-based for simplicity. 1.0 = all spans; lower for high volume.
   # T4/T5 issues are always sampled (forced) regardless of this rate — see
   # the span_attributes below.
@@ -132,6 +132,10 @@ metrics:
       type: "counter"
       description: "MCP tool invocations, by server, tool, and status."
       labels: ["server", "tool", "status"]
+    - name: "devflow_mcp_tool_duration_seconds"
+      type: "histogram"
+      description: "MCP boundary latency, by server, tool, and final status."
+      labels: ["server", "tool", "status"]
     - name: "devflow_patch_attempts"
       type: "histogram"
       description: "Number of patch-generation attempts before success/failure."
@@ -140,6 +144,22 @@ metrics:
     - name: "devflow_pipeline_active"
       type: "gauge"
       description: "Number of CI pipelines currently in flight."
+    - name: "devflow_pipeline_total"
+      type: "counter"
+      description: "Completed CI pipelines, by suite and outcome."
+      labels: ["suite", "outcome"]
+    - name: "devflow_pipeline_duration_seconds"
+      type: "histogram"
+      description: "Server-owned CI command duration, by suite and outcome."
+      labels: ["suite", "outcome"]
+    - name: "devflow_rollback_total"
+      type: "counter"
+      description: "Rollback attempts, by environment and outcome."
+      labels: ["environment", "outcome"]
+    - name: "devflow_rollback_duration_seconds"
+      type: "histogram"
+      description: "Verified rollback duration, by environment and outcome."
+      labels: ["environment", "outcome"]
     - name: "devflow_approval_pending"
       type: "gauge"
       description: "PRs blocked on human approval."

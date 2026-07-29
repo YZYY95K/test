@@ -3,21 +3,85 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from devflow.exceptions import MCPError
 from devflow.models.patch import ChangeType, Patch
+from devflow.models.test_integrity import (
+    TEST_INTEGRITY_IGNORED_PARTS,
+    TEST_INTEGRITY_POLICY,
+    TEST_INTEGRITY_POLICY_DIGEST,
+    TEST_ISOLATION_BOUNDARY,
+    TestIntegrityAttestation,
+    canonical_integrity_digest,
+)
 from devflow.models.test_result import (
     BaselineComparison,
     TestCaseResult,
     TestRunResult,
     TestStatus,
 )
+from devflow.security.secrets import redact_text
+from devflow.security.test_integrity import (
+    collect_protected_manifest,
+    require_patch_integrity,
+    require_same_manifest,
+)
+
+_COPY_IGNORE = shutil.ignore_patterns(*TEST_INTEGRITY_IGNORED_PARTS)
+
+# Test commands receive only process bootstrap values.  In particular, tokens,
+# cloud credentials, SSH agents, and user-provided environment values do not
+# cross into repository-owned test code by default.
+_SAFE_COMMAND_ENVIRONMENT = frozenset(
+    {
+        "COMSPEC",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "PATHEXT",
+        "PYTHONHASHSEED",
+        "PYTHONPATH",
+        "SYSTEMDRIVE",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "USERPROFILE",
+        "WINDIR",
+    }
+)
+
+
+def isolated_command_environment(
+    source: Mapping[str, str] | None = None,
+    *,
+    extra: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Build the explicit, secret-free environment for an untrusted command.
+
+    ``extra`` is reserved for trusted server-owned adapters.  Callers must
+    provide exact values and cannot inherit arbitrary process environment.
+    """
+
+    selected = source if source is not None else os.environ
+    environment = {
+        key: value for key, value in selected.items() if key.upper() in _SAFE_COMMAND_ENVIRONMENT
+    }
+    if extra:
+        for key, value in extra.items():
+            if not key or "=" in key or "\x00" in key or "\x00" in value:
+                raise MCPError("provider environment contains an invalid entry")
+            environment[key] = value
+    return environment
 
 
 @dataclass(frozen=True)
@@ -30,7 +94,13 @@ class CommandOutcome:
 
 
 class IsolatedTestService:
-    """Apply a validated candidate only to a disposable repository copy."""
+    """Apply a validated candidate only to disposable repository copies.
+
+    The boundary prevents patch and test-process writes from touching the
+    canonical checkout and attests protected test inputs before and after
+    execution.  It uses stdlib temporary directories and subprocesses; it is
+    deliberately *not* described as a container or operating-system sandbox.
+    """
 
     def __init__(
         self,
@@ -56,16 +126,74 @@ class IsolatedTestService:
         return await asyncio.to_thread(self._run_tests_sync, patch, full_suite)
 
     def _run_tests_sync(self, patch: Patch, full_suite: bool) -> TestRunResult:
-        baseline = self.execute(self.repository_root)
+        canonical_baseline = collect_protected_manifest(self.repository_root)
+        require_patch_integrity(
+            patch,
+            baseline_protected_paths=canonical_baseline.paths,
+        )
         with tempfile.TemporaryDirectory(prefix="devflow-cicd-") as temp_dir:
-            candidate = Path(temp_dir) / "repo"
+            baseline_repository = Path(temp_dir) / "baseline"
+            candidate_repository = Path(temp_dir) / "candidate"
             shutil.copytree(
                 self.repository_root,
-                candidate,
-                ignore=shutil.ignore_patterns(".git", ".devflow", "__pycache__"),
+                baseline_repository,
+                ignore=_COPY_IGNORE,
             )
-            self._apply_patch(candidate, patch)
-            current = self.execute(candidate)
+            shutil.copytree(
+                self.repository_root,
+                candidate_repository,
+                ignore=_COPY_IGNORE,
+            )
+
+            baseline_pre_run = collect_protected_manifest(baseline_repository)
+            require_same_manifest(
+                canonical_baseline,
+                baseline_pre_run,
+                violation="baseline_copy_mismatch",
+            )
+            baseline = self.execute(baseline_repository)
+            baseline_post_run = collect_protected_manifest(baseline_repository)
+            require_same_manifest(
+                baseline_pre_run,
+                baseline_post_run,
+                violation="baseline_tests_mutated_during_execution",
+            )
+
+            self._apply_patch(candidate_repository, patch)
+            candidate_pre_run = collect_protected_manifest(candidate_repository)
+            candidate_baseline = candidate_pre_run.project(canonical_baseline.paths)
+            require_same_manifest(
+                canonical_baseline,
+                candidate_baseline,
+                violation="candidate_changed_immutable_baseline",
+            )
+            added_tests = candidate_pre_run.added_since(canonical_baseline)
+            current = self.execute(candidate_repository)
+            candidate_post_run = collect_protected_manifest(candidate_repository)
+            require_same_manifest(
+                candidate_pre_run,
+                candidate_post_run,
+                violation="candidate_tests_mutated_during_execution",
+            )
+
+        attestation = TestIntegrityAttestation(
+            schema_version="1.0",
+            policy=TEST_INTEGRITY_POLICY,
+            policy_digest=TEST_INTEGRITY_POLICY_DIGEST,
+            command_digest=canonical_integrity_digest(
+                {"argv": list(self.command), "full_suite": full_suite}
+            ),
+            baseline_manifest_digest=canonical_baseline.digest,
+            candidate_baseline_manifest_digest=candidate_baseline.digest,
+            candidate_pre_run_manifest_digest=candidate_pre_run.digest,
+            candidate_post_run_manifest_digest=candidate_post_run.digest,
+            added_tests_manifest_digest=added_tests.digest,
+            baseline_protected_file_count=len(canonical_baseline.entries),
+            added_test_file_count=len(added_tests.entries),
+            full_suite=full_suite,
+            verified=True,
+            isolation_boundary=TEST_ISOLATION_BOUNDARY,
+        )
 
         baseline_passed = int(baseline.returncode == 0)
         current_passed = int(current.returncode == 0)
@@ -101,37 +229,56 @@ class IsolatedTestService:
                 else [],
                 regression=baseline.returncode == 0 and current.returncode != 0,
             ),
+            integrity_attestation=attestation,
         )
 
-    def execute(self, repository: Path) -> CommandOutcome:
+    def execute(
+        self,
+        repository: Path,
+        *,
+        command: tuple[str, ...] | None = None,
+    ) -> CommandOutcome:
         """Run the server-owned command in the supplied checkout."""
 
         resolved = repository.resolve()
         if not resolved.is_dir():
             raise MCPError("test execution root must be a directory")
+        argv = command or self.command
+        if not argv or not all(argv):
+            raise MCPError("test command must be a non-empty server-owned argv")
         started = time.perf_counter()
         try:
             process = subprocess.run(
-                list(self.command),
+                list(argv),
                 cwd=repository,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_seconds,
                 check=False,
                 shell=False,
+                env=isolated_command_environment(),
             )
         except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout or ""
-            stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr or ""
-            output = stdout + stderr
+            stdout = (
+                exc.stdout.decode(errors="replace")
+                if isinstance(exc.stdout, bytes)
+                else exc.stdout or ""
+            )
+            stderr = (
+                exc.stderr.decode(errors="replace")
+                if isinstance(exc.stderr, bytes)
+                else exc.stderr or ""
+            )
+            output, _redacted = redact_text(stdout + stderr)
             return CommandOutcome(
                 returncode=124,
                 output=f"test adapter timed out\n{output}"[-4000:],
                 duration_ms=int((time.perf_counter() - started) * 1000),
             )
+        output, _redacted = redact_text(process.stdout + process.stderr)
         return CommandOutcome(
             returncode=process.returncode,
-            output=(process.stdout + process.stderr)[-4000:],
+            output=output[-4000:],
             duration_ms=int((time.perf_counter() - started) * 1000),
         )
 
@@ -168,4 +315,4 @@ class IsolatedTestService:
                 target.unlink()
 
 
-__all__ = ["CommandOutcome", "IsolatedTestService"]
+__all__ = ["CommandOutcome", "IsolatedTestService", "isolated_command_environment"]

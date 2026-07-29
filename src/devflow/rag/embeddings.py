@@ -36,7 +36,9 @@ class OpenAIEmbeddingProvider:
             response = self._client.embeddings.create(model=self.model, input=texts)
             return [list(item.embedding) for item in response.data]
         except Exception as exc:
-            raise LLMError(f"Embedding API call failed: {exc}") from exc
+            raise LLMError(
+                f"Embedding API call failed: {type(exc).__name__}"
+            ) from exc
 
 
 class HashEmbeddingProvider:

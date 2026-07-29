@@ -2,6 +2,24 @@
 
 All notable changes follow semantic versioning.
 
+## 2.0.0 - 2026-07-28
+
+- Made Agent identity executable: every local LLM call now receives a
+  runtime-built role, capability, Skill, and hard-boundary system instruction;
+  AgentTeams keeps the corresponding role package as deployment authority.
+- Added durable collaboration leases, causal hand-offs, signed human-approval
+  targets, test-integrity gates, fail-closed MCP execution, and auditable
+  local six-stage recovery semantics.
+- Added an exact AgentTeams upstream/CRD compatibility lock, deterministic
+  role-package reconstruction, production observability integrations, and
+  explicit separation between local, live-cluster, and not-yet-proven claims.
+- Added three fixed open-source repositories with 21 deterministic repair
+  tasks, source/license/fixture digests, a safe patch-execution kernel, and
+  resumable evidence reports without exposing the mutation oracle.
+- Added finals-facing PPT/PDF sources, acceptance and identity appendices, and
+  a clean-Git deterministic submission builder with dependency, SBOM, license,
+  manifest, checksum, and provenance gates.
+
 ## 1.3.0 - 2026-07-28
 
 - Added a typed Tester-to-TeamLeader-to-Coder repair route with sanitized,

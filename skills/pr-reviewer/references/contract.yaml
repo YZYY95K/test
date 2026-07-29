@@ -1,11 +1,11 @@
 schema_version: "1.0"
 name: pr-reviewer
-version: "2.1.0"
+version: "3.0.0"
 owner: ReviewerAgent
 intent: Independently gate a tested candidate and create a policy-compliant PR.
 invoke_when:
   - TestEvidence is current, integrity-checked, and eligible for review.
-  - Human approval evidence arrives for a previously blocked T4 or T5 review.
+  - A T4 or T5 tested candidate needs an exact human-approval pause target.
 refuse_when:
   - Tests failed, regressed, errored, are stale, or do not match the candidate.
   - The authoring agent asks to self-approve or bypass a security or human gate.
@@ -19,8 +19,7 @@ output:
   type: ReviewDecision
   schema_version: "1.0"
   required_fields:
-    [issue_id, candidate_digest, tier, decision, findings, summary,
-     requires_human_approval, approval_evidence, pr, evidence]
+    [issue_id, tier, review]
 dependencies:
   - Scoped GitHub PR and review MCP capabilities.
   - Versioned security scanners and config/security.yaml policy.
@@ -49,7 +48,7 @@ handoffs:
     artifact_type: ReviewDecision
     event: review.rejected
   - "on": blocked
-    consumer: HumanReviewer
+    consumer: TeamLeader
     artifact_type: ReviewDecision
     event: approval.required
 failures:
@@ -79,10 +78,10 @@ verification:
     requirement: No unresolved high or critical finding exists.
     evidence: Versioned scanner reports and finding dispositions.
   - id: approval-policy
-    requirement: T4 and T5 include verifiable human approval before merge.
-    evidence: Approver identity, timestamp, target digest, and audit record.
+    requirement: T4 and T5 return to TeamLeader as blocked; only an external authority may sign the exact Leader target.
+    evidence: Reviewer parent route, pause target digest, approver identity, timestamp, one-shot approval record, and resumed route.
 release:
   compatibility: AgentTeams v1beta1 and HandoffEnvelope 1.x.
-  change_policy: Any approval relaxation requires a major version and human sign-off.
+  change_policy: v3 makes TeamLeader the mandatory mediator for blocked reviews; any approval relaxation requires a major version and human sign-off.
   rollback: Restore the prior stricter signed bundle; never grandfather blocked reviews.
 examples_ref: references/examples.md
