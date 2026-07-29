@@ -2,11 +2,12 @@
 
 ## Claim boundary
 
-This record covers the current modified finals worktree. It proves repeatable
-local engineering gates, not a frozen release tag, official acceptance, a live
+This record covers the frozen finals release-candidate source identified by the
+package provenance commit. It proves repeatable local engineering gates, not a
+release tag, official acceptance, a live
 six-stage AgentTeams run, a human-signed cluster T4 resume, or model-backed
 results on the 21 repository-repair tasks. Repeat every gate after committing
-the final release candidate and bind the report to that commit.
+the final tagged release if any source or material changes.
 
 ## Reproducible environment
 
@@ -26,7 +27,7 @@ python -m pytest -q --cov=devflow --cov-report=term-missing `
 
 Observed result:
 
-- 1,026 passed;
+- 1,033 passed;
 - 17 skipped for environment-specific integration paths;
 - 84.79% aggregate line coverage (6,324 statements / 962 missed);
 - TeamLeader 79%, LLM client 96%, RAG indexer 81%, experience store 75%,
@@ -70,6 +71,6 @@ results:
   locally recorded keys. No host-key replacement was accepted.
 - No supported model key is present in the process environment. Previously
   pasted credentials are treated as compromised and are not reused.
-- The final clean commit, release tag, deterministic finals ZIP, video, live
-  five-role AgentTeams closure, signed T4 resume, and 21 model-backed repair
-  runs therefore remain open.
+- The final release tag, public upload, video, live five-role AgentTeams
+  closure, signed T4 resume, and 21 model-backed repair runs therefore remain
+  open.

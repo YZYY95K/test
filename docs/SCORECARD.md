@@ -52,10 +52,10 @@ RAG、记忆、共享状态、轨迹观测四项中至少实现两项。DevFlow 
   [AgentTeams 现场证据](evidence/AGENTTEAMS_LIVE_20260727.md#scope-bound-github-mcp)。
 - [x] 上述 fresh T2 只证明一次固定范围的成功闭环；两个独立 `stat` 仅证明对象
   存在，不是远端字节摘要证明，也不能据此计算或外推整体任务成功率。
-- [x] 2026-07-29 决赛分支冻结前一次完整门：1,026 passed、17 skipped、覆盖率
+- [x] 2026-07-29 决赛 RC 冻结后完整门：1,033 passed、17 skipped、覆盖率
   84.79%（6,324 statements / 962 missed）；ruff、127 文件严格 mypy、七 Skill
   静态评分和 14 项行为案例结构门通过。当前工作树尚未冻结，故该结果不能冒充
-  最终 tag 证据，冻结后必须再跑；早期 846/84.40% 仅见
+  最终 tag 或官方验收证据；早期 846/84.40% 仅见
   [已取代快照](evidence/LOCAL_RELEASE_CANDIDATE_20260728.md)。
 - [x] 12 页最终候选 PPT/PDF 已逐页渲染检查，无截断、乱码、密钥命中；PDF
   无加密、表单或 JavaScript。
@@ -78,7 +78,7 @@ RAG、记忆、共享状态、轨迹观测四项中至少实现两项。DevFlow 
 | GitHub MCP | 固定范围正例、同 capability 错路径 403、Reviewer 403、Locator 直连阻断；fresh T2 的项目同步为 2/2，且 `meta.json`、`plan.md` 均独立确认存在 | “已覆盖任意仓库”、把一次 T2 写成完整修复闭环，或把 `stat exists=true` 写成远端字节摘要证明 |
 | OpenClaw 工具边界 | 原生审计结果为 `strongBoundaryEnforceable=false`，六项 blocker 已记录 | “当前具备强 OS 沙箱”或“可抵抗敌对 root” |
 | 方案材料 | 12 页 PPT/PDF 已完成本地逐页视觉与凭据检查 | “已在比赛平台正式提交”或“最终 commit/tag/ZIP 已冻结” |
-| 覆盖率 | 2026-07-29 决赛分支冻结前完整结果为 1,026 passed、17 skipped、84.79%（6,324 statements / 962 missed） | 把未绑定最终 commit 的预冻结结果写成最终发布结果，沿用旧数字，或用聚焦测试通过数代替覆盖率 |
+| 覆盖率 | 2026-07-29 决赛 RC 完整结果为 1,033 passed、17 skipped、84.79%（6,324 statements / 962 missed）；最终 ZIP 的 provenance 绑定构建 commit | 把 RC 结果写成官方验收结果，沿用旧数字，或用聚焦测试通过数代替覆盖率 |
 
 ## 初赛材料门槛
 
