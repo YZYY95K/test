@@ -92,7 +92,7 @@ def _issuer_response(
     issued = int(NOW.timestamp()) - 1
     expires = issued + 120
     claims: dict[str, Any] = {
-        "schema": "devflow.github-content-capability/v1",
+        "schema": "devflow.github-content-capability/v2",
         **scope,
         "iat": issued,
         "exp": expires,
@@ -102,7 +102,7 @@ def _issuer_response(
         claims.update(claim_updates)
     capability = f"{_b64url(_canonical(claims))}.{_b64url(b's' * 32)}"
     response: dict[str, Any] = {
-        "schema": "devflow.github-content-capability/v1",
+        "schema": "devflow.github-content-capability/v2",
         "capability": capability,
         "expires_at": claims["exp"],
         "jti": claims["jti"],
@@ -258,7 +258,9 @@ def test_valid_request_becomes_complete_canonical_handoff(
 
     assert issuer.calls == 1
     assert issuer.scope == {
+        "run_id": "run-1",
         "task_id": "7-locate",
+        "trace_id": "run-1:7-locate",
         "owner": "example",
         "repo": "repo",
         "revision": REVISION,
@@ -454,11 +456,23 @@ def test_issuer_failure_is_stable_and_scrubs_sensitive_exception(
     assert "capability" not in rendered
 
 
+@pytest.mark.parametrize(
+    "claim_updates",
+    [
+        {"run_id": "other-run"},
+        {"task_id": "other-task"},
+        {"trace_id": "run-1:other-task"},
+        {"repo": "different"},
+        {"paths": ["README.md"]},
+    ],
+)
 def test_issuer_scope_mismatch_fails_before_upstream(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    claim_updates: dict[str, Any],
 ) -> None:
     guard = _load_guard(monkeypatch, tmp_path)
-    issuer = _FakeIssuer(claim_updates={"repo": "different"})
+    issuer = _FakeIssuer(claim_updates=claim_updates)
 
     response = _call(guard, _task_request(), issuer, _token_file(tmp_path))
 

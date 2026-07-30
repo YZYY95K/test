@@ -1,8 +1,8 @@
 schema_version: "1.0"
 name: pr-reviewer
-version: "3.0.0"
+version: "4.0.0"
 owner: ReviewerAgent
-intent: Independently gate a tested candidate and create a policy-compliant PR.
+intent: Independently review and gate one digest-bound tested candidate without repository mutation.
 invoke_when:
   - TestEvidence is current, integrity-checked, and eligible for review.
   - A T4 or T5 tested candidate needs an exact human-approval pause target.
@@ -13,24 +13,22 @@ input:
   type: TestEvidence
   schema_version: "1.0"
   required_fields:
-    [issue_id, candidate_digest, baseline_revision, suite, status, totals,
-     baseline_comparison, evidence]
+    [issue_id, tier, candidate, candidate_digest, baseline_revision, suite,
+     status, totals, baseline_comparison, evidence]
 output:
   type: ReviewDecision
   schema_version: "1.0"
   required_fields:
     [issue_id, tier, review]
 dependencies:
-  - Scoped GitHub PR and review MCP capabilities.
-  - Versioned security scanners and config/security.yaml policy.
+  - TeamLeader-supplied PatchCandidate, green TestEvidence, and digest-bound security scan.
+  - Versioned config/security.yaml review policy.
   - Append-only approval and audit evidence store.
-mcp_tools:
-  - github:create_pull_request
-  - github:add_review
+mcp_tools: []
 allowed_actions:
   - Read candidate, test, policy, and security evidence.
-  - Submit a review and create a pull request through scoped tools.
-  - Record merge eligibility for a human-owned or repository-policy process.
+  - Emit one typed candidate ReviewDecision to TeamLeader.
+  - Record promotion eligibility without mutating repository state.
 forbidden_actions:
   - Approve red, stale, incomplete, or mismatched test evidence.
   - Dismiss unresolved high or critical security findings.
@@ -38,6 +36,7 @@ forbidden_actions:
   - Merge any pull request or invoke a deployment or rollback operation.
   - Self-approve a change authored by the same agent instance.
   - Fabricate a pull-request URL or human approval record.
+  - Create, submit, update, review, or merge a pull request.
 handoffs:
   - "on": success
     consumer: TeamLeader
@@ -45,25 +44,29 @@ handoffs:
     event: review.approved
   - "on": failure
     consumer: TeamLeader
-    artifact_type: ReviewDecision
-    event: review.rejected
+    artifact_type: SkillFailure
+    event: review.failed
   - "on": blocked
     consumer: TeamLeader
     artifact_type: ReviewDecision
     event: approval.required
+  - "on": blocked
+    consumer: TeamLeader
+    artifact_type: ReviewDecision
+    event: review.rejected
 failures:
-  - code: SECURITY_SCAN_UNAVAILABLE
-    retryable: true
-    max_attempts: 1
-    action: Fail closed for T3+ and require human review for T1/T2.
+  - code: EVIDENCE_INVALID
+    retryable: false
+    max_attempts: 0
+    action: Reject stale, red, mismatched, digest-invalid, or incomplete candidate evidence.
     route_to: TeamLeader
-    event: review.blocked
-  - code: PR_CREATE_FAILED
+    event: review.failed
+  - code: REVIEW_GENERATION_INVALID
     retryable: true
     max_attempts: 2
-    action: Preserve review decision and mark PR creation deferred.
+    action: Retry strict structured review generation, then return a bounded failure.
     route_to: TeamLeader
-    event: review.degraded
+    event: review.failed
   - code: POLICY_BLOCK
     retryable: false
     max_attempts: 0
@@ -72,16 +75,22 @@ failures:
     event: approval.required
 verification:
   - id: evidence-binding
-    requirement: Candidate, test, and review digests identify the same revision.
-    evidence: Digest and repository-revision comparison.
+    requirement: Candidate, test, security, and review evidence identify the same issue, tier, candidate digest, and immutable baseline revision.
+    evidence: Strict PatchCandidate validation, candidate digest, test totals and comparison, security report digest, and source-bound output validation.
   - id: security
     requirement: No unresolved high or critical finding exists.
     evidence: Versioned scanner reports and finding dispositions.
   - id: approval-policy
     requirement: T4 and T5 return to TeamLeader as blocked; only an external authority may sign the exact Leader target.
     evidence: Reviewer parent route, pause target digest, approver identity, timestamp, one-shot approval record, and resumed route.
+  - id: repository-boundary
+    requirement: Candidate review has no GitHub write capability and never claims a pull-request URL.
+    evidence: Empty MCP grant, null pr_url, Worker package policy, and TeamLeader-owned post-review transition.
+  - id: failure-contract
+    requirement: Execution failure emits only SkillFailure 1.0 to TeamLeader and cannot be encoded as an approved ReviewDecision.
+    evidence: Failed HandoffEnvelope, exact source digest, declared code and retry budget, and TeamHarness validation attestation.
 release:
   compatibility: AgentTeams v1beta1 and HandoffEnvelope 1.x.
-  change_policy: v3 makes TeamLeader the mandatory mediator for blocked reviews; any approval relaxation requires a major version and human sign-off.
+  change_policy: v4 narrows the Skill to candidate review, removes GitHub writes, binds all decisions to exact source evidence, and standardizes SkillFailure 1.0; any boundary relaxation requires a major version and human sign-off.
   rollback: Restore the prior stricter signed bundle; never grandfather blocked reviews.
 examples_ref: references/examples.md

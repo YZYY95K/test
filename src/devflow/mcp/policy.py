@@ -352,11 +352,40 @@ class MCPPolicy:
             _require_safe_path(arguments.get("path"))
         elif server == "github" and tool == "create_pull_request":
             _require_safe_branch(arguments.get("branch") or arguments.get("head"))
-        elif server == "cicd" and tool == "run_tests":
+        elif server == "devflow-cicd-portable" and tool == "run_tests":
+            if set(arguments) != {"issue_id", "patch"}:
+                raise MCPAuthorizationError(
+                    "portable run_tests accepts only issue_id and patch"
+                )
+            issue_id = arguments.get("issue_id")
+            if not isinstance(issue_id, int) or isinstance(issue_id, bool) or issue_id < 1:
+                raise MCPAuthorizationError(
+                    "portable run_tests requires a positive issue_id"
+                )
             try:
                 Patch.model_validate(arguments.get("patch"))
             except Exception as exc:
                 raise MCPAuthorizationError(f"run_tests requires a valid Patch: {exc}") from exc
+        elif server == "devflow-cicd" and tool == "run_tests":
+            if set(arguments) != {"taskId", "revision", "workspaceBinding"}:
+                raise MCPAuthorizationError(
+                    "AgentTeams run_tests accepts only taskId, revision, and workspaceBinding"
+                )
+            task_id = arguments.get("taskId")
+            revision = arguments.get("revision")
+            workspace_binding = arguments.get("workspaceBinding")
+            if not isinstance(task_id, str) or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", task_id
+            ):
+                raise MCPAuthorizationError("AgentTeams run_tests taskId is invalid")
+            if not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{40}", revision):
+                raise MCPAuthorizationError("AgentTeams run_tests revision is invalid")
+            if not isinstance(workspace_binding, str) or not re.fullmatch(
+                r"[a-f0-9]{64}", workspace_binding
+            ):
+                raise MCPAuthorizationError(
+                    "AgentTeams run_tests workspaceBinding is invalid"
+                )
         elif server == "cicd" and tool == "trigger_pipeline":
             _require_safe_branch(arguments.get("branch"))
             if arguments.get("suite") not in {"full", "affected", "smoke"}:

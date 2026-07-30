@@ -69,13 +69,13 @@ EXPECTED_AUTHORIZER_SHA256 = (
     "2ff118f3edbbcfb86db8f092d629d36c6d79e89d28363ba8683262b718cd481d"
 )
 EXPECTED_VALIDATOR_SHA256 = (
-    "668e5bb30e25aab809cf42e49247d5326f26856a7ce5bd4fdadc91a917e59ce4"
+    "db604b968ad6c547b1899cb0d0c03756f6ce6bbc432c80fcd6ef4c1e0a7ccaeb"
 )
 EXPECTED_CONTRACT_READER_SHA256 = (
     "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f"
 )
 EXPECTED_CONTRACT_SHA256 = (
-    "3446d6183a315f260900bbdb5ea77f8fb4aabb13be3a328cf8e41e94c4e4230c"
+    "cbecb372535763310dcc2b14043449b640ec7346cc913b6aae2f9d9c602ccc98"
 )
 MCPORTER_PATH = "/usr/bin/mcporter"
 EXPECTED_MCPORTER_SHA256 = (
@@ -577,8 +577,14 @@ def _expect_project_binding(project: Any, project_id: str, stage: str) -> dict[s
 
 
 def _expected_broker_scope(task_id: str) -> str:
+    if not task_id.endswith(TASK_SUFFIX):
+        raise ValueError("broker task_id does not contain the fixed evidence suffix")
+    run_id = task_id[: -len(TASK_SUFFIX)]
+    trace_id = f"{run_id}:{task_id}"
     scope = {
+        "run_id": run_id,
         "task_id": task_id,
+        "trace_id": trace_id,
         "owner": OWNER,
         "repo": REPOSITORY,
         "revision": REVISION,
@@ -1812,19 +1818,81 @@ def _remote_validate_conflicting_submission(
 def _remote_receipt(value: Any) -> dict[str, Any]:
     fields = {
         "schema_version",
+        "assignment",
         "authorization",
         "github",
+        "receipt_key_sha256",
         "response_digest",
         "receipt_signature",
     }
+    assignment_fields = {
+        "run_id",
+        "task_id",
+        "trace_id",
+        "repository",
+        "revision",
+        "paths",
+        "scope_digest",
+    }
+    authorization_fields = {
+        "decision",
+        "task_id",
+        "scope_digest",
+        "capability_digest",
+        "authorized_at",
+    }
+    github_fields = {
+        "repository",
+        "revision",
+        "path",
+        "object_sha",
+        "content_base64",
+        "encoding",
+    }
     candidates: dict[bytes, dict[str, Any]] = {}
     for item in _remote_walk(value):
+        if not isinstance(item, dict) or set(item) != fields:
+            continue
+        assignment = item.get("assignment")
+        authorization = item.get("authorization")
+        github = item.get("github")
+        signature_text = item.get("receipt_signature")
         if (
-            isinstance(item, dict)
-            and set(item) == fields
-            and item.get("schema_version") == "devflow.github-content-response/v1"
+            item.get("schema_version") != "devflow.github-content-response/v2"
+            or not isinstance(assignment, dict)
+            or set(assignment) != assignment_fields
+            or not isinstance(authorization, dict)
+            or set(authorization) != authorization_fields
+            or not isinstance(github, dict)
+            or set(github) != github_fields
+            or not isinstance(item.get("receipt_key_sha256"), str)
+            or DIGEST.fullmatch(item["receipt_key_sha256"]) is None
+            or not isinstance(item.get("response_digest"), str)
+            or DIGEST.fullmatch(item["response_digest"]) is None
+            or not isinstance(signature_text, str)
         ):
-            candidates[_canonical_bytes(item)] = item
+            continue
+        try:
+            signature = base64.b64decode(
+                signature_text + "=" * (-len(signature_text) % 4),
+                altchars=b"-_",
+                validate=True,
+            )
+        except (ValueError, binascii.Error):
+            continue
+        unsigned = {
+            key: child
+            for key, child in item.items()
+            if key not in {"response_digest", "receipt_signature"}
+        }
+        if (
+            len(signature) != 64
+            or base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+            != signature_text
+            or _sha256(_canonical_bytes(unsigned)) != item["response_digest"]
+        ):
+            continue
+        candidates[_canonical_bytes(item)] = item
     if len(candidates) != 1:
         raise _RemoteError("github-receipt")
     return next(iter(candidates.values()))
@@ -1880,7 +1948,9 @@ def _remote_capability_claims(capability: str) -> dict[str, Any]:
         raise _RemoteError("capability") from exc
     if not isinstance(value, dict) or set(value) != {
         "schema",
+        "run_id",
         "task_id",
+        "trace_id",
         "owner",
         "repo",
         "revision",
@@ -2121,14 +2191,29 @@ def _remote_locator_main() -> int:
         stage = "parse-receipt"
         receipt = _remote_receipt(mcp_value)
         stage = "verify-receipt"
+        receipt_assignment = receipt.get("assignment")
         authorization = receipt.get("authorization")
         github = receipt.get("github")
-        if not isinstance(authorization, dict) or not isinstance(github, dict):
+        if (
+            not isinstance(receipt_assignment, dict)
+            or not isinstance(authorization, dict)
+            or not isinstance(github, dict)
+        ):
             raise _RemoteError("verify-receipt")
         broker_scope = _expected_broker_scope(task_id)
         capability_digest = _sha256(assignment.capability.encode("ascii"))
         if (
-            authorization.get("decision") != "allow"
+            receipt_assignment
+            != {
+                "run_id": run_id,
+                "task_id": task_id,
+                "trace_id": f"{run_id}:{task_id}",
+                "repository": f"{OWNER}/{REPOSITORY}",
+                "revision": REVISION,
+                "paths": [EVIDENCE_PATH],
+                "scope_digest": broker_scope,
+            }
+            or authorization.get("decision") != "allow"
             or authorization.get("task_id") != task_id
             or authorization.get("scope_digest") != broker_scope
             or authorization.get("capability_digest") != capability_digest
@@ -2136,14 +2221,18 @@ def _remote_locator_main() -> int:
             or github.get("revision") != REVISION
             or github.get("path") != EVIDENCE_PATH
             or github.get("encoding") != "base64"
+            or not isinstance(receipt.get("receipt_key_sha256"), str)
+            or DIGEST.fullmatch(receipt["receipt_key_sha256"]) is None
         ):
             raise _RemoteError("verify-receipt")
         stage = "verify-scope"
         claims = _remote_capability_claims(assignment.capability)
         authorized_at = authorization.get("authorized_at")
         if (
-            claims.get("schema") != "devflow.github-content-capability/v1"
+            claims.get("schema") != "devflow.github-content-capability/v2"
+            or claims.get("run_id") != run_id
             or claims.get("task_id") != task_id
+            or claims.get("trace_id") != f"{run_id}:{task_id}"
             or claims.get("owner") != OWNER
             or claims.get("repo") != REPOSITORY
             or claims.get("revision") != REVISION
@@ -2613,9 +2702,9 @@ MCP_SCHEMA_CANONICALIZATION_ID = "mcporter-v0.9.0-terminal-latency-zeroed"
 MAX_REMOTE_SCHEMA_BYTES = 1000000
 PINS = {
     "scripts/authorize_tool.py": "2ff118f3edbbcfb86db8f092d629d36c6d79e89d28363ba8683262b718cd481d",
-    "scripts/validate.py": "668e5bb30e25aab809cf42e49247d5326f26856a7ce5bd4fdadc91a917e59ce4",
+    "scripts/validate.py": "db604b968ad6c547b1899cb0d0c03756f6ce6bbc432c80fcd6ef4c1e0a7ccaeb",
     "scripts/_contract.py": "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
-    "references/contract.yaml": "3446d6183a315f260900bbdb5ea77f8fb4aabb13be3a328cf8e41e94c4e4230c",
+    "references/contract.yaml": "cbecb372535763310dcc2b14043449b640ec7346cc913b6aae2f9d9c602ccc98",
 }
 
 def pairs(items):
@@ -2638,16 +2727,17 @@ def load(text):
         parse_constant=lambda _value: (_ for _ in ()).throw(ValueError("constant")),
     )
 
-def bounded_file(path, maximum):
+def bounded_file(path, maximum, expected_uid=None):
     descriptor = -1
     try:
         if path.is_symlink() or path.resolve(strict=True) != path:
             raise ValueError("file")
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         metadata = os.fstat(descriptor)
+        owner_uid = os.geteuid() if expected_uid is None else expected_uid
         if (
             not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
+            or metadata.st_uid != owner_uid
             or metadata.st_nlink != 1
             or stat.S_IMODE(metadata.st_mode) & 0o022
             or not 1 <= metadata.st_size <= maximum
@@ -2667,6 +2757,29 @@ def bounded_file(path, maximum):
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+
+def root_public_file(path, maximum):
+    try:
+        metadata = path.lstat()
+        parent_metadata = path.parent.lstat()
+    except OSError as exc:
+        raise ValueError("trust") from exc
+    if (
+        path.is_symlink()
+        or path.resolve(strict=True) != path
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_gid != 0
+        or metadata.st_nlink != 1
+        or stat.S_IMODE(metadata.st_mode) != 0o444
+        or path.parent.is_symlink()
+        or not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_uid != 0
+        or parent_metadata.st_gid != 0
+        or stat.S_IMODE(parent_metadata.st_mode) & 0o022
+    ):
+        raise ValueError("trust")
+    return bounded_file(path, maximum, 0)
 
 def kill(process):
     if process.poll() is not None:
@@ -2768,6 +2881,111 @@ def expected_config(role):
         }
     return {"mcpServers": servers}
 
+def receipt_trust(role):
+    public_key_path = Path("/etc/devflow/github-evidence/receipt-ed25519.pub")
+    policy_path = Path("/etc/devflow/github-evidence/receipt-policy.json")
+    manifest_path = Path("/etc/devflow/teamharness/install-manifest.json")
+    openssl_path = Path("/usr/bin/openssl")
+    manifest = load(root_public_file(manifest_path, 262144).decode("utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("trust")
+    identity = manifest.get("runtimeIdentity")
+    if (
+        not isinstance(identity, dict)
+        or identity.get("runtimeName") != role
+        or manifest.get("sourcePolicy") != "production-pinned"
+    ):
+        raise ValueError("trust")
+    receipt_fields = {
+        "githubReceiptPolicy",
+        "githubReceiptPolicyPath",
+        "githubReceiptPolicySha256",
+        "githubReceiptPublicKeyPath",
+        "githubReceiptPublicKeySha256",
+        "githubReceiptKeyIdSha256",
+    }
+    if role != "devflow-locator":
+        if (
+            any(field in manifest for field in receipt_fields)
+            or public_key_path.exists()
+            or policy_path.exists()
+        ):
+            raise ValueError("trust")
+        return False
+    policy_bytes = root_public_file(policy_path, 4096)
+    public_key = root_public_file(public_key_path, 1024)
+    policy = load(policy_bytes.decode("utf-8"))
+    expected_fields = {
+        "schemaVersion",
+        "algorithm",
+        "audience",
+        "signatureDomain",
+        "consumerRuntimeName",
+        "publicKeyPath",
+        "publicKeySha256",
+        "publicKeyFileSha256",
+        "policyPath",
+        "opensslPath",
+    }
+    if (
+        not isinstance(policy, dict)
+        or set(policy) != expected_fields
+        or policy.get("schemaVersion") != "1.0"
+        or policy.get("algorithm") != "Ed25519"
+        or policy.get("audience") != "devflow.github-content-response/v2"
+        or policy.get("signatureDomain") != "devflow.github-content-receipt/v2"
+        or policy.get("consumerRuntimeName") != "devflow-locator"
+        or policy.get("publicKeyPath") != str(public_key_path)
+        or policy.get("policyPath") != str(policy_path)
+        or policy.get("opensslPath") != str(openssl_path)
+        or re.fullmatch(r"[0-9a-f]{64}", str(policy.get("publicKeySha256"))) is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(policy.get("publicKeyFileSha256"))) is None
+        or hashlib.sha256(public_key).hexdigest()
+        != policy.get("publicKeyFileSha256")
+    ):
+        raise ValueError("trust")
+    try:
+        openssl_metadata = openssl_path.lstat()
+    except OSError as exc:
+        raise ValueError("trust") from exc
+    if (
+        openssl_path.is_symlink()
+        or not stat.S_ISREG(openssl_metadata.st_mode)
+        or openssl_metadata.st_uid != 0
+        or openssl_metadata.st_gid != 0
+        or stat.S_IMODE(openssl_metadata.st_mode) & 0o022
+        or not os.access(openssl_path, os.X_OK)
+    ):
+        raise ValueError("trust")
+    public_der, public_der_stderr = bounded_command(
+        [
+            str(openssl_path),
+            "pkey",
+            "-pubin",
+            "-in",
+            str(public_key_path),
+            "-outform",
+            "DER",
+        ]
+    )
+    key_id = hashlib.sha256(public_der).hexdigest()
+    if (
+        public_der_stderr
+        or len(public_der) != 44
+        or not public_der.startswith(bytes.fromhex("302a300506032b6570032100"))
+        or key_id != policy.get("publicKeySha256")
+        or manifest.get("githubReceiptPolicy") != policy
+        or manifest.get("githubReceiptPolicyPath") != str(policy_path)
+        or manifest.get("githubReceiptPolicySha256")
+        != hashlib.sha256(policy_bytes).hexdigest()
+        or manifest.get("githubReceiptPublicKeyPath") != str(public_key_path)
+        or manifest.get("githubReceiptPublicKeySha256")
+        != policy.get("publicKeyFileSha256")
+        or manifest.get("githubReceiptKeyIdSha256") != key_id
+    ):
+        raise ValueError("trust")
+    return True
+
 def main():
     previous_handler = signal.getsignal(signal.SIGALRM)
     signal.signal(signal.SIGALRM, lambda _signum, _frame: (_ for _ in ()).throw(TimeoutError()))
@@ -2849,6 +3067,7 @@ def main():
         if normalized != expected_config(role):
             raise ValueError("config")
         config_digest = hashlib.sha256(canonical(normalized).encode("utf-8")).hexdigest()
+        github_receipt_trust_attested = receipt_trust(role)
         role_pins = MCP_SCHEMA_CANONICAL_PINS.get(role)
         role_sizes = MCP_SCHEMA_CANONICAL_SIZES.get(role)
         if (
@@ -2899,6 +3118,7 @@ def main():
             "role": role,
             "serverNames": expected_servers,
             "skillAttested": skill_attested,
+            "githubReceiptTrustAttested": github_receipt_trust_attested,
             "mcporterSha256": "ec13274c40bc0c71e73e994cf773b9d3801ce909d38f4b133f11450c9e0c458b",
             "mcporterVersion": "0.9.0",
             "configSha256": config_digest,
@@ -3116,6 +3336,7 @@ class KubernetesBackend:
                 "role": target.role_name,
                 "serverNames": expected_names,
                 "skillAttested": skill_attested,
+                "githubReceiptTrustAttested": target.role_name == LOCATOR_ROLE,
                 "mcporterSha256": EXPECTED_MCPORTER_SHA256,
                 "mcporterVersion": EXPECTED_MCPORTER_VERSION,
                 "configSha256": _sha256(

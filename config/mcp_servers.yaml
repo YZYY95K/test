@@ -17,9 +17,10 @@ servers:
   # ===========================================================================
   # github — Official GitHub MCP Server
   # ===========================================================================
-  # Wraps the GitHub REST/GraphQL API. Used by LocatorAgent (read files),
-  # ReviewerAgent (PR creation/review), and TeamLeader (issue coordination).
-  # Auth is a fine-grained personal access token with repo + workflow scopes.
+  # Wraps the GitHub REST/GraphQL API. Only github-evidence may perform a
+  # revision-pinned, read-only fetch. Root-cause analysis consumes the resulting
+  # digest-bound GitHubEvidence and never receives GitHub access of its own.
+  # Auth is a fine-grained read-only token supplied to the trusted adapter.
   # ===========================================================================
   github:
     description: "Official GitHub MCP Server — repository, issue, and PR operations."
@@ -43,33 +44,8 @@ servers:
       - name: "get_file_contents"
         description: "Fetch file contents (or a directory listing) from a repo."
         allowed_agents: ["LocatorAgent"]
-        allowed_skills: ["code-root-cause", "github-evidence"]
-        # Read-only: safe to expose broadly.
-        readonly: true
-      - name: "create_pull_request"
-        description: "Open a pull request against a base branch."
-        allowed_agents: ["ReviewerAgent"]
-        allowed_skills: ["pr-reviewer"]
-        readonly: false
-      - name: "add_review"
-        description: "Submit a review (approve / request changes) on a PR."
-        allowed_agents: ["ReviewerAgent"]
-        allowed_skills: ["pr-reviewer"]
-        readonly: false
-      - name: "get_issue"
-        description: "Fetch an issue by number."
-        allowed_agents: ["TeamLeader"]
-        allowed_skills: ["team-orchestration"]
-        readonly: true
-      - name: "add_issue_comment"
-        description: "Post a comment on an issue (status updates)."
-        allowed_agents: ["TeamLeader"]
-        allowed_skills: ["team-orchestration"]
-        readonly: false
-      - name: "list_issues"
-        description: "List issues with optional filters (state, labels)."
-        allowed_agents: ["TeamLeader"]
-        allowed_skills: ["team-orchestration"]
+        allowed_skills: ["github-evidence"]
+        # Read-only is still task-, revision-, repository-, and path-scoped.
         readonly: true
     # Rate-limit guardrails. GitHub's secondary rate limit kicks in well
     # before the documented 5000 req/h for token-authed requests; we stay
@@ -83,122 +59,42 @@ servers:
       timeout_seconds: 5
 
   # ===========================================================================
-  # cicd — Custom CI/CD MCP Server
+  # devflow-cicd — canonical AgentTeams Tester profile
   # ===========================================================================
-  # DevFlow-owned server exposing pipeline control. Built on the mcp[cli]
-  # dependency (see pyproject.toml). Runs as a local HTTP server so multiple
-  # agents can share one connection without spawning multiple processes.
+  # The server resolves the candidate, suite, command, and paths from an ACKed
+  # TeamHarness assignment. The portable Python adapter is separately named
+  # and configured in mcp_servers.portable.yaml; the two protocols never alias.
   # ===========================================================================
-  cicd:
-    description: "Custom CI/CD MCP Server — pipeline trigger, results, coverage, rollback."
+  devflow-cicd:
+    description: "AgentTeams Tester-only CI MCP bound to an ACKed TeamHarness assignment."
     enabled: true
-    # HTTP transport: supports concurrent agent sessions and is easier to
-    # health-check than stdio for a long-lived server.
+    execution_profile: "agentteams-bwrap-tests/v1"
+    policy_identity: "agentteams-acked-task-revision-workspace/v1"
     transport: "http"
-    # Propagate signed task identity to the DevFlow-owned server, which
-    # independently re-runs the same Agent+Skill authorization check.
-    propagate_context: true
-    # Bind loopback only — the CI/CD server must not be reachable externally.
-    host: "127.0.0.1"
-    port: "${MCP_CICD_PORT}"
-    # How the DevFlow runtime launches this server.
-    command: "python"
-    args:
-      - "-m"
-      - "devflow.mcp.cicd_server"
-    env:
-      DEVFLOW_REPOSITORY_ROOT: "${DEVFLOW_REPOSITORY_ROOT}"
-      CICD_TEST_COMMAND_JSON: "${CICD_TEST_COMMAND_JSON}"
-      CICD_PIPELINE_COMMANDS_JSON: "${CICD_PIPELINE_COMMANDS_JSON}"
-      DEVFLOW_MCP_CONTEXT_HMAC_KEY: "${DEVFLOW_MCP_CONTEXT_HMAC_KEY}"
-      DEVFLOW_APPROVAL_HMAC_KEY: "${DEVFLOW_APPROVAL_HMAC_KEY}"
-      DEVFLOW_CREDENTIAL_BROKER_HMAC_KEY: "${DEVFLOW_CREDENTIAL_BROKER_HMAC_KEY}"
-      CICD_REPLAY_STATE_PATH: "${CICD_REPLAY_STATE_PATH}"
-      CICD_RELEASE_STATE_PATH: "${CICD_RELEASE_STATE_PATH}"
-      CICD_ROLLBACK_COMMAND_JSON: "${CICD_ROLLBACK_COMMAND_JSON}"
-      # Logical source/target names only. The credential value is resolved
-      # inside the trusted adapter and never appears in MCP arguments.
-      CICD_ROLLBACK_CREDENTIAL_SOURCE: "${CICD_ROLLBACK_CREDENTIAL_SOURCE}"
-      CICD_ROLLBACK_CREDENTIAL_ENV: "${CICD_ROLLBACK_CREDENTIAL_ENV}"
-      HEALTH_CHECK_URL: "${HEALTH_CHECK_URL}"
+    url: "http://devflow-tester-cicd.agentteams-system.svc.cluster.local:8080/mcp"
+    propagate_context: false
     tools:
       - name: "run_tests"
         description: >-
-          Apply a typed Patch only to a disposable checkout and execute the
-          server-owned test adapter. Agents cannot provide shell commands.
+          Execute the exact ACKed TeamHarness PatchCandidate selected by the
+          server. Candidate, suite, command, and repository path are not input.
         allowed_agents: ["TesterAgent"]
         allowed_skills: ["test-runner"]
         readonly: false
         input_schema:
           type: "object"
-          required: ["issue_id", "patch", "full_suite"]
+          required: ["taskId", "revision", "workspaceBinding"]
+          additionalProperties: false
           properties:
-            issue_id: {type: "integer", minimum: 1}
-            patch: {type: "object"}
-            full_suite: {type: "boolean"}
-      - name: "trigger_pipeline"
-        description: >-
-          Trigger a CI pipeline for a branch. Returns a pipeline id used by
-          get_test_results / get_coverage.
-        allowed_agents: ["TesterAgent"]
-        allowed_skills: ["test-runner"]
-        input_schema:
-          type: "object"
-          required: ["branch", "suite"]
-          properties:
-            branch: {type: "string"}
-            suite:
+            taskId:
               type: "string"
-              enum: ["full", "affected", "smoke"]
-        readonly: false
-      - name: "get_test_results"
-        description: >-
-          Fetch the immutable-ref pipeline status, return code, bounded
-          redacted output tail, duration, and coverage evidence. Supports
-          bounded polling via wait_seconds.
-        allowed_agents: ["TesterAgent"]
-        allowed_skills: ["test-runner"]
-        input_schema:
-          type: "object"
-          required: ["pipeline_id"]
-          properties:
-            pipeline_id: {type: "string"}
-            wait_seconds:
-              type: "integer"
-              default: 0
-              description: "Block up to N seconds for the pipeline to finish."
-        readonly: true
-      - name: "get_coverage"
-        description: >-
-          Fetch line/branch coverage produced by the exact committed tree
-          recorded for a completed pipeline.
-        allowed_agents: ["TesterAgent"]
-        allowed_skills: ["test-runner"]
-        input_schema:
-          type: "object"
-          required: ["pipeline_id"]
-          properties:
-            pipeline_id: {type: "string"}
-        readonly: true
-      - name: "rollback_deployment"
-        description: >-
-          Roll back the most recent deployment to the previous known-good
-          release. Used only by TeamLeader after human-confirmed escalation.
-        allowed_agents: ["TeamLeader"]
-        allowed_skills: ["team-orchestration"]
-        input_schema:
-          type: "object"
-          required: ["environment"]
-          properties:
-            environment:
+              pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            revision:
               type: "string"
-              enum: ["staging", "production"]
-            target_release:
-              type: ["string", "null"]
-              description: "Specific release tag, or null for previous-good."
-        readonly: false
-        # Rollback is destructive — require an explicit confirmation token.
-        requires_confirmation: true
+              pattern: "^[a-f0-9]{40}$"
+            workspaceBinding:
+              type: "string"
+              pattern: "^[a-f0-9]{64}$"
     rate_limit:
       requests_per_minute: 60
       burst: 10

@@ -14,13 +14,30 @@ import argparse
 import base64
 import binascii
 import hashlib
+import os
 import re
+import stat
+from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
 try:
+    from scripts.reconcile_teamharness_openclaw import (
+        TEAM_NAME,
+        ReconcileError,
+        discover_targets,
+    )
     from scripts.run_agentteams_github_success_path import (
+        EXPECTED_MCP_SCHEMA_CANONICAL_BYTES,
+        EXPECTED_MCP_SCHEMA_CANONICAL_SHA256,
+        EXPECTED_MCPORTER_SHA256,
+        EXPECTED_MCPORTER_VERSION,
+        HOST_PREFLIGHT_TIMEOUT_SECONDS,
+        LOCATOR_ROLE,
+        MCP_SCHEMA_CANONICALIZATION_ID,
+        REMOTE_PREFLIGHT_HELPER,
+        TEAMHARNESS_SERVER,
         DriverError,
         KubernetesBackend,
         RuntimeContext,
@@ -30,11 +47,26 @@ try:
         _expect_absent,
         _expect_identity,
         _expect_ok,
+        _normalized_mcporter_config,
         _sha256,
         _strict_loads,
     )
 except ModuleNotFoundError:  # pragma: no cover - direct script execution
+    from reconcile_teamharness_openclaw import (  # type: ignore[no-redef]
+        TEAM_NAME,
+        ReconcileError,
+        discover_targets,
+    )
     from run_agentteams_github_success_path import (  # type: ignore[no-redef]
+        EXPECTED_MCP_SCHEMA_CANONICAL_BYTES,
+        EXPECTED_MCP_SCHEMA_CANONICAL_SHA256,
+        EXPECTED_MCPORTER_SHA256,
+        EXPECTED_MCPORTER_VERSION,
+        HOST_PREFLIGHT_TIMEOUT_SECONDS,
+        LOCATOR_ROLE,
+        MCP_SCHEMA_CANONICALIZATION_ID,
+        REMOTE_PREFLIGHT_HELPER,
+        TEAMHARNESS_SERVER,
         DriverError,
         KubernetesBackend,
         RuntimeContext,
@@ -44,6 +76,7 @@ except ModuleNotFoundError:  # pragma: no cover - direct script execution
         _expect_absent,
         _expect_identity,
         _expect_ok,
+        _normalized_mcporter_config,
         _sha256,
         _strict_loads,
     )
@@ -70,6 +103,103 @@ class ApprovalBackend(Protocol):
     def preflight(self) -> RuntimeContext: ...
 
     def leader_call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class T4KubernetesBackend(KubernetesBackend):
+    """Attest only the runtime surface required by the T4 Leader transition.
+
+    T4 pause/resume is a Leader-only TeamHarness operation.  Reusing the
+    GitHub success-path preflight would incorrectly make this approval path
+    depend on the Locator's unrelated GitHub MCP endpoint.  Discovery still
+    proves the fixed six-role Team exists, while executable/config/schema
+    attestation is deliberately limited to the Leader surface used below.
+    """
+
+    def preflight(self) -> RuntimeContext:
+        self.runner.run(
+            [self.kubectl, "version", "--request-timeout=10s"], timeout=20
+        )
+        try:
+            team = _strict_loads(
+                self.runner.run(
+                    self._kubectl("get", "team", TEAM_NAME, "--output", "json"),
+                    timeout=30,
+                )
+            )
+            pods = _strict_loads(
+                self.runner.run(
+                    self._kubectl(
+                        "get",
+                        "pods",
+                        "--selector",
+                        f"agentteams.io/team={TEAM_NAME}",
+                        "--output",
+                        "json",
+                    ),
+                    timeout=30,
+                )
+            )
+            if not isinstance(team, dict) or not isinstance(pods, dict):
+                raise ReconcileError("discovery document is malformed")
+            targets = discover_targets(
+                team, pods, require_github_issuer_token=False
+            )
+        except (ReconcileError, TypeError, ValueError) as exc:
+            raise DriverError(
+                "runtime_discovery_failed", "runtime-preflight"
+            ) from exc
+
+        by_role = {target.role_name: target for target in targets}
+        if set(by_role) != {
+            "devflow-lead",
+            "devflow-triage",
+            "devflow-locator",
+            "devflow-coder",
+            "devflow-tester",
+            "devflow-reviewer",
+        }:
+            raise DriverError("runtime_set_invalid", "runtime-preflight")
+
+        leader = by_role[LEADER_ROLE]
+        locator = by_role[LOCATOR_ROLE]
+        expected_servers = [TEAMHARNESS_SERVER]
+        report = self._json_object(
+            self._exec(
+                leader,
+                REMOTE_PREFLIGHT_HELPER,
+                [leader.role_name, leader.workspace],
+                timeout_seconds=HOST_PREFLIGHT_TIMEOUT_SECONDS,
+            ),
+            "runtime-preflight",
+        )
+        expected = {
+            "ok": True,
+            "role": LEADER_ROLE,
+            "serverNames": expected_servers,
+            "skillAttested": False,
+            "mcporterSha256": EXPECTED_MCPORTER_SHA256,
+            "mcporterVersion": EXPECTED_MCPORTER_VERSION,
+            "configSha256": _sha256(
+                _canonical_bytes(_normalized_mcporter_config(LEADER_ROLE))
+            ),
+            "schemaCanonicalization": MCP_SCHEMA_CANONICALIZATION_ID,
+            "schemaCanonicalSha256": {
+                server: EXPECTED_MCP_SCHEMA_CANONICAL_SHA256[LEADER_ROLE][server]
+                for server in expected_servers
+            },
+            "schemaCanonicalBytes": {
+                server: EXPECTED_MCP_SCHEMA_CANONICAL_BYTES[LEADER_ROLE][server]
+                for server in expected_servers
+            },
+        }
+        if report != expected:
+            raise DriverError("runtime_attestation_failed", "runtime-preflight")
+        self._leader = leader
+        self._locator = None
+        return RuntimeContext(
+            leader_matrix_user_id=leader.matrix_user_id,
+            locator_matrix_user_id=locator.matrix_user_id,
+        )
 
 
 def _validate_project_id(project_id: str) -> None:
@@ -548,13 +678,64 @@ def resume_with_approval(
 
 
 def _load_approval(path: Path) -> Any:
+    descriptor: int | None = None
     try:
-        metadata = path.lstat()
-        if path.is_symlink() or not path.is_file() or metadata.st_size > 16_384:
+        geteuid = getattr(os, "geteuid", None)
+        if os.name == "posix":
+            parent = path.parent
+            parent_metadata = parent.lstat()
+            if (
+                geteuid is None
+                or not path.is_absolute()
+                or parent.is_symlink()
+                or parent.resolve(strict=True) != parent
+                or not stat.S_ISDIR(parent_metadata.st_mode)
+                or parent_metadata.st_uid != geteuid()
+                or stat.S_IMODE(parent_metadata.st_mode) & 0o077
+            ):
+                raise OSError
+        before = path.lstat()
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(
+            os, "O_NOFOLLOW", 0
+        )
+        descriptor = os.open(path, flags)
+        metadata = os.fstat(descriptor)
+        if (
+            stat.S_ISLNK(before.st_mode)
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or not 1 <= metadata.st_size <= 16_384
+            or (before.st_dev, before.st_ino) != (metadata.st_dev, metadata.st_ino)
+            or (
+                os.name == "posix"
+                and (
+                    geteuid is None
+                    or metadata.st_uid != geteuid()
+                    or stat.S_IMODE(metadata.st_mode) & 0o077
+                )
+            )
+        ):
             raise OSError
-        return _strict_loads(path.read_text(encoding="utf-8"))
+        chunks: list[bytes] = []
+        remaining = metadata.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(16_384, remaining))
+            if not chunk:
+                raise OSError
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise OSError
+        payload = b"".join(chunks)
+        if len(payload) != metadata.st_size:
+            raise OSError
+        return _strict_loads(payload.decode("utf-8"))
     except (OSError, UnicodeError, ValueError) as exc:
         raise DriverError("approval_file_invalid", "approval-input") from exc
+    finally:
+        if descriptor is not None:
+            with suppress(OSError):
+                os.close(descriptor)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -589,7 +770,7 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 raise DriverError("execution_arguments_invalid", "input")
             result = prepare_approval(
-                KubernetesBackend(args.kubectl),
+                T4KubernetesBackend(args.kubectl),
                 project_id=args.project_id,
                 confirmation=args.confirm,
             )
@@ -601,7 +782,7 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 raise DriverError("execution_arguments_invalid", "input")
             result = resume_with_approval(
-                KubernetesBackend(args.kubectl),
+                T4KubernetesBackend(args.kubectl),
                 project_id=args.project_id,
                 approval=_load_approval(args.approval_file),
                 confirmation=args.confirm,

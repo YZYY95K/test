@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -31,6 +32,21 @@ PRODUCTION_APPROVAL_PUBLIC_KEY = Path("/etc/devflow/teamharness/approval-ed25519
 PRODUCTION_APPROVAL_POLICY = Path("/etc/devflow/teamharness/approval-policy.json")
 PRODUCTION_APPROVAL_LEDGER = Path("/var/lib/devflow/teamharness/approval-ledger.json")
 PRODUCTION_OPENSSL = Path("/usr/bin/openssl")
+PRODUCTION_GITHUB_RECEIPT_PUBLIC_KEY = Path(
+    "/etc/devflow/github-evidence/receipt-ed25519.pub"
+)
+PRODUCTION_GITHUB_RECEIPT_POLICY = Path(
+    "/etc/devflow/github-evidence/receipt-policy.json"
+)
+PRODUCTION_TEST_RECEIPT_PUBLIC_KEY = Path(
+    "/etc/devflow/teamharness/test-receipt-ed25519.pub"
+)
+PRODUCTION_TEST_RECEIPT_POLICY = Path(
+    "/etc/devflow/teamharness/test-receipt-policy.json"
+)
+PRODUCTION_TEST_RECEIPT_LEDGER = Path(
+    "/var/lib/devflow/teamharness/test-receipt-ledger.json"
+)
 PRODUCTION_RUNTIME_BINDING = Path("/etc/devflow/teamharness/runtime-binding.json")
 PRODUCTION_INSTALL_MANIFEST = Path("/etc/devflow/teamharness/install-manifest.json")
 PRODUCTION_EXECUTION_ROOT = Path("/opt/devflow/teamharness")
@@ -40,7 +56,76 @@ PRODUCTION_PLUGIN_ROOT = PRODUCTION_EXECUTION_ROOT / "plugin"
 PRODUCTION_SERVER = PRODUCTION_PLUGIN_ROOT / "mcp" / "server.py"
 PRODUCTION_PYTHON = Path("/usr/bin/python3")
 APPROVAL_AUDIENCE = "devflow.agentteams.projectflow.approval/v1"
+GITHUB_RECEIPT_AUDIENCE = "devflow.github-content-response/v2"
+GITHUB_RECEIPT_SIGNATURE_DOMAIN = "devflow.github-content-receipt/v2"
+GITHUB_RECEIPT_CONSUMER = "devflow-locator"
+TEST_RECEIPT_SCHEMA = "devflow.test-execution-receipt/v1"
+TEST_RECEIPT_LEDGER_SCHEMA = "devflow.test-execution-receipt-ledger/v2"
+TEST_RECEIPT_ISSUER = "devflow-tester-cicd"
+TEST_RECEIPT_AUDIENCE = "devflow-teamharness"
+TEST_RECEIPT_REPLAY_SCOPE = "pod-incarnation"
+TEST_RECEIPT_LEDGER_PERSISTENT_ACROSS_POD_REPLACEMENT = False
+TEST_RECEIPT_LIFETIME_SECONDS = 120
+TEST_RECEIPT_RESERVATION_LEASE_SECONDS = 30
+TEST_RECEIPT_LEDGER_MAX_RECORDS = 100_000
+TEST_RECEIPT_CONSUMPTION_PROTOCOL = (
+    "reserve-upstream-dual-authority-readback-commit/v1"
+)
+TEST_RECEIPT_AUTHORITATIVE_READBACK = [
+    "taskflow.check_task",
+    "projectflow.resolve_project",
+]
+TEST_RECEIPT_RESERVATION_FIELDS = frozenset(
+    {
+        "state",
+        "exp",
+        "receiptSha256",
+        "runId",
+        "taskId",
+        "acceptRequestSha256",
+        "acceptResultSha256",
+        "ownerId",
+        "ownerPid",
+        "ownerProcessIdentity",
+        "reservedAt",
+        "leaseExpiresAt",
+        "committedAt",
+        "authoritativeResultSha256",
+        "upstreamResponseSha256",
+    }
+)
+TEST_RECEIPT_POLICY_FIELDS = frozenset(
+    {
+        "schemaVersion",
+        "algorithm",
+        "audience",
+        "issuer",
+        "signatureDomain",
+        "publicKeyPath",
+        "publicKeyFileSha256",
+        "publicKeySha256",
+        "policyAttestationPath",
+        "opensslPath",
+        "replayLedgerPath",
+        "replayScope",
+        "replayLedgerPersistentAcrossPodReplacement",
+        "receiptLifetimeSeconds",
+        "maxReceiptLifetimeSeconds",
+        "maxClockSkewSeconds",
+        "ciServerSha256",
+        "ciPolicySha256",
+        "repositoryArchiveSha256",
+        "repositoryManifestSha256",
+        "repositoryRevision",
+        "remainingThreat",
+    }
+)
+ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 APPROVAL_DOMAIN_RE = re.compile(r"[0-9a-f]{64}")
+DIGEST_RE = re.compile(r"[0-9a-f]{64}")
+REVISION_RE = re.compile(r"[0-9a-f]{40}")
+SAFE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+JTI_RE = re.compile(r"[0-9a-f]{32}")
 RUNTIME_BINDING_FIELDS = {
     "schemaVersion",
     "teamName",
@@ -275,6 +360,327 @@ def _copy_read_only(source: Path, target: Path, mode: int = 0o444) -> None:
     target.chmod(mode)
     if hasattr(os, "chown"):
         os.chown(target, 0, 0)
+
+
+def _ed25519_public_key_digest(public_key: Path, openssl_path: Path) -> str:
+    completed = subprocess.run(
+        [
+            str(openssl_path),
+            "pkey",
+            "-pubin",
+            "-in",
+            str(public_key),
+            "-outform",
+            "DER",
+        ],
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    public_der = completed.stdout
+    if (
+        completed.returncode != 0
+        or len(public_der) != 44
+        or not public_der.startswith(ED25519_SPKI_PREFIX)
+    ):
+        raise ValueError("receipt public key must be a valid Ed25519 public key")
+    return hashlib.sha256(public_der).hexdigest()
+
+
+def _install_github_receipt_policy(
+    public_key: Path,
+    public_key_path: Path,
+    policy_path: Path,
+    openssl_path: Path,
+) -> dict[str, Any]:
+    _validate_ed25519_public_key(public_key, openssl_path)
+    public_key_path.parent.mkdir(parents=True, exist_ok=True)
+    _copy_read_only(public_key, public_key_path)
+    _validate_ed25519_public_key(public_key_path, openssl_path)
+    policy = {
+        "schemaVersion": "1.0",
+        "algorithm": "Ed25519",
+        "audience": GITHUB_RECEIPT_AUDIENCE,
+        "signatureDomain": GITHUB_RECEIPT_SIGNATURE_DOMAIN,
+        "consumerRuntimeName": GITHUB_RECEIPT_CONSUMER,
+        "publicKeyPath": str(public_key_path),
+        "publicKeySha256": _ed25519_public_key_digest(
+            public_key_path,
+            openssl_path,
+        ),
+        "publicKeyFileSha256": _sha256(public_key_path),
+        "policyPath": str(policy_path),
+        "opensslPath": str(openssl_path),
+    }
+    if policy_path.exists():
+        policy_path.chmod(0o644)
+    policy_path.write_text(
+        json.dumps(policy, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    policy_path.chmod(0o444)
+    if policy_path == PRODUCTION_GITHUB_RECEIPT_POLICY and hasattr(os, "chown"):
+        os.chown(policy_path, 0, 0)
+    return policy
+
+
+def _canonical_json(value: Any) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _validate_test_receipt_ledger(path: Path) -> None:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schemaVersion", "reservations"}
+        or value.get("schemaVersion") != TEST_RECEIPT_LEDGER_SCHEMA
+        or not isinstance(value.get("reservations"), dict)
+        or len(value["reservations"]) > TEST_RECEIPT_LEDGER_MAX_RECORDS
+    ):
+        raise ValueError("test receipt ledger has an invalid schema")
+    for jti, record in value["reservations"].items():
+        state = record.get("state") if isinstance(record, dict) else None
+        committed_at = record.get("committedAt") if isinstance(record, dict) else None
+        authoritative_digest = (
+            record.get("authoritativeResultSha256")
+            if isinstance(record, dict)
+            else None
+        )
+        upstream_digest = (
+            record.get("upstreamResponseSha256")
+            if isinstance(record, dict)
+            else None
+        )
+        if (
+            not isinstance(jti, str)
+            or JTI_RE.fullmatch(jti) is None
+            or not isinstance(record, dict)
+            or set(record) != TEST_RECEIPT_RESERVATION_FIELDS
+            or state not in {"pending", "committed"}
+            or isinstance(record.get("exp"), bool)
+            or not isinstance(record.get("exp"), int)
+            or not isinstance(record.get("receiptSha256"), str)
+            or DIGEST_RE.fullmatch(record["receiptSha256"]) is None
+            or not isinstance(record.get("runId"), str)
+            or SAFE_ID_RE.fullmatch(record["runId"]) is None
+            or not isinstance(record.get("taskId"), str)
+            or SAFE_ID_RE.fullmatch(record["taskId"]) is None
+            or not isinstance(record.get("acceptRequestSha256"), str)
+            or DIGEST_RE.fullmatch(record["acceptRequestSha256"]) is None
+            or not isinstance(record.get("acceptResultSha256"), str)
+            or DIGEST_RE.fullmatch(record["acceptResultSha256"]) is None
+            or not isinstance(record.get("ownerId"), str)
+            or DIGEST_RE.fullmatch(record["ownerId"]) is None
+            or isinstance(record.get("ownerPid"), bool)
+            or not isinstance(record.get("ownerPid"), int)
+            or record["ownerPid"] < 1
+            or not isinstance(record.get("ownerProcessIdentity"), str)
+            or DIGEST_RE.fullmatch(record["ownerProcessIdentity"]) is None
+            or isinstance(record.get("reservedAt"), bool)
+            or not isinstance(record.get("reservedAt"), int)
+            or isinstance(record.get("leaseExpiresAt"), bool)
+            or not isinstance(record.get("leaseExpiresAt"), int)
+            or record["leaseExpiresAt"] < record["reservedAt"]
+            or (
+                state == "pending"
+                and (
+                    committed_at is not None
+                    or authoritative_digest is not None
+                    or upstream_digest is not None
+                )
+            )
+            or (
+                state == "committed"
+                and (
+                    isinstance(committed_at, bool)
+                    or not isinstance(committed_at, int)
+                    or committed_at < record["reservedAt"]
+                    or not isinstance(authoritative_digest, str)
+                    or DIGEST_RE.fullmatch(authoritative_digest) is None
+                    or not isinstance(upstream_digest, str)
+                    or DIGEST_RE.fullmatch(upstream_digest) is None
+                )
+            )
+        ):
+            raise ValueError("test receipt ledger contains an invalid record")
+
+
+def _migrate_test_receipt_ledger_v1(path: Path) -> None:
+    """Preserve v1 replay denials as committed, deliberately non-matchable records."""
+
+    try:
+        metadata = path.lstat()
+        if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ValueError("legacy test receipt ledger is not a stable regular file")
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schemaVersion", "usedJtis"}
+        or value.get("schemaVersion") != "devflow.test-execution-receipt-ledger/v1"
+        or not isinstance(value.get("usedJtis"), dict)
+    ):
+        return
+    reservations: dict[str, Any] = {}
+    for jti, old in value["usedJtis"].items():
+        if (
+            not isinstance(jti, str)
+            or JTI_RE.fullmatch(jti) is None
+            or not isinstance(old, dict)
+            or set(old) != {"exp", "receiptSha256", "runId", "taskId", "consumedAt"}
+            or isinstance(old.get("exp"), bool)
+            or not isinstance(old.get("exp"), int)
+            or isinstance(old.get("consumedAt"), bool)
+            or not isinstance(old.get("consumedAt"), int)
+            or not isinstance(old.get("receiptSha256"), str)
+            or DIGEST_RE.fullmatch(old["receiptSha256"]) is None
+            or not isinstance(old.get("runId"), str)
+            or SAFE_ID_RE.fullmatch(old["runId"]) is None
+            or not isinstance(old.get("taskId"), str)
+            or SAFE_ID_RE.fullmatch(old["taskId"]) is None
+        ):
+            raise ValueError("legacy test receipt ledger contains an invalid record")
+        migration_digest = hashlib.sha256(
+            _canonical_json({"schema": "legacy-v1-replay-denial", "jti": jti, **old})
+        ).hexdigest()
+        consumed_at = int(old["consumedAt"])
+        reservations[jti] = {
+            "state": "committed",
+            "exp": int(old["exp"]),
+            "receiptSha256": old["receiptSha256"],
+            "runId": old["runId"],
+            "taskId": old["taskId"],
+            "acceptRequestSha256": migration_digest,
+            "acceptResultSha256": migration_digest,
+            "ownerId": migration_digest,
+            "ownerPid": 1,
+            "ownerProcessIdentity": migration_digest,
+            "reservedAt": consumed_at,
+            "leaseExpiresAt": consumed_at,
+            "committedAt": consumed_at,
+            "authoritativeResultSha256": migration_digest,
+            "upstreamResponseSha256": migration_digest,
+        }
+    migrated = {
+        "schemaVersion": TEST_RECEIPT_LEDGER_SCHEMA,
+        "reservations": reservations,
+    }
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.migration.tmp")
+    try:
+        temporary.write_bytes(_canonical_json(migrated))
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _install_test_receipt_policy(
+    public_key: Path,
+    policy_source: Path,
+    public_key_path: Path,
+    policy_path: Path,
+    ledger_path: Path,
+    openssl_path: Path,
+) -> dict[str, Any]:
+    """Install only public CI receipt trust plus a root-owned replay ledger."""
+
+    _validate_ed25519_public_key(public_key, openssl_path)
+    try:
+        source_bytes = policy_source.read_bytes()
+        policy = json.loads(source_bytes.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("test receipt policy is unavailable or malformed") from exc
+    if (
+        policy_source.is_symlink()
+        or not isinstance(policy, dict)
+        or set(policy) != TEST_RECEIPT_POLICY_FIELDS
+        or source_bytes != _canonical_json(policy)
+    ):
+        raise ValueError("test receipt policy must be canonical exact-schema JSON")
+    public_key_path.parent.mkdir(parents=True, exist_ok=True)
+    policy_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    if public_key.resolve() != public_key_path.resolve():
+        _copy_read_only(public_key, public_key_path)
+    else:
+        public_key_path.chmod(0o444)
+    _validate_ed25519_public_key(public_key_path, openssl_path)
+    file_sha256 = _sha256(public_key_path)
+    key_sha256 = _ed25519_public_key_digest(public_key_path, openssl_path)
+    if (
+        policy.get("schemaVersion") != "1.0"
+        or policy.get("algorithm") != "Ed25519"
+        or policy.get("audience") != TEST_RECEIPT_AUDIENCE
+        or policy.get("issuer") != TEST_RECEIPT_ISSUER
+        or policy.get("signatureDomain") != TEST_RECEIPT_SCHEMA
+        or policy.get("publicKeyPath") != str(public_key_path)
+        or policy.get("publicKeyFileSha256") != file_sha256
+        or policy.get("publicKeySha256") != key_sha256
+        or policy.get("policyAttestationPath") != str(policy_path)
+        or policy.get("opensslPath") != str(openssl_path)
+        or policy.get("replayLedgerPath") != str(ledger_path)
+        or policy.get("replayScope") != TEST_RECEIPT_REPLAY_SCOPE
+        or policy.get("replayLedgerPersistentAcrossPodReplacement")
+        is not TEST_RECEIPT_LEDGER_PERSISTENT_ACROSS_POD_REPLACEMENT
+        or policy.get("receiptLifetimeSeconds")
+        != TEST_RECEIPT_LIFETIME_SECONDS
+        or policy.get("maxReceiptLifetimeSeconds")
+        != TEST_RECEIPT_LIFETIME_SECONDS
+        or isinstance(policy.get("maxClockSkewSeconds"), bool)
+        or not isinstance(policy.get("maxClockSkewSeconds"), int)
+        or not 0 <= policy["maxClockSkewSeconds"] <= 30
+        or not isinstance(policy.get("remainingThreat"), str)
+        or "root" not in policy["remainingThreat"].lower()
+        or "pod replacement" not in policy["remainingThreat"].lower()
+        or "120" not in policy["remainingThreat"]
+    ):
+        raise ValueError("test receipt policy identity or public-key binding is invalid")
+    for field in (
+        "ciServerSha256",
+        "ciPolicySha256",
+        "repositoryArchiveSha256",
+        "repositoryManifestSha256",
+    ):
+        if (
+            not isinstance(policy.get(field), str)
+            or DIGEST_RE.fullmatch(policy[field]) is None
+        ):
+            raise ValueError("test receipt policy digest binding is invalid")
+    if (
+        not isinstance(policy.get("repositoryRevision"), str)
+        or REVISION_RE.fullmatch(policy["repositoryRevision"]) is None
+    ):
+        raise ValueError("test receipt policy revision binding is invalid")
+    if policy_path.exists():
+        policy_path.chmod(0o644)
+    policy_path.write_bytes(source_bytes)
+    policy_path.chmod(0o444)
+    if not ledger_path.exists():
+        ledger_path.write_bytes(
+            _canonical_json(
+                {"schemaVersion": TEST_RECEIPT_LEDGER_SCHEMA, "reservations": {}}
+            )
+        )
+    else:
+        _migrate_test_receipt_ledger_v1(ledger_path)
+    _validate_test_receipt_ledger(ledger_path)
+    ledger_path.chmod(0o600)
+    if (
+        public_key_path == PRODUCTION_TEST_RECEIPT_PUBLIC_KEY
+        and policy_path == PRODUCTION_TEST_RECEIPT_POLICY
+        and ledger_path == PRODUCTION_TEST_RECEIPT_LEDGER
+        and hasattr(os, "chown")
+    ):
+        for path in (public_key_path, policy_path, ledger_path):
+            os.chown(path, 0, 0)
+    return policy
 
 
 def _install_production_execution(plugin_dir: Path) -> dict[str, Any]:
@@ -773,6 +1179,9 @@ def install(
     runtime_binding: Path | None = None,
     approval_public_key: Path | None = None,
     approval_domain: str | None = None,
+    github_receipt_public_key: Path | None = None,
+    test_receipt_public_key: Path | None = None,
+    test_receipt_policy: Path | None = None,
     shared_dir: Path | None = None,
     replace: bool = False,
     _test_hash_policy: Mapping[str, str] | None = None,
@@ -781,6 +1190,13 @@ def install(
     _test_ledger_path: Path | None = None,
     _test_openssl_path: Path | None = None,
     _test_runtime_binding_path: Path | None = None,
+    _test_github_receipt_public_key_path: Path | None = None,
+    _test_github_receipt_policy_path: Path | None = None,
+    _test_github_receipt_openssl_path: Path | None = None,
+    _test_test_receipt_public_key_path: Path | None = None,
+    _test_test_receipt_policy_path: Path | None = None,
+    _test_test_receipt_ledger_path: Path | None = None,
+    _test_test_receipt_openssl_path: Path | None = None,
 ) -> dict[str, Any]:
     """Install an OpenClaw overlay without copying any credentials."""
     if role not in ROLES:
@@ -804,6 +1220,34 @@ def install(
         _test_hash_policy is None or not all(value is not None for value in test_policy_values)
     ):
         raise ValueError("test approval paths require one complete test-only fixture")
+    test_receipt_values = (
+        _test_github_receipt_public_key_path,
+        _test_github_receipt_policy_path,
+        _test_github_receipt_openssl_path,
+    )
+    if any(value is not None for value in test_receipt_values) and (
+        _test_hash_policy is None or not all(value is not None for value in test_receipt_values)
+    ):
+        raise ValueError("test receipt paths require one complete test-only fixture")
+    test_execution_receipt_values = (
+        _test_test_receipt_public_key_path,
+        _test_test_receipt_policy_path,
+        _test_test_receipt_ledger_path,
+        _test_test_receipt_openssl_path,
+    )
+    if any(value is not None for value in test_execution_receipt_values) and (
+        _test_hash_policy is None
+        or not all(value is not None for value in test_execution_receipt_values)
+    ):
+        raise ValueError(
+            "test execution receipt paths require one complete test-only fixture"
+        )
+    if (test_receipt_public_key is None) != (test_receipt_policy is None):
+        raise ValueError("test execution receipt trust requires both public files")
+    if production_install and test_receipt_public_key is None:
+        raise ValueError(
+            "production installation requires --test-receipt-public-key and policy"
+        )
     hostname = (
         _test_hostname.strip()
         if _test_hostname is not None
@@ -851,6 +1295,42 @@ def install(
         )
     elif approval_public_key is not None or approval_domain is not None:
         raise ValueError("approval policy inputs are installed only for the Leader")
+    github_receipt_policy: dict[str, Any] | None = None
+    is_locator = runtime_identity.get("runtimeName") == GITHUB_RECEIPT_CONSUMER
+    if is_locator:
+        if github_receipt_public_key is None:
+            raise ValueError(
+                "Locator installation requires --github-receipt-public-key"
+            )
+        github_receipt_public_key_path = (
+            _test_github_receipt_public_key_path
+            or PRODUCTION_GITHUB_RECEIPT_PUBLIC_KEY
+        )
+        github_receipt_policy_path = (
+            _test_github_receipt_policy_path or PRODUCTION_GITHUB_RECEIPT_POLICY
+        )
+        github_receipt_openssl_path = (
+            _test_github_receipt_openssl_path or PRODUCTION_OPENSSL
+        )
+        github_receipt_policy = _install_github_receipt_policy(
+            github_receipt_public_key,
+            github_receipt_public_key_path,
+            github_receipt_policy_path,
+            github_receipt_openssl_path,
+        )
+    elif github_receipt_public_key is not None:
+        raise ValueError("receipt trust input is installed only for Locator")
+    test_execution_receipt_policy: dict[str, Any] | None = None
+    if test_receipt_public_key is not None and test_receipt_policy is not None:
+        test_execution_receipt_policy = _install_test_receipt_policy(
+            test_receipt_public_key,
+            test_receipt_policy,
+            _test_test_receipt_public_key_path
+            or PRODUCTION_TEST_RECEIPT_PUBLIC_KEY,
+            _test_test_receipt_policy_path or PRODUCTION_TEST_RECEIPT_POLICY,
+            _test_test_receipt_ledger_path or PRODUCTION_TEST_RECEIPT_LEDGER,
+            _test_test_receipt_openssl_path or PRODUCTION_OPENSSL,
+        )
     manifest = _manifest(plugin_dir)
     shared_dir = shared_dir or _default_shared_dir(workspace)
     shared_dir.mkdir(parents=True, exist_ok=True)
@@ -915,6 +1395,68 @@ def install(
                 "approvalPublicKeySha256": str(approval_policy["publicKeySha256"]),
             }
         )
+    if github_receipt_policy is not None:
+        record["githubReceiptPolicy"] = github_receipt_policy
+        record.update(
+            {
+                "githubReceiptPolicyPath": str(
+                    github_receipt_policy["policyPath"]
+                ),
+                "githubReceiptPolicySha256": _sha256(
+                    Path(str(github_receipt_policy["policyPath"]))
+                ),
+                "githubReceiptPublicKeyPath": str(
+                    github_receipt_policy["publicKeyPath"]
+                ),
+                "githubReceiptPublicKeySha256": str(
+                    github_receipt_policy["publicKeyFileSha256"]
+                ),
+                "githubReceiptKeyIdSha256": str(
+                    github_receipt_policy["publicKeySha256"]
+                ),
+            }
+        )
+    if test_execution_receipt_policy is not None:
+        record["testExecutionReceiptPolicy"] = test_execution_receipt_policy
+        record.update(
+            {
+                "testExecutionReceiptPolicyPath": str(
+                    test_execution_receipt_policy["policyAttestationPath"]
+                ),
+                "testExecutionReceiptPolicySha256": _sha256(
+                    Path(
+                        str(
+                            test_execution_receipt_policy[
+                                "policyAttestationPath"
+                            ]
+                        )
+                    )
+                ),
+                "testExecutionReceiptPublicKeyPath": str(
+                    test_execution_receipt_policy["publicKeyPath"]
+                ),
+                "testExecutionReceiptPublicKeyFileSha256": str(
+                    test_execution_receipt_policy["publicKeyFileSha256"]
+                ),
+                "testExecutionReceiptReplayScope": TEST_RECEIPT_REPLAY_SCOPE,
+                "testExecutionReceiptReplayLedgerPersistentAcrossPodReplacement": (
+                    TEST_RECEIPT_LEDGER_PERSISTENT_ACROSS_POD_REPLACEMENT
+                ),
+                "testExecutionReceiptLifetimeSeconds": (
+                    TEST_RECEIPT_LIFETIME_SECONDS
+                ),
+                "testExecutionReceiptLedgerSchema": TEST_RECEIPT_LEDGER_SCHEMA,
+                "testExecutionReceiptConsumptionProtocol": (
+                    TEST_RECEIPT_CONSUMPTION_PROTOCOL
+                ),
+                "testExecutionReceiptReservationLeaseSeconds": (
+                    TEST_RECEIPT_RESERVATION_LEASE_SECONDS
+                ),
+                "testExecutionReceiptAuthoritativeReadback": (
+                    TEST_RECEIPT_AUTHORITATIVE_READBACK
+                ),
+            }
+        )
     if _test_hostname is not None:
         record["testHostnameFixture"] = hostname
         record["testRuntimeBindingFixture"] = True
@@ -935,6 +1477,11 @@ def install(
             os.chown(PRODUCTION_INSTALL_MANIFEST, 0, 0)
         for directory in (
             PRODUCTION_RUNTIME_BINDING.parent,
+            *(
+                (PRODUCTION_GITHUB_RECEIPT_PUBLIC_KEY.parent,)
+                if is_locator
+                else ()
+            ),
             PRODUCTION_RUNTIME_BINDING.parent.parent,
         ):
             directory.chmod(0o555)
@@ -1188,6 +1735,204 @@ def _verify_approval_policy(
     return Check("approval-policy", True, "Ed25519 policy and ledger verified")
 
 
+def _verify_github_receipt_policy(
+    workspace: Path,
+    test_hash_policy: Mapping[str, str] | None,
+) -> Check:
+    manifest_path = (
+        PRODUCTION_INSTALL_MANIFEST
+        if test_hash_policy is None
+        else workspace / ".teamharness" / "install-manifest.json"
+    )
+    try:
+        record = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(record, dict):
+            raise ValueError("install manifest must contain an object")
+        runtime_identity = record.get("runtimeIdentity")
+        is_locator = (
+            isinstance(runtime_identity, dict)
+            and runtime_identity.get("runtimeName") == GITHUB_RECEIPT_CONSUMER
+        )
+        policy = record.get("githubReceiptPolicy")
+        if not is_locator:
+            if policy is not None:
+                raise ValueError("non-Locator manifest contains receipt trust")
+            return Check("github-receipt-policy", True, "not applicable to this role")
+        if not isinstance(policy, dict) or set(policy) != {
+            "schemaVersion",
+            "algorithm",
+            "audience",
+            "signatureDomain",
+            "consumerRuntimeName",
+            "publicKeyPath",
+            "publicKeySha256",
+            "publicKeyFileSha256",
+            "policyPath",
+            "opensslPath",
+        }:
+            raise ValueError("Locator receipt policy schema mismatch")
+        production_policy = record.get("sourcePolicy") == "production-pinned"
+        if (
+            policy.get("schemaVersion") != "1.0"
+            or policy.get("algorithm") != "Ed25519"
+            or policy.get("audience") != GITHUB_RECEIPT_AUDIENCE
+            or policy.get("signatureDomain") != GITHUB_RECEIPT_SIGNATURE_DOMAIN
+            or policy.get("consumerRuntimeName") != GITHUB_RECEIPT_CONSUMER
+            or production_policy
+            and (
+                policy.get("publicKeyPath")
+                != str(PRODUCTION_GITHUB_RECEIPT_PUBLIC_KEY)
+                or policy.get("policyPath")
+                != str(PRODUCTION_GITHUB_RECEIPT_POLICY)
+                or policy.get("opensslPath") != str(PRODUCTION_OPENSSL)
+            )
+        ):
+            raise ValueError("Locator receipt policy constants mismatch")
+        public_key = Path(str(policy.get("publicKeyPath") or ""))
+        policy_path = Path(str(policy.get("policyPath") or ""))
+        openssl_path = Path(str(policy.get("opensslPath") or ""))
+        if (
+            not public_key.is_file()
+            or policy.get("publicKeyFileSha256") != _sha256(public_key)
+            or policy.get("publicKeySha256")
+            != _ed25519_public_key_digest(public_key, openssl_path)
+            or record.get("githubReceiptPolicyPath") != str(policy_path)
+            or record.get("githubReceiptPolicySha256") != _sha256(policy_path)
+            or record.get("githubReceiptPublicKeyPath") != str(public_key)
+            or record.get("githubReceiptPublicKeySha256")
+            != policy.get("publicKeyFileSha256")
+            or record.get("githubReceiptKeyIdSha256")
+            != policy.get("publicKeySha256")
+        ):
+            raise ValueError("Locator receipt public-key binding mismatch")
+        attested = json.loads(policy_path.read_text(encoding="utf-8"))
+        if attested != policy:
+            raise ValueError("external receipt policy and manifest disagree")
+    except (
+        json.JSONDecodeError,
+        OSError,
+        subprocess.SubprocessError,
+        UnicodeError,
+        ValueError,
+    ) as exc:
+        return Check("github-receipt-policy", False, str(exc))
+    return Check(
+        "github-receipt-policy",
+        True,
+        "fixed Ed25519 receipt trust verified",
+    )
+
+
+def _verify_test_execution_receipt_policy(
+    workspace: Path,
+    test_hash_policy: Mapping[str, str] | None,
+) -> Check:
+    manifest_path = (
+        PRODUCTION_INSTALL_MANIFEST
+        if test_hash_policy is None
+        else workspace / ".teamharness" / "install-manifest.json"
+    )
+    try:
+        record = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(record, dict):
+            raise ValueError("install manifest must contain an object")
+        policy = record.get("testExecutionReceiptPolicy")
+        if policy is None and record.get("sourcePolicy") == "test-only":
+            return Check(
+                "test-execution-receipt-policy",
+                True,
+                "not configured in this legacy test-only fixture",
+            )
+        if not isinstance(policy, dict) or set(policy) != TEST_RECEIPT_POLICY_FIELDS:
+            raise ValueError("test execution receipt policy is missing")
+        public_key = Path(str(policy.get("publicKeyPath") or ""))
+        policy_path = Path(str(policy.get("policyAttestationPath") or ""))
+        ledger_path = Path(str(policy.get("replayLedgerPath") or ""))
+        openssl_path = Path(str(policy.get("opensslPath") or ""))
+        if record.get("sourcePolicy") == "production-pinned" and (
+            public_key != PRODUCTION_TEST_RECEIPT_PUBLIC_KEY
+            or policy_path != PRODUCTION_TEST_RECEIPT_POLICY
+            or ledger_path != PRODUCTION_TEST_RECEIPT_LEDGER
+            or openssl_path != PRODUCTION_OPENSSL
+        ):
+            raise ValueError("production test receipt paths are not fixed")
+        if (
+            record.get("testExecutionReceiptPolicyPath") != str(policy_path)
+            or record.get("testExecutionReceiptPolicySha256")
+            != _sha256(policy_path)
+            or record.get("testExecutionReceiptPublicKeyPath")
+            != str(public_key)
+            or record.get("testExecutionReceiptPublicKeyFileSha256")
+            != policy.get("publicKeyFileSha256")
+            or record.get("testExecutionReceiptReplayScope")
+            != TEST_RECEIPT_REPLAY_SCOPE
+            or record.get(
+                "testExecutionReceiptReplayLedgerPersistentAcrossPodReplacement"
+            )
+            is not TEST_RECEIPT_LEDGER_PERSISTENT_ACROSS_POD_REPLACEMENT
+            or record.get("testExecutionReceiptLifetimeSeconds")
+            != TEST_RECEIPT_LIFETIME_SECONDS
+            or record.get("testExecutionReceiptLedgerSchema")
+            != TEST_RECEIPT_LEDGER_SCHEMA
+            or record.get("testExecutionReceiptConsumptionProtocol")
+            != TEST_RECEIPT_CONSUMPTION_PROTOCOL
+            or record.get("testExecutionReceiptReservationLeaseSeconds")
+            != TEST_RECEIPT_RESERVATION_LEASE_SECONDS
+            or record.get("testExecutionReceiptAuthoritativeReadback")
+            != TEST_RECEIPT_AUTHORITATIVE_READBACK
+            or policy.get("schemaVersion") != "1.0"
+            or policy.get("algorithm") != "Ed25519"
+            or policy.get("audience") != TEST_RECEIPT_AUDIENCE
+            or policy.get("issuer") != TEST_RECEIPT_ISSUER
+            or policy.get("signatureDomain") != TEST_RECEIPT_SCHEMA
+            or policy.get("maxReceiptLifetimeSeconds")
+            != TEST_RECEIPT_LIFETIME_SECONDS
+            or policy.get("replayScope") != TEST_RECEIPT_REPLAY_SCOPE
+            or policy.get("replayLedgerPersistentAcrossPodReplacement")
+            is not TEST_RECEIPT_LEDGER_PERSISTENT_ACROSS_POD_REPLACEMENT
+            or policy.get("receiptLifetimeSeconds")
+            != TEST_RECEIPT_LIFETIME_SECONDS
+            or not isinstance(policy.get("remainingThreat"), str)
+            or "pod replacement" not in policy["remainingThreat"].lower()
+            or "120" not in policy["remainingThreat"]
+            or policy.get("publicKeyFileSha256") != _sha256(public_key)
+            or policy.get("publicKeySha256")
+            != _ed25519_public_key_digest(public_key, openssl_path)
+            or json.loads(policy_path.read_text(encoding="utf-8")) != policy
+        ):
+            raise ValueError("test receipt manifest or public-key digest mismatch")
+        _validate_test_receipt_ledger(ledger_path)
+        if record.get("sourcePolicy") == "production-pinned":
+            key_metadata = public_key.stat()
+            policy_metadata = policy_path.stat()
+            ledger_metadata = ledger_path.stat()
+            if (
+                key_metadata.st_uid != 0
+                or key_metadata.st_gid != 0
+                or stat.S_IMODE(key_metadata.st_mode) & 0o022
+                or policy_metadata.st_uid != 0
+                or policy_metadata.st_gid != 0
+                or stat.S_IMODE(policy_metadata.st_mode) & 0o022
+                or ledger_metadata.st_uid != 0
+                or ledger_metadata.st_gid != 0
+                or stat.S_IMODE(ledger_metadata.st_mode) != 0o600
+            ):
+                raise ValueError("test receipt file ownership or mode is invalid")
+    except (
+        json.JSONDecodeError,
+        OSError,
+        subprocess.SubprocessError,
+        UnicodeError,
+        ValueError,
+    ) as exc:
+        return Check("test-execution-receipt-policy", False, str(exc))
+    return Check(
+        "test-execution-receipt-policy",
+        True,
+        "public verifier policy and 0600 replay ledger verified",
+    )
+
+
 def verify(
     workspace: Path,
     role: str,
@@ -1199,6 +1944,10 @@ def verify(
         raise ValueError(f"unsupported role: {role}")
     checks = _verify_manifest(workspace, role, _test_hash_policy)
     checks.append(_verify_approval_policy(workspace, role, _test_hash_policy))
+    checks.append(_verify_github_receipt_policy(workspace, _test_hash_policy))
+    checks.append(
+        _verify_test_execution_receipt_policy(workspace, _test_hash_policy)
+    )
     agents_path = workspace / "AGENTS.md"
     agents_error = ""
     try:
@@ -1352,6 +2101,9 @@ def _parser() -> argparse.ArgumentParser:
     install_parser.add_argument("--runtime-binding", type=Path, required=True)
     install_parser.add_argument("--approval-public-key", type=Path)
     install_parser.add_argument("--approval-domain")
+    install_parser.add_argument("--github-receipt-public-key", type=Path)
+    install_parser.add_argument("--test-receipt-public-key", type=Path)
+    install_parser.add_argument("--test-receipt-policy", type=Path)
     install_parser.add_argument("--shared-dir", type=Path)
     install_parser.add_argument("--replace", action="store_true")
     verify_parser = subparsers.add_parser("verify")
@@ -1373,6 +2125,21 @@ def main() -> int:
                 args.approval_public_key.resolve() if args.approval_public_key else None
             ),
             approval_domain=args.approval_domain,
+            github_receipt_public_key=(
+                args.github_receipt_public_key.resolve()
+                if args.github_receipt_public_key
+                else None
+            ),
+            test_receipt_public_key=(
+                args.test_receipt_public_key.resolve()
+                if args.test_receipt_public_key
+                else None
+            ),
+            test_receipt_policy=(
+                args.test_receipt_policy.resolve()
+                if args.test_receipt_policy
+                else None
+            ),
             shared_dir=args.shared_dir.resolve() if args.shared_dir else None,
             replace=args.replace,
         )

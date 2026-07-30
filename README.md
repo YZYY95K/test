@@ -1,7 +1,7 @@
 # DevFlow
 
 DevFlow is an auditable multi-agent system for resolving software issues from
-intake to verified, PR-ready evidence. It is built for the **Agent Infra** track of
+intake to verified candidate evidence. It is built for the **Agent Infra** track of
 the Global Open-source AI Challenge and maps its domain agents onto the
 [AgentTeams](https://github.com/agentscope-ai/AgentTeams) Manager–Team–Worker
 runtime.
@@ -10,9 +10,10 @@ The project is intentionally a controlled workflow rather than an unrestricted
 agent swarm:
 
 ```text
-Issue → Triage → Locate → Code → Test → Review → Approval / PR
-                    ↑        │       │
-                    └────────┴───────┘ feedback loop
+Issue → Triage → GitHub evidence → Locate → Code → Test → Review
+                                              ↑       │       │
+                                              └───────┴───────┘ retry via Leader
+Review → verified candidate / T4-T5 external approval pause
 ```
 
 Every stage has a structured input/output contract, explicit failure behavior,
@@ -26,14 +27,28 @@ approval.
 - AST-aware code indexing and an experience store backed by ChromaDB.
 - OpenAI-compatible LLM client with Pydantic response validation.
 - Default-deny MCP boundaries that authorize the exact Agent + active Skill,
-  validate arguments, require digest-bound approval for dangerous operations,
-  and write hash-chained audit evidence.
+  validate arguments and write hash-chained audit evidence. The current
+  AgentTeams profile grants no repository write, merge, deploy, or rollback.
 - Structured logs, batched OTLP/gRPC trace export, and a loopback-only
   Prometheus metrics endpoint.
-- Five-tool CI/CD MCP with disposable test execution, coverage evidence,
-  digest-approved rollback, and full hash-chain audit verification.
-- Short-lived credential capability handles that keep provider secrets inside
-  trusted adapters.
+- Tester-only AgentTeams CI/CD MCP exposing exactly one policy-owned
+  `run_tests` action with immutable-revision and acknowledged-task binding;
+  no Agent supplies commands, executable paths, suites, or repository roots.
+  The locally tested candidate CI service is designed to sign a short-lived
+  Ed25519 execution receipt. TeamHarness verifies the fixed public key and full
+  result binding before Leader acceptance. Within the active Leader Pod
+  incarnation, an exact retry carrying the same JTI and the same accept
+  request/result binding returns the committed result idempotently; a
+  conflicting binding is rejected, and an uncertain authoritative state stays
+  `pending` and fails closed. The ledger does not survive Pod replacement, and
+  receipts expire after 120 seconds.
+  The deployable candidate is explicitly limited to one image-fixed clean
+  repository and two fixed finals demo assignments; it is not yet a live,
+  arbitrary AgentTeams task projection.
+- A locally tested credential-broker path whose short-lived capability handles
+  keep the mapped provider secret inside the trusted adapter. This is not a
+  claim that every current OpenClaw Worker workspace is free of credential or
+  MCP consumer material.
 - Credential-free offline demo that applies a real candidate patch in a
   temporary repository, executes a real regression test, reviews the result,
   and writes a JSON evidence report plus a durable SQLite route ledger whose
@@ -42,8 +57,10 @@ approval.
   only each role's self-contained, versioned Skill set, with
   typed contracts, deterministic validators, UI metadata, examples, and
   release/rollback policy.
-- Paired GLM behavior evaluation that compares each Skill against a no-Skill
-  baseline on positive and adversarial routing cases.
+- Historical paired GLM behavior evaluation for six earlier Skills against a
+  no-Skill baseline on positive and adversarial routing cases. The current
+  seven-Skill version has 14 structural behavior cases and still requires a
+  fresh external-model rerun before claiming seven-Skill behavioral coverage.
 - Integrity-checked `HandoffEnvelope` collaboration with versioned artifacts,
   explicit consumer/Skill ownership, parent-causal result binding, transport
   status semantics, idempotency keys, and SHA-256.
@@ -92,7 +109,7 @@ content, metadata, or vectors fail closed.
 
 ## AgentTeams deployment
 
-The live manifest targets the exact AgentTeams `v1.2.0-beta.1`
+The checked-in deployment manifest targets the exact AgentTeams `v1.2.0-beta.1`
 `agentteams.io/v1beta1` contract, not a floating `main` branch. The upstream
 tag, commit and Team-CRD digest are recorded in
 [`agentteams/upstream.lock.yaml`](agentteams/upstream.lock.yaml); the current
@@ -113,14 +130,14 @@ Service. The versioned ConfigMap is made immutable before any Pod can consume
 it; changing package bytes therefore requires a new release version.
 
 ```bash
-kubectl create configmap devflow-worker-packages-v2-0-0 -n agentteams-system \
-  --from-file=dist/devflow-lead-v2.0.0.zip \
-  --from-file=dist/devflow-triage-v2.0.0.zip \
-  --from-file=dist/devflow-locator-v2.0.0.zip \
-  --from-file=dist/devflow-coder-v2.0.0.zip \
-  --from-file=dist/devflow-tester-v2.0.0.zip \
-  --from-file=dist/devflow-reviewer-v2.0.0.zip
-kubectl patch configmap devflow-worker-packages-v2-0-0 \
+kubectl create configmap devflow-worker-packages-v2-1-0 -n agentteams-system \
+  --from-file=dist/devflow-lead-v2.1.0.zip \
+  --from-file=dist/devflow-triage-v2.1.0.zip \
+  --from-file=dist/devflow-locator-v2.1.0.zip \
+  --from-file=dist/devflow-coder-v2.1.0.zip \
+  --from-file=dist/devflow-tester-v2.1.0.zip \
+  --from-file=dist/devflow-reviewer-v2.1.0.zip
+kubectl patch configmap devflow-worker-packages-v2-1-0 \
   -n agentteams-system --type=merge -p '{"immutable":true}'
 kubectl apply -n agentteams-system -f agentteams/package-server.yaml
 kubectl rollout status -n agentteams-system deployment/devflow-package
@@ -128,9 +145,12 @@ kubectl apply -n agentteams-system -f agentteams/team.yaml
 ```
 
 The manifest creates one Team Leader and five workers. AgentTeams supplies the
-Matrix room topology, task delegation, heartbeat/state reconciliation, shared
-storage, and credential isolation. DevFlow supplies the software-engineering
-roles, reusable Skills, schemas, gates, and evidence.
+Matrix room topology, task delegation, heartbeat/state reconciliation, and
+shared storage. DevFlow supplies the software-engineering roles, reusable
+Skills, schemas, gates, and evidence. Credential boundaries are integration-
+specific: the historical scoped GitHub path kept the upstream provider token
+behind its Broker, while the current OpenClaw audit still reports workspace
+credential/configuration material and `strongBoundaryEnforceable=false`.
 
 ## Project layout
 
@@ -141,7 +161,7 @@ docs/              research notes and competition scorecard
 examples/          deterministic regression scenario
 skills/            distributable SKILL.md specifications
 src/devflow/       runtime, agents, models, RAG, CLI
-tests/             unit and end-to-end tests
+tests/             unit, contract, and local integration tests
 ```
 
 ## Verification
@@ -169,8 +189,9 @@ The executable responsibility matrix and MCP trust model are documented in
 The latest model-run evidence is recorded in
 [GLM-5.2 Skill behavior evidence](docs/evidence/SKILL_BEHAVIOR_GLM52.md).
 Executable provider boundaries are mapped in
-[Infrastructure and trust boundaries](docs/INFRASTRUCTURE.md). Current server,
-AgentTeams, MCP, failure-path, and artifact evidence is consolidated in
+[Infrastructure and trust boundaries](docs/INFRASTRUCTURE.md). Historical
+server/AgentTeams evidence, current local MCP and failure-path evidence, and
+their remaining gaps are consolidated in
 [AgentTeams live evidence](docs/evidence/AGENTTEAMS_LIVE_20260727.md); the
 quantitative evaluation design is in [Repository benchmark](docs/BENCHMARK.md).
 Finals-facing source material lives under `docs/finals/`; rendered PPT/PDF files
@@ -181,9 +202,13 @@ dirty worktree or the historical preliminary ZIP as a finals release.
 
 ## Security
 
-- Workers receive gateway-scoped consumer credentials, not raw provider keys.
+- On the scoped GitHub path, Workers receive a gateway consumer credential, not
+  the upstream GitHub token. This does not establish that all Worker workspaces
+  contain no credential/configuration material.
 - Generated paths must remain repository-relative.
-- Secret-shaped output and dangerous execution patterns are blocked.
+- Managed DevFlow validators and MCP paths reject their configured
+  secret-shaped output and dangerous execution patterns; this is not a global
+  hostile-runtime data-loss-prevention guarantee.
 - Test execution occurs in a temporary copy in the offline demo.
 - CI failure and high/critical findings block promotion.
 - T4/T5 issues pause until a trusted external authority signs the exact

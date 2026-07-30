@@ -85,6 +85,7 @@ def validate_mcp_alignment(
         return [f"unable to load MCP policy: {exc}"]
     granted: dict[str, set[str]] = {name: set() for name in catalog}
     grant_agents: dict[tuple[str, str], set[str]] = {}
+    unknown_grants: set[tuple[str, str]] = set()
     servers = raw.get("servers", {})
     if not isinstance(servers, dict):
         return ["MCP policy servers must be a mapping"]
@@ -101,8 +102,13 @@ def validate_mcp_alignment(
                 if skill_name in granted:
                     granted[skill_name].add(identifier)
                     grant_agents[(skill_name, identifier)] = agents
+                else:
+                    unknown_grants.add((skill_name, identifier))
 
-    violations: list[str] = []
+    violations: list[str] = [
+        f"unknown MCP Skill grant {skill}: {identifier}"
+        for skill, identifier in sorted(unknown_grants)
+    ]
     for name, contract in catalog.items():
         expected = set(contract.mcp_tools)
         missing = expected - granted[name]

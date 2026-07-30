@@ -1,15 +1,18 @@
 # Agent Identity 与职责边界附录
 
+本附录描述职责合同。运行证据另按本地已验证、候选/部署预检、历史现场和当前
+版本待服务器实证四层陈列；“允许调用”不等于当前集群已完成该调用。
+
 ## 六个自主 Agent
 
 | 身份 | 唯一职责 | 所属 Skill | 允许产物 / 工具面 | 明确禁止 |
 |---|---|---|---|---|
-| TeamLeader | 分解、DAG、状态、冲突仲裁、失败重排与暂停 | 无领域 Skill；编排能力不作为普通 Skill 下发 | TeamHarness 的房间、项目、任务、文件同步与结果验收控制面 | 写代码、跑测试、代做审查、伪造 Worker 结果、代替人工批准 |
+| TeamLeader | 分解、DAG、状态、冲突仲裁、失败重排与暂停 | 无领域 Skill；编排是 AgentTeams/TeamHarness 控制面能力 | TeamHarness 的房间、项目、任务、文件同步与结果验收控制面 | 写代码、跑测试、代做审查、创建/评审/合并 PR、部署、回滚、伪造 Worker 结果或代替人工批准 |
 | TriageAgent | 分级、去重、优先级 | `issue-classifier` | `ClassifiedIssue`；TeamHarness `ack_task` / `submit_task` | 读写仓库、生成补丁、跳过去重 |
 | LocatorAgent | 固定 revision 的只读根因与影响分析 | `code-root-cause`、`github-evidence` | `LocatedContext`；经任务范围能力授权的只读 GitHub 证据 | 修改/执行代码、扩大仓库/版本/路径范围、把能力凭证写入消息或产物 |
 | CoderAgent | 最小候选修复 | `patch-generator` | 结构化 `PatchCandidate` | 写 canonical checkout、跑测试、推送、合并、自审 |
-| TesterAgent | 一次性副本验证、基线与回归判定 | `test-runner` | `TestEvidence`；仓库内已实现并本地测试的服务器预注册 CI/CD 测试/结果/覆盖率工具 | 接受 Agent 自带 shell、修改源码或测试、批准补丁 |
-| ReviewerAgent | 正确性与安全审查、风险识别/阻断升级、经验提炼 | `pr-reviewer`、`experience-distiller` | 审查决定、PR-ready 证据、脱敏经验；TeamHarness `ack_task` / `submit_task` | 合并、部署、回滚、签发人工批准、绕过高危发现；当前 AgentTeams 部署无 GitHub 写能力 |
+| TesterAgent | 一次性副本验证、基线与回归判定 | `test-runner` | `TestEvidence`；本地 portable 副本测试及候选独立 CI Pod 的固定策略、基线/候选结果和短时 Ed25519 执行回执合同；独立 Pod 尚待服务器实跑 | 接受 Agent 自带 shell/路径/测试范围、修改源码或测试、伪报真实用例数/覆盖率、批准补丁；缺失、过期、错签或冲突绑定回执必须失败；完全相同 JTI/接受请求/结果绑定应幂等读回，不确定权威状态保持 `pending` 并 fail closed |
+| ReviewerAgent | 正确性与安全审查、风险识别/阻断升级、经验提炼 | `pr-reviewer`、`experience-distiller` | candidate-ready 审查决定、脱敏经验；TeamHarness `ack_task` / `submit_task` | 创建/评审/批准/合并 PR、部署、回滚、签发人工批准或绕过高危发现；无 MCP grant，`pr_url` 必须为 `null` |
 
 HumanReviewer 是六个自主 Agent 之外的外部授权主体。其职责是对 T4/T5 的
 精确动作、目标、参数摘要和有效期签名批准或拒绝；普通聊天文字和 Agent

@@ -1,6 +1,6 @@
 schema_version: "1.0"
 name: experience-distiller
-version: "4.0.0"
+version: "5.0.0"
 owner: ReviewerAgent
 intent: Convert a cryptographically digest-bound, clean, approved run into safe reusable experience.
 invoke_when:
@@ -45,7 +45,7 @@ handoffs:
     artifact_type: ExperiencePattern
     event: experience.completed
   - "on": blocked
-    consumer: HumanReviewer
+    consumer: TeamLeader
     artifact_type: SkillFailure
     event: experience.quarantined
 failures:
@@ -65,7 +65,7 @@ failures:
     retryable: false
     max_attempts: 0
     action: Quarantine the candidate pattern for human inspection.
-    route_to: HumanReviewer
+    route_to: TeamLeader
     event: experience.quarantined
   - code: STORE_UNAVAILABLE
     retryable: true
@@ -86,8 +86,14 @@ verification:
   - id: dedup
     requirement: Similar patterns update provenance rather than duplicate content.
     evidence: Similarity result and chosen create-or-update operation.
+  - id: durable-completion
+    requirement: A successful ExperiencePattern is digest-bound to the exact VerifiedRunBundle and has stored=true only after durable store acknowledgement; stored=false is a failed invocation.
+    evidence: Source-bound provenance fields, deterministic pattern ID, store receipt, standalone validator result, and TeamHarness Skill validation attestation.
+  - id: failure-contract
+    requirement: Storage, provenance, and redaction failures emit only SkillFailure 1.0 to TeamLeader; no Worker contacts a human directly.
+    evidence: Failed HandoffEnvelope, exact source digest, declared failure code and retry budget, and Leader-owned escalation record.
 release:
   compatibility: AgentTeams v1beta1 and HandoffEnvelope 1.x.
-  change_policy: v4 excludes integrity-unattested green runs in addition to failed/rejected runs; any relaxation requires a major version.
+  change_policy: v5 requires durable storage acknowledgement, source-bound output validation, TeamLeader-only failure routing, and SkillFailure 1.0; any relaxation requires a major version.
   rollback: Restore the prior signed bundle and quarantine records from the reverted version.
 examples_ref: references/examples.md

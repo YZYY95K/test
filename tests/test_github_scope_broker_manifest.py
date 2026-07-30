@@ -52,6 +52,7 @@ def test_manifest_contains_no_secret_object_or_secret_value() -> None:
     assert "DEVFLOW_GITHUB_BROKER_ISSUER_TOKEN" not in text
     assert "github-token" in text
     assert "hmac-key" in text
+    assert "receipt-ed25519.pem" in text
 
 
 def test_issuer_and_content_have_disjoint_credentials_and_identities() -> None:
@@ -97,13 +98,11 @@ def test_issuer_and_content_have_disjoint_credentials_and_identities() -> None:
     ]
 
 
-def test_both_workloads_are_non_root_read_only_and_resource_bounded() -> None:
+def test_workloads_are_read_only_capability_free_and_resource_bounded() -> None:
     for component in ("scope-issuer", "content"):
         pod_spec, container = _container(component)
         pod_security = pod_spec["securityContext"]
         container_security = container["securityContext"]
-        assert pod_security["runAsNonRoot"] is True
-        assert pod_security["runAsUser"] != 0
         assert pod_security["seccompProfile"] == {"type": "RuntimeDefault"}
         assert container_security["readOnlyRootFilesystem"] is True
         assert container_security["allowPrivilegeEscalation"] is False
@@ -111,6 +110,60 @@ def test_both_workloads_are_non_root_read_only_and_resource_bounded() -> None:
         assert set(container["resources"]) == {"requests", "limits"}
         assert container["livenessProbe"]["httpGet"]["path"] == "/healthz"
         assert container["readinessProbe"]["httpGet"]["path"] == "/readyz"
+    issuer_spec, issuer = _container("scope-issuer")
+    content_spec, content = _container("content")
+    assert issuer_spec["securityContext"]["runAsNonRoot"] is True
+    assert issuer["securityContext"]["runAsUser"] == 65532
+    # Content alone is root because its externally created Secret is 0400.
+    # It remains capability-free, read-only, token-free, and single-process.
+    assert content_spec["securityContext"]["runAsNonRoot"] is False
+    assert content_spec["securityContext"]["runAsUser"] == 0
+    assert content["securityContext"]["runAsUser"] == 0
+    assert content_spec["automountServiceAccountToken"] is False
+
+
+def test_receipt_private_key_is_root_only_and_content_plane_only() -> None:
+    issuer_spec, issuer = _container("scope-issuer")
+    content_spec, content = _container("content")
+    assert all(
+        mount.get("name") != "receipt-signing-key"
+        for mount in issuer.get("volumeMounts", [])
+    )
+    assert all(volume["name"] != "receipt-signing-key" for volume in issuer_spec["volumes"])
+    key_mount = next(
+        mount
+        for mount in content["volumeMounts"]
+        if mount["name"] == "receipt-signing-key"
+    )
+    assert key_mount == {
+        "name": "receipt-signing-key",
+        "mountPath": (
+            "/var/run/secrets/devflow-github-receipt/receipt-ed25519.pem"
+        ),
+        "subPath": "receipt-ed25519.pem",
+        "readOnly": True,
+    }
+    key_volume = next(
+        volume
+        for volume in content_spec["volumes"]
+        if volume["name"] == "receipt-signing-key"
+    )
+    assert key_volume["secret"] == {
+        "secretName": "devflow-github-receipt-signing",
+        "defaultMode": 0o400,
+        "items": [
+            {
+                "key": "receipt-ed25519.pem",
+                "path": "receipt-ed25519.pem",
+            }
+        ],
+    }
+    tmp_volume = next(
+        volume
+        for volume in content_spec["volumes"]
+        if volume["name"] == "receipt-signing-tmp"
+    )
+    assert tmp_volume["emptyDir"] == {"medium": "Memory", "sizeLimit": "4Mi"}
 
 
 def test_network_policies_split_leader_and_higress_ingress() -> None:
@@ -155,13 +208,15 @@ def test_network_policies_split_leader_and_higress_ingress() -> None:
     ]
 
 
-def test_container_base_is_digest_pinned_and_has_no_package_install() -> None:
+def test_container_base_is_digest_pinned_with_only_openssl_dependency() -> None:
     text = CONTAINERFILE.read_text(encoding="utf-8")
     first_line = text.splitlines()[0]
     assert re.fullmatch(
         r"FROM python:3\.12\.11-slim-bookworm@sha256:[0-9a-f]{64}",
         first_line,
     )
-    assert "apt-get" not in text
+    assert text.count("apt-get install") == 1
+    assert "apt-get install --yes --no-install-recommends openssl" in text
+    assert "rm -rf /var/lib/apt/lists/*" in text
     assert "pip install" not in text
-    assert "USER 65532:65532" in text
+    assert "ENTRYPOINT [\"python3\", \"-S\"" in text

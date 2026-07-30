@@ -105,7 +105,8 @@ as remote-deployment evidence.
 
 ## Host verification
 
-After the final evaluation, the deployed source passed on the same host:
+After the final evaluation, the evaluated checkout passed on the same local
+host; this was not a remote deployment:
 
 - 19 tests;
 - Ruff with no findings;
@@ -114,12 +115,15 @@ After the final evaluation, the deployed source passed on the same host:
 - all 14 behavior contract schemas valid;
 - AgentTeams worker package build.
 
-The host deployment metadata and API-key environment file are both mode 600.
-The deployment metadata binds the source commit and final report digest.
+The local evaluation metadata and API-key environment file were both mode 600.
+The evaluation metadata binds the source commit and final report digest.
 
 ## Limits
 
 These cases are curated and small, and the baseline varies between model runs.
+They cover the six Skills present at source commit
+`ed1e0be92c3e546929c3c377ff30ca515b25b4b2`; they do not cover the current
+seventh Skill or current v2.1.0 packages.
 The next evidence tier is repeated trials on blinded, pinned repositories with
 token/cost measurement and independent human review of generated patches. The
 paired gate remains useful as a regression and boundary-safety test, but should

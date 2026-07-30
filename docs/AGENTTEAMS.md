@@ -1,12 +1,20 @@
 # AgentTeams mapping
 
-The currently proven deployment targets the exact AgentTeams
-`v1.2.0-beta.1` `agentteams.io/v1beta1` contract and uses a native `Team`
-instead of pretending that an internal Python event bus is the production
-multi-agent transport. `agentteams/upstream.lock.yaml` binds the official tag,
-commit and Team-CRD digest, and `scripts/verify_agentteams_upstream.py` verifies
-them. This release's inline `leader/workers` compatibility path is not confused
-with current upstream `workerMembers`; that API requires a separate migration.
+The historical 2026-07-27 live deployment targeted the exact AgentTeams
+`v1.2.0-beta.1` `agentteams.io/v1beta1` contract and used a native `Team`
+instead of treating the internal Python event bus as production multi-agent
+transport. The current DevFlow `2.1.0` work is an unreleased, locally tested
+candidate and has not inherited that deployment evidence. The checked-in
+`agentteams/upstream.lock.yaml` binds the official tag, commit and Team-CRD
+digest, and `scripts/verify_agentteams_upstream.py` verifies them. The inline
+`leader/workers` compatibility path is not confused with current upstream
+`workerMembers`; that API requires a separate migration.
+
+Evidence terms in this document are strict: **local verification** means a
+repository test or deterministic local run; **candidate/preflight** means
+deployable source or desired-state readback without the business flow;
+**historical live** means the dated 2026-07-27/28 cluster record; and **pending
+server evidence** means the current release has not yet produced that result.
 
 | AgentTeams concept | DevFlow role |
 |---|---|
@@ -17,9 +25,9 @@ with current upstream `workerMembers`; that API requires a separate migration.
 | Worker Room | Focused task context and feedback |
 | shared/projects | canonical issue plan and lifecycle |
 | shared/tasks | located context, patch, tests, review evidence |
-| shared/knowledge | distilled post-merge experience |
-| Higress consumer credentials | scoped GitHub/LLM/CI access without raw keys |
-| Human Team Admin | T4/T5 approval, intervention, rollback authorization |
+| shared/knowledge | distilled experience from a verified terminal candidate |
+| Higress consumer credentials | currently scoped GitHub read access without raw keys; LLM/CI are separate, unproven paths |
+| Human Team Admin | T4/T5 approval and intervention; the current release has no rollback authorization |
 
 ## Deployment
 
@@ -30,17 +38,20 @@ with current upstream `workerMembers`; that API requires a separate migration.
    python scripts/build_agentteams_package.py
    ```
 
-   Version `2.0.0` deliberately gives each runtime only its owned DevFlow
+   Role-package version `2.1.0` deliberately gives each runtime only its owned DevFlow
    Skills; built-in AgentTeams Skills are unaffected:
 
-   | Runtime | DevFlow Skills | SHA-256 |
+   | Runtime | DevFlow Skills | Archive SHA-256 |
    |---|---|---|
-   | `devflow-lead` | none | `c082670199dcefcbbcaf6afd888c364999ccca5a8cd243979c399238253d97f2` |
-   | `devflow-triage` | `issue-classifier` | `7c14a62a0dce3c774b7e0e4fcff969ed9ba8fdcabc4356ef7a080c47dcd51bca` |
-   | `devflow-locator` | `code-root-cause`, `github-evidence` | `b0e9422d16202cdea690deeef3f7629f5b400333b00fbd329d61c6f9da521019` |
-   | `devflow-coder` | `patch-generator` | `23469bd358c0044f20877bb7035734d724742ad8dde34e35ce11035cd502e643` |
-   | `devflow-tester` | `test-runner` | `011524dc5f839fb9157da82a9a30bdd1debb31e58d9371fda37c0f67a9e1ac7e` |
-   | `devflow-reviewer` | `pr-reviewer`, `experience-distiller` | `c25b44efee849740f92390d4e9de2773ee6a6392ef0e3301217aa1563994702a` |
+   | `devflow-lead` | none | `7a55f3a8fd8bc9490b03f1d99cea39f420f31a69cf84d19fb6b54851f36c0228` |
+   | `devflow-triage` | `issue-classifier` | `b6efdc4d7ca718682c059508054328a314d51f405a2cd463bdf37c7327752adf` |
+   | `devflow-locator` | `code-root-cause`, `github-evidence` | `1aa3cf8a61fec15736bdf3480371e1fffe1f568aada0d899a0420fa761305d7a` |
+   | `devflow-coder` | `patch-generator` | `118836944dc2b244a1b2e05db61c351c7b1b9fe3188571db1ccc8e0b67c8f8ba` |
+   | `devflow-tester` | `test-runner` | `93ce45aaaa501b4c9c9696b1bbd70b6313782fd5ddc7cfe9956c7866a4f2e7a2` |
+   | `devflow-reviewer` | `pr-reviewer`, `experience-distiller` | `bb9e194aaab7eebb007b96ad2120616a3bc437c072e44b4c2eac5e07d57bbc08` |
+
+   Version `2.0.0` remains a distinct immutable rollback artifact; it is not
+   overwritten or served under the `2.1.0` ConfigMap name.
 
 3. Preflight the source-attested archives, create the immutable ConfigMap,
    and publish it on the private namespace-local package service:
@@ -55,7 +66,7 @@ with current upstream `workerMembers`; that API requires a separate migration.
    The Service is `ClusterIP` only, the container has no service-account token,
    runs non-root with a read-only filesystem, and accepts traffic only from the
    `agentteams-system` namespace. It must not be exposed through Higress.
-   The package ConfigMap is `devflow-worker-packages-v2-0-0`. Package object
+   The package ConfigMap is `devflow-worker-packages-v2-1-0`. Package object
    names are versioned so a controller cannot silently reuse a previously
    downloaded ZIP after a Skill bundle upgrade. Reusing the version with
    different bytes fails; publish a new version instead.
@@ -74,11 +85,13 @@ on server loopback. Reach it through an SSH local-forward; do not open port
 18080 in the public firewall and do not expose MinIO, Tuwunel, the controller,
 or the Higress console.
 
-The hardened live manifest exposes a dedicated gateway endpoint only to
-`devflow-locator`, and that `devflow-github-readonly` endpoint contains only
-`get_file_contents`. Its custom Skill applies a narrower local scope authorizer
-before every call. Reviewer, Coder, and all other Workers receive no GitHub MCP
-capability. Configure and verify this boundary with
+The current checked-in candidate manifest exposes a dedicated gateway endpoint
+only to `devflow-locator`, and that `devflow-github-readonly` endpoint contains
+only `get_file_contents`. Its custom Skill applies a narrower local scope
+authorizer before every call. The historical live deployment verified the
+earlier fixed-scope GitHub boundary; the current v2 receipt signer/path has not
+been redeployed. In the candidate manifest Reviewer, Coder, and all other
+Workers receive no GitHub MCP capability. Configure and verify this boundary with
 `scripts/configure_higress_github_readonly.py`; see
 [`HIGRESS_GITHUB_READONLY.md`](HIGRESS_GITHUB_READONLY.md) for the pinned API
 contract, credential handling, and fail-closed runbook.
@@ -238,6 +251,8 @@ python scripts/teamharness_openclaw.py install \
   --role worker \
   --runtime-config /root/hiclaw-fs/agents/devflow-worker/runtime/runtime.yaml \
   --runtime-binding /run/devflow-policy/runtime-binding.json \
+  --test-receipt-public-key /run/devflow-policy/test-receipt-ed25519.pub \
+  --test-receipt-policy /run/devflow-policy/test-receipt-policy.json \
   --replace
 
 python scripts/teamharness_openclaw.py verify \
@@ -252,8 +267,18 @@ that post-rebuild operation consistently across all Pods:
 python scripts/reconcile_teamharness_openclaw.py \
   --agentteams-repo /opt/AgentTeams-src \
   --approval-public-key /operator-policy/approval-ed25519.pub \
+  --github-receipt-public-key /operator-policy/github-receipt-ed25519.pub \
+  --test-receipt-public-key /operator-build/receipt-ed25519.pub \
+  --test-receipt-policy /operator-build/test-receipt-policy.json \
   --approval-domain <deployment-unique-64-lowercase-hex>
 ```
+
+The Tester receipt public key and canonical policy in this command must be
+copied from the exact immutable Tester CI image digest as described below.
+Therefore the release order is: build and push that image, extract its public
+trust files, reconcile TeamHarness on all six role Pods, and only then apply
+the isolated CI Deployment. The CI signing private key is never an input to
+this command.
 
 It requires the AgentTeams checkout at commit
 `78d0ceda336befa6e62bf89fc1a6b08b965e128d`, a clean tracked
@@ -262,11 +287,16 @@ copying anything, it requires exactly one active, Running and Ready OpenClaw
 Pod for each of the Leader and five Worker roles. It preflights all six
 workspaces, stages only tracked upstream plugin files plus the two DevFlow
 overlay files, verifies every staged hash, installs Leader as `leader` and all
-others as `worker`, passes the public key and public deployment domain only to
-Leader installation, and requires the adapter's final verification in every
-Pod. The Ed25519 private
-key must remain with the external human approver and must never be copied to
-the repository, package, host staging tree, or Pod. Any missing, duplicate,
+others as `worker`, passes approval trust only to Leader, GitHub receipt trust
+only to Locator, and the public Tester execution-receipt key plus exact policy
+to all six roles. Every role installs those Tester verifier files at fixed
+root-owned paths, creates or preserves a schema-checked `0600` replay ledger,
+records the policy/key paths and SHA-256 values in the production install
+manifest, and must pass the adapter's final verification. The approval private
+key must remain with the external human approver; the Tester receipt private
+key must remain only in the isolated CI Pod's signing Secret. Neither private key may
+be copied to the repository, package, host staging tree, Worker, or evidence
+archive. Any missing, duplicate,
 terminating replacement without a Ready successor,
 unready, unknown, or drifted role/source fails the run.
 
@@ -304,10 +334,10 @@ AgentTeams MinIO service, and `/usr/local/bin/mc.bin` must match the recorded
 release version and SHA-256. Every helper invocation creates a private `0700`
 configuration directory, initializes and reads back only the `agentteams`
 alias, and never consults the worker's writable `$HOME/.mc` configuration.
-Before contacting Kubernetes it validates all six `dist/*-v2.0.0.zip` files,
+Before contacting Kubernetes it validates all six `dist/*-v2.1.0.zip` files,
 their sidecars, canonical ZIP and internal manifests, exact per-file hashes,
 the current release source reconstruction, and six version-pinned outer ZIP
-hashes. Changing source while retaining version `2.0.0` therefore fails; a
+hashes. Changing source while retaining version `2.1.0` therefore fails; a
 different release requires a version and pinned-digest update.
 Its JSON result exposes only the fixed known-Skill sets, counts, and
 `needsApply`; it does not return Skill contents, MinIO configuration, or
@@ -355,11 +385,12 @@ release overlay is:
 - `scripts/reconcile_agentteams_role_skills.py`,
   `scripts/reconcile_agentteams_packages.py`,
   `scripts/build_agentteams_package.py`,
+  `scripts/reconcile_agentteams_tester_cicd.py`,
   `scripts/reconcile_agentteams_mcporter_policy.py`, and
   `scripts/reconcile_teamharness_openclaw.py`;
 - `agentteams/worker-package/`;
 - all seven directories under `skills/` named by the fixed policy; and
-- all six `dist/devflow-*-v2.0.0.zip` files and their `.sha256` sidecars.
+- all six `dist/devflow-*-v2.1.0.zip` files and their `.sha256` sidecars.
 
 Keep their repository-relative layout. Package loading reconstructs the
 release from the source root derived from the package reconciler's own path;
@@ -377,6 +408,227 @@ with runtime state; this is not a hostile-root integrity claim. OS-level
 isolation still requires non-root containers, a read-only pinned client and
 policy mount, disabled mount/ptrace capabilities, and a separately role-scoped
 credential broker.
+
+## Isolated Tester CI MCP deployment
+
+`devflow-cicd` is not installed inside the UID 0 Tester Worker. That layout
+would place a test-receipt signing key in the same trust domain as the Agent
+whose claim the key is intended to prove. The finals boundary instead uses a
+separate `devflow-tester-cicd` Deployment and ClusterIP Streamable HTTP MCP.
+Its declared default-deny NetworkPolicy admits port 8080 only from the fixed
+`devflow-swe` / `devflow-tester` / `openclaw` Pod labels. Reconciliation keeps
+object readback separate from CNI behavior: it also requires a successful
+Tester-originated probe and failed probes from the other five current role
+Pods before reporting `cniConnectivityProbed=true`. The Tester
+`mcporter.json` entry contains only the fixed service URL and `transport=http`;
+candidate reconciliation omits that entry from the other five role workspaces.
+
+The operator must create `Secret/devflow-test-receipt-signing` out of band with
+only the `receipt-ed25519.pem` key. The reconciler never creates, gets, copies,
+or prints that Secret. The checked-in Deployment declares a single mount into
+the isolated CI Pod at
+`/var/run/secrets/devflow-test-receipt/receipt-ed25519.pem` with mode `0400`,
+on the `ci-mcp` container only; the assignment init container and Tester Worker
+are declared without the private key. This is desired state, not current live
+mount evidence. The Deployment uses the `Recreate` strategy. Reconciliation scans current Pods (including ephemeral
+containers) and Deployment, StatefulSet, DaemonSet, Job, and CronJob templates;
+it reports only `observedSingleSigningSecretConsumer=true` when the one current
+consumer is the CI signer. This is an observed-state fact, not a Secret mount
+ACL: a principal allowed to create or mutate Pods in the namespace can mount
+the Secret after the check (`secretMountAclEnforced=false`). TeamHarness
+receives only the matching public key and public verification policy. Its
+`0600` replay ledger is Pod-local root filesystem state, not a PVC or MinIO
+object, and does not survive Worker Pod replacement.
+
+The checked-in image recipe is intentionally a fixed finals fixture, not a
+general repository runner. A deterministic public build context contains one
+clean committed DevFlow tree, fixed focused/full pytest argv, the CI server,
+OpenSSL and Bubblewrap. An init container with the same digest-pinned image
+materializes exactly `devflow-demo-focused` and `devflow-demo-full` from
+image-fixed templates into a fresh `emptyDir`, proves the exact Bubblewrap
+namespace command can start, seals the directory, and exits. The main service
+mounts that directory read-only. `/readyz` reports
+`repositoryMode=image-fixed-clean-commit-fixture/v1`,
+`testCommandSource=image-policy-fixed-argv/v1`,
+`assignmentSource=image-fixed-demo-fixture/v1`, and
+`assignmentSourceLiveAgentTeams=false`, and verifies that only those two task
+files exist. This proves the fixed finals flow only. It does **not** claim an
+authenticated projection of arbitrary live AgentTeams assignments; that is a
+separate production controller integration.
+
+Build and extract trust material from the same immutable artifact. The private
+key stays outside the repository and build context throughout:
+
+```bash
+python scripts/build_agentteams_tester_cicd_context.py \
+  --apply \
+  --confirm BUILD_ISOLATED_AGENTTEAMS_TESTER_CICD_CONTEXT \
+  --repository /release/devflow \
+  --receipt-public-key /operator-policy/test-receipt-ed25519.pub \
+  --output /operator-build/tester-cicd-context.tar
+
+docker build --file Containerfile \
+  --tag registry.example/devflow/tester-cicd:finals \
+  - < /operator-build/tester-cicd-context.tar
+docker push registry.example/devflow/tester-cicd:finals
+```
+
+Resolve the registry `RepoDigest`, create (but do not start) a container from
+that exact `name@sha256:...`, and copy these four public files out of it:
+
+```text
+/etc/devflow/agentteams-cicd/policy.json
+/etc/devflow/agentteams-cicd/test-receipt-policy.json
+/etc/devflow/agentteams-cicd/receipt-ed25519.pub
+/etc/devflow/agentteams-cicd/release.json
+```
+
+The `policy-export` build target exists for build-time inspection, but release
+reconciliation must use files copied from the exact pushed image digest, not a
+second rebuild. The image finalizer generates the two policies after Python,
+OpenSSL and Bubblewrap are installed, hashes the exact executables, fixed test
+argv, server and repository manifest, and writes canonical read-only JSON. The
+host reconciler independently validates both policies against the clean Git
+commit before it contacts Kubernetes.
+
+Create the runtime key Secret separately from the private operator path. This
+step is intentionally outside the reconciler and must be performed only on the
+target cluster context:
+
+```bash
+kubectl --namespace agentteams-system create secret generic \
+  devflow-test-receipt-signing \
+  --from-file=receipt-ed25519.pem=/operator-secrets/test-receipt-ed25519.pem \
+  --dry-run=client --output=yaml | kubectl apply --filename=-
+```
+
+Do not place the private key in the repository, container context, ConfigMap,
+command arguments, Agent workspace, or evidence archive. The public key copied
+from the exact image must match the Secret key; `/readyz` fails if it does not.
+
+Run the host reconciler in its default read-only mode first:
+
+```bash
+python scripts/reconcile_agentteams_tester_cicd.py \
+  --image registry.example/devflow/tester-cicd@sha256:<64-hex-image-digest> \
+  --execution-policy /operator-build/policy.json \
+  --receipt-policy /operator-build/test-receipt-policy.json \
+  --receipt-public-key /operator-build/receipt-ed25519.pub
+```
+
+Apply requires the exact confirmation and the same immutable inputs:
+
+```bash
+python scripts/reconcile_agentteams_tester_cicd.py \
+  --apply \
+  --confirm RECONCILE_ISOLATED_AGENTTEAMS_TESTER_CICD \
+  --image registry.example/devflow/tester-cicd@sha256:<64-hex-image-digest> \
+  --execution-policy /operator-build/policy.json \
+  --receipt-policy /operator-build/test-receipt-policy.json \
+  --receipt-public-key /operator-build/receipt-ed25519.pub
+```
+
+Before Kubernetes access, the command requires a completely clean repository,
+a full 40-hex commit, and only tracked regular non-linked files. It builds a
+deterministic archive digest and binds the repository revision, archive/tree
+digests, CI server digest, image digest, execution-policy digest, receipt
+public-key digest, and receipt-policy digest into an immutable release
+ConfigMap and Deployment annotations. It rejects tags, mutable image names,
+symlinks, special files, hard links, index conflicts, and dirty/untracked
+release files.
+
+Post-apply success requires all of these independent readbacks:
+
+- the exact ServiceAccount, Deployment, ClusterIP Service, immutable ConfigMap,
+  and both NetworkPolicies match the desired critical fields;
+- namespace Pod specs show exactly one signing-Secret consumer and exactly one
+  main-container key mount at observation time, with no init, ephemeral, or
+  AgentTeams Worker consumer, while workload-template scans show no second
+  declared consumer;
+- a request originating inside the real Tester Pod reaches `/readyz`, whose
+  public attestation matches every release/trust digest and reports that no
+  credentials are forwarded;
+- a real MCP `initialize` plus `tools/list` exposes exactly `run_tests` with
+  only `taskId`, `revision`, and `workspaceBinding` inputs;
+- the Tester-only mcporter policy is read back from both live workspace and
+  authoritative AgentTeams storage;
+- NetworkPolicy objects match desired state, the current Tester Pod completes
+  the positive endpoint check, and all five other current role Pods fail the
+  negative connectivity probe; this is a bounded CNI observation, not a
+  permanent network authorization guarantee;
+- all six TeamHarness role Pods pass their installed adapter verification, and
+  a second public-only readback matches this exact image's receipt public-key
+  file hash and canonical policy hash, fixed manifest paths, root-owned regular
+  files, and the `0600` replay ledger metadata.
+
+The current reconciler is deliberately a deployment preflight, not a business-
+flow verifier. `deploymentPreflightReady` may become true after exact resource
+readback, the Tester positive probe, five negative CNI probes, the one-tool MCP
+check, and TeamHarness verifier installation. It still reports
+`ciServiceVerified=false`, `endToEndReady=false`, and the compatibility field
+`verified=false`, because it does not execute
+`run_tests -> signed receipt -> Leader accept -> dual-authority readback ->
+idempotent/conflicting retry`. `teamHarnessReceiptVerifierVerified=true` means
+only that the verifier trust material is installed and matches. Apply mode
+refuses to mutate CI resources until that six-role prerequisite already passes.
+
+Receipt replay protection is explicitly scoped to the current Pod incarnation:
+`replayScope=pod-incarnation`,
+`replayLedgerPersistentAcrossPodReplacement=false`, and
+`receiptLifetimeSeconds=120`. A Leader Pod replacement can therefore lose JTI
+history and permit a duplicate still-valid receipt during the remaining
+120-second lifetime. Within one Pod incarnation, the root-owned ledger uses
+`devflow.test-execution-receipt-ledger/v2` records with an audited
+`pending`/`committed` state machine. Each reservation binds the JTI, receipt,
+run, task, canonical Leader accept request/result digests, process identity,
+30-second lease, authoritative readback digest, and observed upstream-response
+digest. The same cross-process lock covers reserve, upstream mutation, exact
+readback, and commit, so concurrent calls cannot both reach the upstream
+accept transition. An explicit non-applied failure releases only the current
+owner's reservation; a conflict or unknown state retains `pending` and fails
+closed. A crashed reservation may be released only after its owner is provably
+gone or its lease expires. Existing v1 consumed JTIs migrate to non-matchable
+committed records so an upgrade does not reopen their replay window.
+
+This protocol follows the actual pinned AgentTeams
+`78d0ceda336befa6e62bf89fc1a6b08b965e128d` schema rather than inventing one
+authority. `projectflow.accept_task_result` changes the project-plan node but
+does not change the task meta returned by `taskflow.check_task`. Therefore a
+post-transition proof is the conjunction of (1) `taskflow.check_task` matching
+the original submitted result digest and (2) `projectflow.resolve_project`
+matching the same plan node's `completed`/`revision`/`blocked` state and, for a
+successful acceptance, the exact requester-report task id, result status and
+summary. A lost response commits and returns an idempotent result only when
+both authorities match; any single-sided or conflicting readback stays
+pending. This is Pod-local side-effect recovery, not distributed
+exactly-once: Pod replacement still loses the ledger, and no PVC/MinIO replay
+authority is claimed.
+
+The service image source implements the stated Streamable HTTP, readiness,
+fixed execution policy, and signed `TestExecutionReceipt` contract. Until an
+immutable digest is built, pushed and reconciled, and a separate real
+`run_tests`/receipt/Leader-accept flow is captured, this remains locally tested
+candidate code rather than live cluster CI execution evidence. The reconciler
+itself intentionally cannot return `verified=true`; at most it can return
+`deploymentPreflightReady=true`. The current server has not yet been deployed
+through this path. The bounded local verification record is
+`docs/evidence/AGENTTEAMS_TESTER_CICD_LOCAL_20260729.md`.
+
+Tester candidate workspaces and fixed assignment files are `emptyDir` and
+intentionally disappear with a CI Pod; no success claim depends on them after
+a signed result is returned. Assignment timestamps are refreshed only when
+the Pod starts and the server accepts them for 24 hours; roll the Deployment
+before a later finals demonstration. This bounded fixture behavior is another
+reason it must not be represented as a live production task source.
+The Deployment, image digest, public config, NetworkPolicy and Secret reference
+survive a Tester Worker rebuild because they are independent Kubernetes
+objects. A CI Pod replacement is self-healed from that immutable desired state;
+the signing Secret persists independently, but each TeamHarness replay ledger
+is Pod-local and is lost when that Worker Pod is replaced. The resulting
+still-valid-receipt replay window is bounded by the 120-second receipt lifetime.
+Cluster control-plane, kernel, trusted-image, CI signing-service compromise,
+and namespace principals with Pod-create or mutation rights remain outside the
+receipt claim.
 
 Live follow-up on 2026-07-28 closed the previously recorded reconciliation
 failure. The immutable `final4.4` apply converged the fixed seven-Skill DevFlow
@@ -528,7 +780,7 @@ paths from policy and runtime state at the OS boundary.
 - For T4/T5, record pause, unapproved-resume denial, the exact approved
   evidence digest/signature, and approved resume as separate events.
 
-The current live record contains the earlier two-node lifecycle, task-room
+The dated 2026-07-27/28 historical live record contains the two-node lifecycle, task-room
 communication, role-guard rejection, scoped GitHub MCP positive/negative
 checks, one honest GitHub task failure with replay/conflict behavior, the fresh
 operator-driven T2 success with filesync/readback evidence, T4 pause plus

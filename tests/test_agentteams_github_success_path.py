@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import http.client
 import json
@@ -1087,15 +1088,120 @@ def test_conflict_retry_contract_binds_current_and_changed_digests() -> None:
 
 
 def test_remote_receipt_parser_never_needs_repository_bytes_on_host() -> None:
+    scope_digest = _expected_broker_scope(TASK_ID)
+    unsigned = {
+        "schema_version": "devflow.github-content-response/v2",
+        "assignment": {
+            "run_id": PROJECT_ID,
+            "task_id": TASK_ID,
+            "trace_id": f"{PROJECT_ID}:{TASK_ID}",
+            "repository": f"{OWNER}/{REPOSITORY}",
+            "revision": REVISION,
+            "paths": [EVIDENCE_PATH],
+            "scope_digest": scope_digest,
+        },
+        "authorization": {
+            "decision": "allow",
+            "task_id": TASK_ID,
+            "scope_digest": scope_digest,
+            "capability_digest": _hash("capability"),
+            "authorized_at": 1_722_000_000,
+        },
+        "github": {
+            "repository": f"{OWNER}/{REPOSITORY}",
+            "revision": REVISION,
+            "path": EVIDENCE_PATH,
+            "object_sha": "c" * 40,
+            "content_base64": "cmF3",
+            "encoding": "base64",
+        },
+        "receipt_key_sha256": _hash("receipt-key"),
+    }
     receipt = {
-        "schema_version": "devflow.github-content-response/v1",
-        "authorization": {},
-        "github": {"content_base64": "cmF3"},
-        "response_digest": "a" * 64,
-        "receipt_signature": "b" * 64,
+        **unsigned,
+        "response_digest": hashlib.sha256(_canonical_bytes(unsigned)).hexdigest(),
+        "receipt_signature": base64.urlsafe_b64encode(b"s" * 64)
+        .rstrip(b"=")
+        .decode("ascii"),
     }
     wrapper = {"content": [{"text": _canonical_text(receipt)}]}
     assert _remote_receipt(wrapper) == receipt
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value.__setitem__(
+            "schema_version", "devflow.github-content-response/v1"
+        ),
+        lambda value: value.__setitem__("response_digest", "0" * 64),
+        lambda value: value.__setitem__("receipt_signature", "b" * 64),
+        lambda value: value.__setitem__(
+            "receipt_signature", value["receipt_signature"] + "="
+        ),
+        lambda value: value["assignment"].__setitem__("unexpected", True),
+    ],
+)
+def test_remote_receipt_parser_rejects_unsigned_or_noncanonical_v2_shapes(
+    mutate: Any,
+) -> None:
+    scope_digest = _expected_broker_scope(TASK_ID)
+    unsigned = {
+        "schema_version": "devflow.github-content-response/v2",
+        "assignment": {
+            "run_id": PROJECT_ID,
+            "task_id": TASK_ID,
+            "trace_id": f"{PROJECT_ID}:{TASK_ID}",
+            "repository": f"{OWNER}/{REPOSITORY}",
+            "revision": REVISION,
+            "paths": [EVIDENCE_PATH],
+            "scope_digest": scope_digest,
+        },
+        "authorization": {
+            "decision": "allow",
+            "task_id": TASK_ID,
+            "scope_digest": scope_digest,
+            "capability_digest": _hash("capability"),
+            "authorized_at": 1_722_000_000,
+        },
+        "github": {
+            "repository": f"{OWNER}/{REPOSITORY}",
+            "revision": REVISION,
+            "path": EVIDENCE_PATH,
+            "object_sha": "c" * 40,
+            "content_base64": "cmF3",
+            "encoding": "base64",
+        },
+        "receipt_key_sha256": _hash("receipt-key"),
+    }
+    receipt = {
+        **unsigned,
+        "response_digest": hashlib.sha256(_canonical_bytes(unsigned)).hexdigest(),
+        "receipt_signature": base64.urlsafe_b64encode(b"s" * 64)
+        .rstrip(b"=")
+        .decode("ascii"),
+    }
+    mutate(receipt)
+
+    with pytest.raises(RuntimeError):
+        _remote_receipt({"content": [{"text": _canonical_text(receipt)}]})
+
+
+def test_expected_broker_scope_binds_run_task_trace_and_complete_paths() -> None:
+    expected = {
+        "run_id": PROJECT_ID,
+        "task_id": TASK_ID,
+        "trace_id": f"{PROJECT_ID}:{TASK_ID}",
+        "owner": OWNER,
+        "repo": REPOSITORY,
+        "revision": REVISION,
+        "paths": [EVIDENCE_PATH],
+    }
+    assert _expected_broker_scope(TASK_ID) == hashlib.sha256(
+        _canonical_bytes(expected)
+    ).hexdigest()
+    with pytest.raises(ValueError):
+        _expected_broker_scope("unbound-task")
 
 
 def test_cli_rejects_execute_arguments_without_execute_flag(
@@ -1169,6 +1275,12 @@ def test_mcporter_and_canonical_schema_attestations_are_fully_pinned() -> None:
     assert '"schemaCanonicalBytes"' in REMOTE_PREFLIGHT_HELPER
     assert '"schemaSha256"' not in REMOTE_PREFLIGHT_HELPER
     assert '"schemaBytes"' not in REMOTE_PREFLIGHT_HELPER
+    assert "/etc/devflow/github-evidence/receipt-ed25519.pub" in REMOTE_PREFLIGHT_HELPER
+    assert "/etc/devflow/github-evidence/receipt-policy.json" in REMOTE_PREFLIGHT_HELPER
+    assert "devflow.github-content-response/v2" in REMOTE_PREFLIGHT_HELPER
+    assert "devflow.github-content-receipt/v2" in REMOTE_PREFLIGHT_HELPER
+    assert '"githubReceiptTrustAttested"' in REMOTE_PREFLIGHT_HELPER
+    assert 'manifest.get("githubReceiptPolicy") != policy' in REMOTE_PREFLIGHT_HELPER
 
 
 def _mcporter_schema_fixture(

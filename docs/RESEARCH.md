@@ -45,6 +45,34 @@ Upstream sources:
 
 ## Software-engineering agent literature
 
+### MetaGPT, ChatDev, and AgentScope
+
+[MetaGPT](https://arxiv.org/abs/2308.00352) reports that naively chaining model
+outputs can propagate inconsistent logic, and uses role-specific SOPs plus
+intermediate verification to reduce that failure mode. DevFlow therefore makes
+TeamLeader the single workflow writer and turns every stage boundary into a
+versioned artifact contract rather than an unstructured chat continuation.
+
+[ChatDev](https://arxiv.org/abs/2307.07924) separates *what* agents communicate
+through its chat chain from *how* they communicate through a dehallucination
+mechanism. DevFlow applies the same distinction without copying its framework:
+Matrix messages carry short assignment/status summaries, while immutable
+artifacts, digests, validators, and explicit failure codes carry execution
+authority. Conversation alone cannot authorize work or prove completion.
+
+[AgentScope](https://arxiv.org/abs/2402.14034) treats message exchange as the
+core multi-agent mechanism and pairs it with customizable fault tolerance and
+distributed execution support. DevFlow maps that idea to AgentTeams' Matrix
+rooms, but keeps retry/replan/blocked semantics in TeamHarness project state so
+that transport delivery and business completion remain separate facts.
+
+[UA-ChatDev](https://arxiv.org/abs/2607.02186) is a recent preprint, not a
+release benchmark for this project. Its central warning—unverified uncertainty
+in an early agent can propagate downstream—supports DevFlow's fail-closed
+design: confidence is typed where meaningful, but executable evidence and
+independent validation, not self-reported confidence, decide whether a result
+advances.
+
 ### SWE-agent
 
 [SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering](https://arxiv.org/abs/2405.15793)
@@ -105,6 +133,9 @@ criteria.
 | Evidence | DevFlow decision | Verification |
 |---|---|---|
 | AgentTeams | Release-locked Team manifest; Leader delegates to five workers; API migration is explicit | `agentteams/upstream.lock.yaml`, `scripts/verify_agentteams_upstream.py` |
+| SOPs reduce cascading inconsistency | One Leader-owned state machine and versioned stage contracts | TeamHarness transition and contract tests |
+| Communication needs both content and protocol rules | Small Room summaries; large versioned, digest-bound artifacts plus references; chat is never authority, and storage immutability is not assumed | conformance notification tests and Handoff validators |
+| Intermediate model confidence is not proof | Validate types, source bindings, tests, signatures, and terminal readback independently | Skill validators, Tester evidence, approval replay tests |
 | Good interfaces matter | Typed models and narrow MCP calls | model and agent tests |
 | Structure improves retrieval | AST code chunks plus targeted broadening | indexer tests |
 | Modular roles shorten context | Role-specific identity, capabilities, boundaries | agent configs and Skills |

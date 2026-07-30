@@ -207,7 +207,6 @@ async def test_t4_requires_exact_external_approval_and_resumes_once(
                     "tier": "T4",
                     "patch": patch.model_dump(mode="json"),
                     "test_result": tests.model_dump(mode="json"),
-                    "create_pr": False,
                 },
                 tier=ComplexityLevel.T4,
             )

@@ -138,7 +138,12 @@ reread is mandatory. Console or controller reconciliation can later overwrite
 those fields, so production must run this check continuously; a later
 `FAIL_OPEN` state is drift, never compliance.
 
-## Credential boundary
+## Credential boundary (v2 candidate, not yet redeployed)
+
+The following is the required deployment contract for the v2 Ed25519 receipt
+implementation. Current live evidence predates this upgrade and proves only the
+earlier fixed-scope boundary; it does not prove that the v2 receipt signer,
+fixed public-key attestation, or v2 verification path is active in the cluster.
 
 Higress never stores or forwards the GitHub token. The content broker alone
 reads `DEVFLOW_GITHUB_TOKEN` from the pre-created
@@ -162,8 +167,12 @@ Kubernetes TokenReview with audience `agentteams-controller`. It requires the
 exact username
 `system:serviceaccount:agentteams-system:agentteams-worker-devflow-lead`.
 Static issuer bearer mode exists only for local tests and is absent from the
-production manifest. The shared HMAC key signs short-lived capabilities and
-content receipts; neither bearer tokens nor capabilities appear in audit logs.
+production manifest. The shared HMAC key signs only short-lived capabilities.
+When v2 is deployed, content receipts use a separate Ed25519 private key from the externally created
+`Secret/devflow-github-receipt-signing`. That 0400 key is mounted only into the
+capability-free, read-only content Pod; it is never stored in this repository,
+the Locator Skill, Team Room, artifact, or logs. TeamHarness installs only the
+distinct public key and its root-owned fixed-path attestation into Locator.
 
 ## Broker wire contracts
 
@@ -172,23 +181,26 @@ application/json`, Leader JWT in `Authorization: Bearer ...`, and exactly these
 JSON fields:
 
 ```json
-{"task_id":"...","owner":"YZYY95K","repo":"test","revision":"<40-lowerhex>","paths":["README.md"]}
+{"run_id":"...","task_id":"...","trace_id":"<run_id>:<task_id>","owner":"YZYY95K","repo":"test","revision":"<40-lowerhex>","paths":["README.md"]}
 ```
 
 `paths` must contain 1–32 sorted, unique, canonical repository-relative paths.
 Success is HTTP 201 with exactly `schema`, `capability`, `expires_at`, and
-`jti`; the schema is `devflow.github-content-capability/v1`.
+`jti`; the schema is `devflow.github-content-capability/v2`.
 
 Content request: `GET /v1/content` with exactly the query fields `task_id`,
 `owner`, `repo`, `path`, and `revision`, plus one
 `X-DevFlow-Capability` header. Client `Authorization` is forbidden. Success is
-a fixed `devflow.github-content-response/v1` receipt containing only the
-authorization decision/digests, repository coordinates, object SHA, canonical
-Base64 content, `response_digest`, and `receipt_signature`. The response digest
-is SHA-256 of canonical `{schema_version, authorization, github}`. The receipt
-signature is a domain-separated HMAC-SHA256 over that payload plus
-`response_digest`. All error bodies are exactly `{code, status}`; upstream
-GitHub bodies are never returned.
+a fixed `devflow.github-content-response/v2` receipt. Its signed assignment
+binds run ID, task ID, trace ID, repository, immutable revision, the complete
+sorted path set, and the recomputed scope digest. The receipt also binds the
+authorization/capability digests, repository coordinates, returned object SHA,
+canonical Base64 content, response digest, and canonical public-key digest.
+`receipt_signature` is Base64url Ed25519 over the domain-separated canonical
+unsigned receipt including `response_digest`. Locator verifies it offline only
+with `/etc/devflow/github-evidence/receipt-ed25519.pub` and
+`receipt-policy.json`; callers cannot select a key or verifier path. All error
+bodies are exactly `{code, status}`; upstream GitHub bodies are never returned.
 
 ## Run safely
 
@@ -206,8 +218,10 @@ python scripts/configure_higress_github_readonly.py \
   'oci://<audited-mcp-plugin>@sha256:<verified-64-lowerhex-digest>'
 ```
 
-Apply after the broker image has been built, digest-pinned, and the pre-created
-Secret has been injected out of band:
+Apply after the broker image has been built, digest-pinned, and both pre-created
+Secrets have been injected out of band. The receipt Secret contains only key
+`receipt-ed25519.pem`; never place that private key in a manifest or shell
+history:
 
 ```bash
 export HIGRESS_ADMIN_PASSWORD='<injected>'
@@ -284,7 +298,9 @@ changing the shared Higress configuration:
 kubectl apply -f agentteams/higress-redis.yaml
 kubectl --namespace agentteams-system rollout status \
   deployment/devflow-higress-redis
-python scripts/configure_higress_mcp_redis.py --apply
+python scripts/configure_higress_mcp_redis.py --check
+python scripts/configure_higress_mcp_redis.py --apply \
+  --initialize-missing-mcp-server
 python scripts/configure_higress_mcp_redis.py --check
 ```
 
@@ -301,6 +317,16 @@ concurrent write therefore fails
 instead of being lost. A final re-read must show both a new resource version
 and the canonical state. Kubernetes command output and ConfigMap contents are
 never printed.
+
+The pinned Higress 2.2.1 chart does not render a top-level `mcpServer` block.
+For that exact missing-block case, `--initialize-missing-mcp-server` is an
+explicit, apply-only bootstrap. It creates the documented MCP quick-start
+fields with `enable: true`, `/sse`, and the managed Redis tuple while preserving
+the existing gateway settings. DevFlow additionally writes `match_list: []` and
+`servers: []` as its own zero-route safe baseline; this is not a claim that the
+Higress Console initializer serializes those empty lists. It refuses YAML
+document, root-sequence, explicit-key, duplicate-key, and unsafe formatting
+shapes. Without the flag, a missing block remains a fail-closed error.
 
 The generated address is fixed to
 `devflow-higress-redis.agentteams-system.svc.cluster.local:6379`, with database

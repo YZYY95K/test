@@ -261,6 +261,55 @@ other: true
     assert result.endswith("other: true\n")
 
 
+def test_reconcile_bootstraps_official_mcp_block_only_when_explicit() -> None:
+    source = """downstream:
+  idleTimeout: 180
+gzip:
+  enable: false
+upstream:
+  idleTimeout: 10
+"""
+    with pytest.raises(ConfigurationError, match="one top-level mcpServer"):
+        reconcile_higress_yaml(source)
+
+    result, changed = reconcile_higress_yaml(
+        source, initialize_missing_mcp_server=True
+    )
+    assert changed is True
+    assert result.startswith(
+        f"""mcpServer:
+  sse_path_suffix: /sse
+  enable: true
+  redis:
+    address: {REDIS_ADDRESS}
+    username: ""
+    password: ""
+    db: 0
+  match_list: []
+  servers: []
+"""
+    )
+    assert result.endswith(source)
+    second, changed_again = reconcile_higress_yaml(result)
+    assert second == result
+    assert changed_again is False
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "---\ndownstream: {}\n",
+        "- downstream\n",
+        "downstream: {}\ndownstream: {}\n",
+        "  idleTimeout: 180\ndownstream: {}\n",
+        "# comments only\n",
+    ],
+)
+def test_reconcile_refuses_unsafe_mcp_bootstrap_shapes(source: str) -> None:
+    with pytest.raises(ConfigurationError, match="top-level structure"):
+        reconcile_higress_yaml(source, initialize_missing_mcp_server=True)
+
+
 @pytest.mark.parametrize(
     "source",
     [
@@ -345,6 +394,26 @@ def test_apply_uses_resource_version_preserves_data_and_verifies() -> None:
     assert client.configmap["data"]["unrelated"] == "preserve-me"
 
 
+def test_apply_can_explicitly_bootstrap_missing_official_mcp_block() -> None:
+    source = """downstream:
+  idleTimeout: 180
+gzip:
+  enable: false
+upstream:
+  idleTimeout: 10
+"""
+    client = _FakeClient(source)
+    assert configure(
+        client,
+        apply=True,
+        initialize_missing_mcp_server=True,
+    ) is True
+    configured = client.configmap["data"]["higress"]
+    assert configured.startswith("mcpServer:\n  sse_path_suffix: /sse\n")
+    assert f"address: {REDIS_ADDRESS}" in configured
+    assert configured.endswith(source)
+
+
 class _StaleClient(_FakeClient):
     def replace_configmap(self, document: dict[str, Any]) -> None:
         self.replacements.append(deepcopy(document))
@@ -371,6 +440,7 @@ def test_configurator_runs_without_site_packages() -> None:
     )
     assert help_result.returncode == 0, help_result.stderr
     assert "--apply" in help_result.stdout
+    assert "--initialize-missing-mcp-server" in help_result.stdout
 
     pure_function = subprocess.run(
         [

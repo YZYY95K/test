@@ -18,7 +18,8 @@ from devflow.agents.tester_agent import TesterAgent as DevFlowTesterAgent
 from devflow.event_bus import LocalAgentEventRuntime, event_bus
 from devflow.exceptions import AgentError
 from devflow.local_runtime import LocalAgentTaskRouter
-from devflow.mcp.cicd import IsolatedTestService
+from devflow.mcp.cicd import PORTABLE_CICD_SERVER, IsolatedTestService
+from devflow.mcp.contracts import MCPCallContext
 from devflow.models.issue import (
     ComplexityLevel,
     IssueCategory,
@@ -156,6 +157,16 @@ def test_runtime_system_prompt_binds_identity_skills_and_boundaries() -> None:
     assert "prompts/coder.md" not in prompt
 
 
+def test_team_leader_has_control_plane_authority_but_no_domain_skill() -> None:
+    leader = TeamLeader()
+
+    assert leader._OWNED_SKILLS == ()
+    assert "Owned Skills: none" in leader.system_prompt
+    assert "Cannot create, review, merge, deploy, or roll back" in (
+        leader.system_prompt
+    )
+
+
 @pytest.mark.asyncio
 async def test_team_leader_builds_initial_five_stage_plan_before_distillation() -> None:
     classification = IssueClassification(
@@ -203,13 +214,35 @@ async def test_reviewer_requires_human_for_t4() -> None:
             "tier": "T4",
             "patch": _patch(),
             "test_result": tests,
-            "create_pr": False,
         }
     )
 
     assert isinstance(result, ReviewResult)
     assert result.decision is ReviewDecision.HUMAN_APPROVAL_REQUIRED
     assert result.requires_human_approval is True
+
+
+@pytest.mark.asyncio
+async def test_reviewer_rejects_repository_transition_input() -> None:
+    tests = RunResult(
+        total=1,
+        passed=1,
+        failed=0,
+        errors=0,
+        skipped=0,
+        duration_ms=10,
+    )
+
+    with pytest.raises(AgentError, match="fields do not match"):
+        await ReviewerAgent().run(
+            {
+                "issue_id": 42,
+                "tier": "T2",
+                "patch": _patch(),
+                "test_result": tests,
+                "create_pr": True,
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -371,10 +404,13 @@ class IsolatedServiceMCP:
         arguments: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert (server, tool) == ("cicd", "run_tests")
+        assert (server, tool) == (PORTABLE_CICD_SERVER, "run_tests")
+        assert set(arguments) == {"issue_id", "patch"}
+        context = cast(MCPCallContext, _kwargs["context"])
+        assert context.risk_tier is not None
         result = await self.service.run_tests(
             Patch.model_validate(arguments["patch"]),
-            full_suite=bool(arguments["full_suite"]),
+            risk_tier=context.risk_tier,
         )
         return result.model_dump(mode="json")
 
@@ -391,10 +427,13 @@ class StaticResultMCP:
         arguments: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert (server, tool) == ("cicd", "run_tests")
+        assert (server, tool) == (PORTABLE_CICD_SERVER, "run_tests")
         assert arguments["issue_id"] == 42
+        assert set(arguments) == {"issue_id", "patch"}
         if not self.attest:
             return self.result.model_dump(mode="json")
+        context = cast(MCPCallContext, _kwargs["context"])
+        assert context.risk_tier is not None
         attested = self.result.model_copy(
             update={
                 "integrity_attestation": IntegrityAttestation(
@@ -408,7 +447,7 @@ class StaticResultMCP:
                     added_tests_manifest_digest="d" * 64,
                     baseline_protected_file_count=1,
                     added_test_file_count=0,
-                    full_suite=bool(arguments["full_suite"]),
+                    full_suite=context.risk_tier in {"T3", "T4", "T5"},
                     verified=True,
                     isolation_boundary=TEST_ISOLATION_BOUNDARY,
                 )
@@ -514,6 +553,7 @@ async def test_tester_failure_routes_digest_bound_coder_retry_then_passes(
     )
     service = IsolatedTestService(
         repository,
+        (sys.executable, "-m", "unittest", "discover", "-v"),
         (sys.executable, "-m", "unittest", "discover", "-v"),
         timeout_seconds=30,
     )
@@ -667,6 +707,7 @@ async def test_local_router_closes_coder_tester_retry_loop_from_one_route(
     )
     service = IsolatedTestService(
         repository,
+        (sys.executable, "-m", "unittest", "discover", "-v"),
         (sys.executable, "-m", "unittest", "discover", "-v"),
         timeout_seconds=30,
     )

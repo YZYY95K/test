@@ -59,7 +59,10 @@ class IssueLifecycle(str, Enum):
     Transitions are driven by agent completion/failure events::
 
         NEW -> TRIAGED -> LOCATING -> CODING -> TESTING
-            -> REVIEWING -> MERGED | REJECTED
+            -> REVIEWING -> DISTILLING -> VERIFIED | REJECTED
+
+        A T4/T5 review takes the explicit ``REVIEWING -> PAUSED`` branch until
+        externally signed, artifact-bound approval is verified and consumed.
 
     Reversal edges (e.g. ``CODING -> CODING`` on a failed test, or
     ``REVIEWING -> CODING`` on a rejected review) are handled by routing the
@@ -75,7 +78,6 @@ class IssueLifecycle(str, Enum):
     DISTILLING = "distilling"
     VERIFIED = "verified"
     PAUSED = "paused"
-    MERGED = "merged"
     REJECTED = "rejected"
 
 
@@ -152,7 +154,9 @@ class TeamLeader(BaseAgent):
     )
     _BOUNDARIES = (
         "Cannot write code directly",
-        "Cannot approve PRs without human review for T4/T5 issues",
+        "Cannot invoke a Worker domain Skill in its own role",
+        "Cannot create, review, merge, deploy, or roll back repository state",
+        "Cannot substitute for external human approval on T4/T5 issues",
         "Cannot modify files outside the .devflow/ state directory",
         "Cannot bypass the approval workflow defined in security.yaml",
     )
@@ -170,10 +174,18 @@ class TeamLeader(BaseAgent):
         "test.failed",
         "approval.required",
     )
-    _OWNED_SKILLS = ("team-orchestration",)
+    # Orchestration is framework control-plane authority, not a distributable
+    # or Worker-invocable domain Skill.
+    _OWNED_SKILLS: tuple[str, ...] = ()
     _FORBIDDEN_ACTIONS = {
         "write_code": "Cannot write code directly",
-        "approve_t4t5_without_human": ("Cannot approve PRs without human review for T4/T5 issues"),
+        "invoke_worker_skill": "Cannot invoke a Worker domain Skill in its own role",
+        "repository_transition": (
+            "Cannot create, review, merge, deploy, or roll back repository state"
+        ),
+        "approve_t4t5_without_human": (
+            "Cannot substitute for external human approval on T4/T5 issues"
+        ),
         "modify_outside_devflow": ("Cannot modify files outside the .devflow/ state directory"),
         "bypass_approval_workflow": (
             "Cannot bypass the approval workflow defined in security.yaml"
@@ -188,9 +200,10 @@ class TeamLeader(BaseAgent):
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
-        #: Optional durable scheduler authority. AgentTeams and production-like
-        #: local runs use this ledger so route ownership survives processes;
-        #: lightweight unit tests may retain the process-local fallback.
+        #: Optional durable scheduler authority for the portable Python runtime
+        #: and local demos. AgentTeams uses its independently guarded
+        #: TeamHarness control plane; lightweight unit tests may retain the
+        #: process-local fallback.
         self._execution_ledger = execution_ledger
         self._approval_verifier = approval_verifier
         self._consumed_approval_ids: set[str] = set()
@@ -1032,7 +1045,6 @@ class TeamLeader(BaseAgent):
             context["repository_revision"] = revision.strip()
         else:
             context.setdefault("repository_revision", "unresolved-local")
-        context.setdefault("create_pr", bool(payload.get("create_pr", False)))
         self._set_lifecycle(issue.issue_number, IssueLifecycle.NEW)
         # Kick off triage — classification is the first step of decomposition.
         await self.route_task(
@@ -1780,7 +1792,6 @@ class TeamLeader(BaseAgent):
                     "tier": tier.value,
                     "patch": patch.model_dump(mode="json"),
                     "test_result": tests_payload,
-                    "create_pr": bool(context.get("create_pr", False)),
                 },
                 depends_on=[incoming.task_id],
                 tier=tier,
@@ -1813,6 +1824,7 @@ class TeamLeader(BaseAgent):
         if (
             issue_id != incoming.issue_id
             or review.decision is not ReviewDecision.APPROVED
+            or review.pr_url is not None
             or review.requires_human_approval
             or tier in {ComplexityLevel.T4, ComplexityLevel.T5}
         ):
@@ -1992,7 +2004,11 @@ class TeamLeader(BaseAgent):
             review = ReviewResult.model_validate(review_payload["review"])
         except (KeyError, TypeError, ValueError) as exc:
             raise AgentError(f"Reviewer rejection payload is invalid: {exc}") from exc
-        if issue_id != incoming.issue_id or review.decision is not ReviewDecision.CHANGES_REQUESTED:
+        if (
+            issue_id != incoming.issue_id
+            or review.decision is not ReviewDecision.CHANGES_REQUESTED
+            or review.pr_url is not None
+        ):
             raise AgentError("Reviewer rejection metadata is inconsistent.")
 
         context = self._ensure_context(issue_id)
@@ -2207,6 +2223,7 @@ class TeamLeader(BaseAgent):
             issue_id != incoming.issue_id
             or tier not in {ComplexityLevel.T4, ComplexityLevel.T5}
             or review.decision is not ReviewDecision.HUMAN_APPROVAL_REQUIRED
+            or review.pr_url is not None
             or not review.requires_human_approval
         ):
             raise AgentError("Human approval request metadata is inconsistent.")
@@ -2314,7 +2331,7 @@ class TeamLeader(BaseAgent):
             summary=(
                 "Exact T4/T5 approval target was verified by the external human-approval authority."
             ),
-            pr_url=pending_review.pr_url,
+            pr_url=None,
             requires_human_approval=False,
         )
         await self._route_experience_after_approval(

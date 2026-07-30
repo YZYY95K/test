@@ -158,13 +158,78 @@ def _write(path: Path, payload: bytes) -> None:
     path.write_bytes(payload)
 
 
-def _public_key_fixture(root: Path) -> Path:
-    path = root / "approval-ed25519.pub"
-    der = bytes.fromhex("302a300506032b6570032100") + bytes(range(1, 33))
+def _public_key_fixture(
+    root: Path,
+    *,
+    name: str = "approval-ed25519.pub",
+    key_bytes: bytes = bytes(range(1, 33)),
+) -> Path:
+    path = root / name
+    der = bytes.fromhex("302a300506032b6570032100") + key_bytes
     path.write_bytes(
         b"-----BEGIN PUBLIC KEY-----\n" + base64.b64encode(der) + b"\n-----END PUBLIC KEY-----\n"
     )
     return path
+
+
+def _receipt_public_key_fixture(root: Path) -> Path:
+    return _public_key_fixture(
+        root,
+        name="github-receipt-ed25519.pub",
+        key_bytes=bytes(range(32, 0, -1)),
+    )
+
+
+def _test_receipt_trust_fixture(root: Path) -> tuple[Path, Path]:
+    public_key = _public_key_fixture(
+        root,
+        name="test-receipt-ed25519.pub",
+        key_bytes=bytes(range(33, 65)),
+    )
+    der = base64.b64decode(public_key.read_text(encoding="ascii").splitlines()[1])
+    policy = {
+        "algorithm": "Ed25519",
+        "audience": "devflow-teamharness",
+        "ciPolicySha256": "1" * 64,
+        "ciServerSha256": "2" * 64,
+        "issuer": "devflow-tester-cicd",
+        "maxClockSkewSeconds": 5,
+        "maxReceiptLifetimeSeconds": 120,
+        "opensslPath": "/usr/bin/openssl",
+        "policyAttestationPath": (
+            "/etc/devflow/teamharness/test-receipt-policy.json"
+        ),
+        "publicKeyFileSha256": hashlib.sha256(public_key.read_bytes()).hexdigest(),
+        "publicKeyPath": "/etc/devflow/teamharness/test-receipt-ed25519.pub",
+        "publicKeySha256": hashlib.sha256(der).hexdigest(),
+        "remainingThreat": (
+            "A container or node root compromise remains in scope. The replay "
+            "ledger is Pod-local; Leader Pod replacement can lose replay history "
+            "for the 120-second receipt lifetime."
+        ),
+        "replayLedgerPath": (
+            "/var/lib/devflow/teamharness/test-receipt-ledger.json"
+        ),
+        "replayScope": "pod-incarnation",
+        "replayLedgerPersistentAcrossPodReplacement": False,
+        "receiptLifetimeSeconds": 120,
+        "repositoryArchiveSha256": "3" * 64,
+        "repositoryManifestSha256": "4" * 64,
+        "repositoryRevision": "5" * 40,
+        "schemaVersion": "1.0",
+        "signatureDomain": "devflow.test-execution-receipt/v1",
+    }
+    policy_path = root / "test-receipt-policy.json"
+    policy_path.write_bytes(
+        json.dumps(
+            policy,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+    return public_key, policy_path
 
 
 def _source_fixture(root: Path) -> tuple[Path, tuple[str, ...], dict[str, str]]:
@@ -307,6 +372,24 @@ def test_discovery_requires_fixed_rotating_leader_issuer_token(drift: str) -> No
         discover_targets(_team(), pods)
 
 
+def test_discovery_can_scope_out_unrelated_github_issuer_token() -> None:
+    pods = _pods()
+    leader = next(
+        pod
+        for pod in pods["items"]
+        if pod["metadata"]["name"] == "agentteams-worker-devflow-lead"
+    )
+    leader["spec"]["volumes"][0]["projected"]["sources"][0][
+        "serviceAccountToken"
+    ]["audience"] = "untrusted-audience"
+
+    targets = discover_targets(
+        _team(), pods, require_github_issuer_token=False
+    )
+
+    assert {target.role_name for target in targets} == EXPECTED_ROLES
+
+
 @pytest.mark.parametrize("failure", ["missing", "duplicate", "unready", "unexpected"])
 def test_discovery_rejects_missing_duplicate_unready_or_unknown_role(
     failure: str,
@@ -334,12 +417,16 @@ def test_source_validation_pins_commit_clean_tree_and_all_critical_hashes(
     assert RECONCILE_SOURCE_HASHES == UPSTREAM_FILE_SHA256
     repo, tracked, policy = _source_fixture(tmp_path)
     runner = _FakeRunner(_team(), _pods(), tracked)
+    test_receipt_key, test_receipt_policy = _test_receipt_trust_fixture(tmp_path)
 
     bundle = validate_sources(
         runner,
         repo,
         ROOT,
         _public_key_fixture(tmp_path),
+        _receipt_public_key_fixture(tmp_path),
+        test_receipt_key,
+        test_receipt_policy,
         _test_hash_policy=policy,
     )
 
@@ -350,6 +437,15 @@ def test_source_validation_pins_commit_clean_tree_and_all_critical_hashes(
         "scripts/teamharness_openclaw.py",
         "agentteams/teamharness/guarded_server.py",
     }
+    assert bundle.test_receipt_public_key == test_receipt_key.read_bytes()
+    assert bundle.test_receipt_policy == test_receipt_policy.read_bytes()
+    assert len(
+        {
+            bundle.approval_public_key,
+            bundle.github_receipt_public_key,
+            bundle.test_receipt_public_key,
+        }
+    ) == 3
     assert sum(1 for args, _ in runner.calls if "status" in args) == 2
 
 
@@ -368,6 +464,7 @@ def test_source_validation_rejects_upstream_drift(
     )
     if failure == "hash":
         _write(repo / "plugins/teamharness/mcp/server.py", b"drift\n")
+    test_receipt_key, test_receipt_policy = _test_receipt_trust_fixture(tmp_path)
 
     with pytest.raises(ReconcileError):
         validate_sources(
@@ -375,6 +472,40 @@ def test_source_validation_rejects_upstream_drift(
             repo,
             ROOT,
             _public_key_fixture(tmp_path),
+            _receipt_public_key_fixture(tmp_path),
+            test_receipt_key,
+            test_receipt_policy,
+            _test_hash_policy=policy,
+        )
+
+
+def test_source_validation_rejects_test_receipt_key_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    repo, tracked, policy = _source_fixture(tmp_path)
+    runner = _FakeRunner(_team(), _pods(), tracked)
+    test_receipt_key, test_receipt_policy = _test_receipt_trust_fixture(tmp_path)
+    value = json.loads(test_receipt_policy.read_text(encoding="utf-8"))
+    value["publicKeyFileSha256"] = "0" * 64
+    test_receipt_policy.write_bytes(
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+
+    with pytest.raises(ReconcileError, match="key binding"):
+        validate_sources(
+            runner,
+            repo,
+            ROOT,
+            _public_key_fixture(tmp_path),
+            _receipt_public_key_fixture(tmp_path),
+            test_receipt_key,
+            test_receipt_policy,
             _test_hash_policy=policy,
         )
 
@@ -386,6 +517,7 @@ def test_reconcile_preflights_all_roles_then_stages_installs_and_verifies(
     pods = _pods(team)
     repo, tracked, policy = _source_fixture(tmp_path)
     runner = _FakeRunner(team, pods, tracked)
+    test_receipt_key, test_receipt_policy = _test_receipt_trust_fixture(tmp_path)
 
     targets = reconcile(
         runner,
@@ -393,6 +525,9 @@ def test_reconcile_preflights_all_roles_then_stages_installs_and_verifies(
         agentteams_repo=repo,
         approval_public_key=_public_key_fixture(tmp_path),
         approval_domain=TEST_APPROVAL_DOMAIN,
+        github_receipt_public_key=_receipt_public_key_fixture(tmp_path),
+        test_receipt_public_key=test_receipt_key,
+        test_receipt_policy=test_receipt_policy,
         devflow_repo=ROOT,
         _test_hash_policy=policy,
     )
@@ -436,12 +571,25 @@ def test_reconcile_preflights_all_roles_then_stages_installs_and_verifies(
     for _, args in install_calls:
         if "agentteams-worker-devflow-lead" not in args:
             assert "--approval-domain" not in args
+    locator = next(
+        args
+        for _, args in install_calls
+        if "agentteams-worker-devflow-locator" in args
+    )
+    assert "--github-receipt-public-key" in locator
+    for _, args in install_calls:
+        if "agentteams-worker-devflow-locator" not in args:
+            assert "--github-receipt-public-key" not in args
+        assert "--test-receipt-public-key" in args
+        assert "--test-receipt-policy" in args
+        assert not any("PRIVATE KEY" in argument for argument in args)
 
 
 def test_reconcile_rejects_ambiguous_approval_domain_before_kubernetes(
     tmp_path: Path,
 ) -> None:
     runner = _FakeRunner(_team(), _pods(), ())
+    test_receipt_key, test_receipt_policy = _test_receipt_trust_fixture(tmp_path)
 
     with pytest.raises(ReconcileError, match="approval domain"):
         reconcile(
@@ -450,6 +598,9 @@ def test_reconcile_rejects_ambiguous_approval_domain_before_kubernetes(
             agentteams_repo=tmp_path,
             approval_public_key=_public_key_fixture(tmp_path),
             approval_domain="shared-domain",
+            github_receipt_public_key=_receipt_public_key_fixture(tmp_path),
+            test_receipt_public_key=test_receipt_key,
+            test_receipt_policy=test_receipt_policy,
             devflow_repo=ROOT,
             _test_hash_policy={},
         )
@@ -462,6 +613,8 @@ def test_script_never_mutates_rbac_or_contains_credentials() -> None:
     assert "UPSTREAM_AGENTTEAMS_COMMIT" in text
     assert "expected exactly six active OpenClaw role Pods" in text
     assert "pods/exec" in text
+    assert 'test -f "$expected/openclaw.json"' in text
+    assert 'test -f "$expected/runtime/runtime.json"' not in text
     assert not re.search(r"\bkubectl\b.*\b(?:apply|create|patch|auth)\b", text)
     for forbidden in (
         "ghp_",

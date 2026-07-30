@@ -58,20 +58,20 @@ ROLE_SKILLS: dict[str, tuple[str, ...]] = {
     "devflow-reviewer": ("pr-reviewer", "experience-distiller"),
 }
 ARCHIVE_DIGESTS = {
-    "devflow-lead": "82ffe34e3f02162febe4d1e88c5ed68b4676d4917007d6f8a2cf13e0cb9741a5",
-    "devflow-triage": "d5297a1741b0279310dc1adbe36cc02c5c33c8cf5897f4ea1532b4761f21630f",
-    "devflow-locator": "cab3503cd3100bf42238cf3b53ad65deca95e9e9e6b99551a81bb0f506daf54b",
-    "devflow-coder": "a54c323f4599899b8bee7950a759ec0e9cd0c56ae27fd091e559853ed9d41b16",
-    "devflow-tester": "684de72825bb0fdc9a0435c7e568934ce85dc8a37d30e17aa67d1eb7d3833563",
-    "devflow-reviewer": "e3d5513508f49b288384fbf47b746dbb52760de997388450f5636c640895842a",
+    "devflow-lead": "7a55f3a8fd8bc9490b03f1d99cea39f420f31a69cf84d19fb6b54851f36c0228",
+    "devflow-triage": "b6efdc4d7ca718682c059508054328a314d51f405a2cd463bdf37c7327752adf",
+    "devflow-locator": "1aa3cf8a61fec15736bdf3480371e1fffe1f568aada0d899a0420fa761305d7a",
+    "devflow-coder": "118836944dc2b244a1b2e05db61c351c7b1b9fe3188571db1ccc8e0b67c8f8ba",
+    "devflow-tester": "93ce45aaaa501b4c9c9696b1bbd70b6313782fd5ddc7cfe9956c7866a4f2e7a2",
+    "devflow-reviewer": "bb9e194aaab7eebb007b96ad2120616a3bc437c072e44b4c2eac5e07d57bbc08",
 }
 ARCHIVE_SIZES = {
-    "devflow-lead": 2862,
-    "devflow-triage": 15721,
-    "devflow-locator": 57200,
-    "devflow-coder": 56024,
-    "devflow-tester": 55161,
-    "devflow-reviewer": 37151,
+    "devflow-lead": 3122,
+    "devflow-triage": 30687,
+    "devflow-locator": 87952,
+    "devflow-coder": 56703,
+    "devflow-tester": 68776,
+    "devflow-reviewer": 77464,
 }
 ALL_FIXED_SKILLS = tuple(sorted({skill for skills in ROLE_SKILLS.values() for skill in skills}))
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -488,19 +488,28 @@ is_fixed() {
 }
 audit_role() {
   role=$1; root=/root/hiclaw-fs/agents/$role/skills
-  meta_dir "$root"; base_dev=$(stat -c %d "$root") || fail; reject_mounts "$root"
   known=$tmp/known.$role; unknown=$tmp/unknown.$role; : > "$known"; : > "$unknown"
-  for entry in "$root"/* "$root"/.[!.]* "$root"/..?*; do
-    [ -e "$entry" ] || [ -L "$entry" ] || continue
-    [ -d "$entry" ] && [ ! -L "$entry" ] || fail
-    name=${entry##*/}; safe_rel "$name" || fail
-    digest=$(tree_digest "$entry" "$base_dev") || fail
-    if is_fixed "$name"; then
-      printf '%s\t%s\n' "$name" "$digest" >> "$known"
-    else
-      printf '%s\t%s\n' "$name" "$digest" >> "$unknown"
-    fi
-  done
+  if [ ! -e "$root" ] && [ ! -L "$root" ]; then
+    # AgentTeams does not materialize a controller cache directory for the
+    # zero-Skill Leader.  Accept only that exact absence under its trusted
+    # canonical role directory; every role with an allowlist still requires
+    # a fully audited skills root.
+    [ "$role" = devflow-lead ] || fail
+    parent=${root%/skills}; meta_dir "$parent"; reject_mounts "$parent"
+  else
+    meta_dir "$root"; base_dev=$(stat -c %d "$root") || fail; reject_mounts "$root"
+    for entry in "$root"/* "$root"/.[!.]* "$root"/..?*; do
+      [ -e "$entry" ] || [ -L "$entry" ] || continue
+      [ -d "$entry" ] && [ ! -L "$entry" ] || fail
+      name=${entry##*/}; safe_rel "$name" || fail
+      digest=$(tree_digest "$entry" "$base_dev") || fail
+      if is_fixed "$name"; then
+        printf '%s\t%s\n' "$name" "$digest" >> "$known"
+      else
+        printf '%s\t%s\n' "$name" "$digest" >> "$unknown"
+      fi
+    done
+  fi
   sort -o "$known" "$known"; sort -o "$unknown" "$unknown"
   unknown_count=$(wc -l < "$unknown" | tr -d ' ')
   unknown_digest=$(sha256sum "$unknown"); unknown_digest=${unknown_digest%% *}
@@ -511,7 +520,7 @@ audit_role() {
 }
 audit_archive() {
   role=$1; expected_size=$2; expected_sum=$3
-  path=/tmp/import/$role-v2.0.0.zip
+  path=/tmp/import/$role-v2.1.0.zip
   [ -f "$path" ] && [ ! -L "$path" ] || fail; reject_mounts "$path"
   [ "$(stat -c %u "$path")" = 0 ] && [ "$(stat -c %g "$path")" = 0 ] || fail
   [ "$(stat -c %a "$path")" = 644 ] && [ "$(stat -c %h "$path")" = 1 ] || fail
@@ -522,12 +531,12 @@ audit_archive() {
 }
 meta_dir /tmp/import; reject_mounts /tmp/import; import_dev=$(stat -c %d /tmp/import) || fail
 : > "$tmp/archives"; : > "$tmp/rolemeta"
-audit_archive devflow-lead 2862 82ffe34e3f02162febe4d1e88c5ed68b4676d4917007d6f8a2cf13e0cb9741a5
-audit_archive devflow-triage 15721 d5297a1741b0279310dc1adbe36cc02c5c33c8cf5897f4ea1532b4761f21630f
-audit_archive devflow-locator 57200 cab3503cd3100bf42238cf3b53ad65deca95e9e9e6b99551a81bb0f506daf54b
-audit_archive devflow-coder 56024 a54c323f4599899b8bee7950a759ec0e9cd0c56ae27fd091e559853ed9d41b16
-audit_archive devflow-tester 55161 684de72825bb0fdc9a0435c7e568934ce85dc8a37d30e17aa67d1eb7d3833563
-audit_archive devflow-reviewer 37151 e3d5513508f49b288384fbf47b746dbb52760de997388450f5636c640895842a
+audit_archive devflow-lead 3122 7a55f3a8fd8bc9490b03f1d99cea39f420f31a69cf84d19fb6b54851f36c0228
+audit_archive devflow-triage 30687 b6efdc4d7ca718682c059508054328a314d51f405a2cd463bdf37c7327752adf
+audit_archive devflow-locator 87952 1aa3cf8a61fec15736bdf3480371e1fffe1f568aada0d899a0420fa761305d7a
+audit_archive devflow-coder 56703 118836944dc2b244a1b2e05db61c351c7b1b9fe3188571db1ccc8e0b67c8f8ba
+audit_archive devflow-tester 68776 93ce45aaaa501b4c9c9696b1bbd70b6313782fd5ddc7cfe9956c7866a4f2e7a2
+audit_archive devflow-reviewer 77464 bb9e194aaab7eebb007b96ad2120616a3bc437c072e44b4c2eac5e07d57bbc08
 audit_role devflow-lead
 audit_role devflow-triage
 audit_role devflow-locator
@@ -757,7 +766,7 @@ else
 fi
 [ "$(stat -c %u "$tx")" = 0 ] && [ "$(stat -c %g "$tx")" = 0 ] || fail
 [ "$(stat -c %d "$tx")" = "$(stat -c %d "$base")" ] || fail
-stage="$tx/$role.new"; saved="$tx/$role.previous"; target="$base/$role-v2.0.0.zip"
+stage="$tx/$role.new"; saved="$tx/$role.previous"; target="$base/$role-v2.1.0.zip"
 [ ! -e "$stage" ] && [ ! -L "$stage" ] && [ ! -e "$saved" ] && [ ! -L "$saved" ] || fail
 cat > "$stage" || fail
 chmod 644 "$stage" || fail
@@ -800,7 +809,7 @@ case "$expected_sha" in *[!0-9a-f]*|'') fail;; esac
 [ "${#expected_sha}" -eq 64 ] || fail
 case "$txid" in *[!0-9a-f]*|'') fail;; esac
 [ "${#txid}" -eq 64 ] || fail
-archive="/tmp/import/$role-v2.0.0.zip"
+archive="/tmp/import/$role-v2.1.0.zip"
 [ -f "$archive" ] && [ ! -L "$archive" ] && [ "$(stat -c %h "$archive")" = 1 ] || fail
 [ "$(stat -c %u "$archive")" = 0 ] && [ "$(stat -c %g "$archive")" = 0 ] || fail
 [ "$(stat -c %a "$archive")" = 644 ] && [ "$(stat -c %s "$archive")" = "$expected_size" ] || fail

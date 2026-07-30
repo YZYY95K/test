@@ -1,10 +1,10 @@
 # =============================================================================
 # DevFlow Security Configuration
 # =============================================================================
-# DevFlow is an autonomous system that can read proprietary code, open PRs,
-# and trigger deployments. Security is therefore enforced declaratively here
-# and checked by the runtime at every capability boundary — agents cannot
-# opt out of these policies.
+# DevFlow can read only task-scoped repository evidence and execute a candidate
+# only inside the Tester boundary. The current AgentTeams release cannot open,
+# review, or merge pull requests and cannot deploy or roll back a release.
+# Security declarations here must match executable runtime grants.
 #
 # Four pillars:
 #   1. audit_log          — tamper-evident record of every privileged action
@@ -72,8 +72,8 @@ approval_workflow:
         tests_passed: true
         no_critical_security_findings: true
       required_approvers: 1      # bump to 2 for regulated deployments
-      # If no human approves within this window, the PR stays open and a
-      # reminder is posted (see pr-reviewer failure_handling).
+      # If no human approves within this window, the AgentTeams project remains
+      # paused and TeamLeader emits a reminder; no Worker may resume it.
       approval_timeout_hours: 72
       auto_merge: false
       # Who is allowed to approve. Empty = any repo collaborator with write.
@@ -87,10 +87,11 @@ approval_workflow:
 # ---------------------------------------------------------------------------
 # 3. Rollback — safe failure recovery
 # ---------------------------------------------------------------------------
-# If a merged change causes a regression or incident, DevFlow can roll back
-# the deployment via one exact, externally approved CI/CD MCP action.
+# Deployment rollback is outside the current autonomous closure boundary. The
+# portable library retains separately tested approval/rollback primitives, but
+# no released Agent or Skill receives that tool.
 rollback:
-  enabled: true
+  enabled: false
   # These fields map directly to executable fail-closed checks.
   provider_command_required: true
   known_good_target_required: true
@@ -111,13 +112,17 @@ rollback:
 # ---------------------------------------------------------------------------
 # 4. Credential Isolation — secrets never touch agents or prompts
 # ---------------------------------------------------------------------------
-# Agents and LLM prompts must never see raw credentials. A trusted adapter
-# derives an internal one-minute capability from the signed Agent identity and
-# injects only the exact provider variable into the server-owned subprocess.
+# Agents and LLM prompts must never see raw credentials. The v2 Ed25519 broker
+# below is the implemented candidate profile and has not yet been redeployed
+# after this receipt upgrade. The earlier live boundary evidence must not be
+# cited as proof that v2 signing is active. When deployed, the broker keeps the
+# provider token and signing key outside Worker-visible arguments; only
+# Locator's github-evidence path receives a task/revision/path-bound read.
 credential_isolation:
-  implemented_mode: "in_process_signed_capability"
-  provider_secret_source: "trusted_process_environment"
-  internal_handle_ttl_seconds: 60
+  implemented_mode: "agentteams_external_ed25519_scope_broker"
+  deployment_status: "candidate_not_redeployed"
+  provider_secret_source: "gateway_secret_mount"
+  internal_handle_ttl_seconds: 300
   # Secrets are referenced by logical name in config (e.g. ${GITHUB_PAT})
   # and resolved by the gateway at runtime. They are NEVER expanded into
   # agent-visible config, logs, traces, or prompts.
@@ -127,27 +132,17 @@ credential_isolation:
   # Trusted adapters map a granted capability to its provider secret. Agents
   # receive only a short-lived signed handle, never these environment values.
   capability_secrets:
-    "github:read_issue": "GITHUB_PERSONAL_ACCESS_TOKEN"
-    "github:add_issue_comment": "GITHUB_PERSONAL_ACCESS_TOKEN"
     "github:read_file": "GITHUB_PERSONAL_ACCESS_TOKEN"
-    "github:create_pr": "GITHUB_PERSONAL_ACCESS_TOKEN"
-    "github:review_pr": "GITHUB_PERSONAL_ACCESS_TOKEN"
-    "cicd:rollback": "GITHUB_PERSONAL_ACCESS_TOKEN"
   # Capabilities granted per agent. An agent can only call gateway-issued
   # tokens for the scopes listed here — least privilege.
   agent_capabilities:
-    TeamLeader:
-      - "github:read_issue"
-      - "github:add_issue_comment"
-      - "cicd:rollback"
+    TeamLeader: []
     TriageAgent: []
     LocatorAgent:
       - "github:read_file"
     CoderAgent: []                    # candidate artifact only; no provider token
-    TesterAgent: []                    # local Git CI needs no provider credential
-    ReviewerAgent:
-      - "github:create_pr"
-      - "github:review_pr"
+    TesterAgent: []                   # isolated CI needs no provider credential
+    ReviewerAgent: []                 # candidate review only; no GitHub write
   # Branch protection: write capabilities are only valid on non-default
   # branches. The runtime rejects any write_file targeting main/master.
   branch_protection:

@@ -1,5 +1,8 @@
 # 答辩问题库
 
+答辩时每个结论标明四层证据之一：本地已验证、候选/部署预检、2026-07-27/28
+历史现场、当前版本待服务器实证。历史结果不自动继承给未发布 v2.1.0。
+
 ## 1. 这和串行工作流有什么区别？
 
 区别不在并发数量，而在独立身份、私有边界、失败返回、可验证交接和不同
@@ -19,21 +22,25 @@ Skill 会模糊“谁能改计划”和“谁能做工作”的边界。
 
 ## 4. MCP 为什么不是配置型伪实现？
 
-仓库实现的五个工具可由 FastMCP endpoint 枚举和调用，本地集成测试验证了这条
-链路。流水线在一次性副本执行 server-owned argv，覆盖率接口读取
-`coverage.json`；回滚调用原子 symlink provider 并做健康检查。这些是代码与
-本地测试证据，不是当前 AgentTeams 服务器已完成 CI/CD 或回滚现场闭环的声明。
+当前未发布候选只设计一个 `run_tests` 动作，不把通用流水线、部署或回滚包装成 Agent
+工具。便携 Python profile 已通过本地 FastMCP 集成在一次性进程级副本执行
+server-owned argv；AgentTeams profile 是候选独立 Tester CI Pod 的 Streamable
+HTTP MCP，设计从已 ACK 的 TeamHarness handoff 派生候选与测试范围、用 Bubblewrap
+断网执行并签发短时 Ed25519 回执。其代码/合同有本地测试，但镜像、namespace、CNI
+和完整 receipt→Leader accept 仍待服务器实证。旧的回滚库只保留
+为本地集成/禁用边界证据，不属于当前 AgentTeams 授权面。
 
 ## 5. Agent 能不能把 shell 命令藏在参数里？
 
-不能。接口不接收命令文本，只接收 typed patch、suite、branch、pipeline id
-或受限 release；实际 argv 在服务器环境预注册并以 `shell=False` 执行。
+不能。AgentTeams 接口只接收 `taskId/revision/workspaceBinding`，候选、测试范围和
+argv 均由已 ACK 的任务与服务端策略派生；独立的便携接口只接收 `issue_id/patch`，
+测试范围由签名上下文的风险等级选择。两者都不接收命令、可执行文件或仓库路径。
 
 ## 6. 人工批准如何防止复用？
 
 本地实现与测试中，签名绑定 action、canonical target、完整参数 SHA-256、
-批准人和时间，并有有效期；改环境、release 或任一参数都会使验证失败。当前
-服务器仅实证 T4 暂停和无批准恢复拒绝，真人签名批准后恢复仍未完成。
+批准人和时间，并有有效期；改环境、release 或任一参数都会使验证失败。历史
+AgentTeams 现场仅实证 T4 暂停和无批准恢复拒绝，真人签名批准后恢复仍未完成。
 
 ## 7. 审计链能否防止管理员重写全部日志？
 
@@ -42,8 +49,10 @@ Skill 会模糊“谁能改计划”和“谁能做工作”的边界。
 
 ## 8. 凭据代理是否真的不泄露密钥？
 
-Agent 只拿短期、任务与仓库范围绑定的 capability，真实凭据只存在于服务端
-适配器。集群 E2E 已完成一次 fresh、operator-driven 的固定范围 T2 边界任务；
+在已验证的固定范围 GitHub/Broker 路径中，Worker 不拿上游 GitHub token；本地
+credential-broker 测试也只给调用方短期 capability。当前 OpenClaw 工作区仍有
+MCP consumer/configuration 材料，不能概括成“所有 Agent 无凭据”。2026-07-27/28
+历史集群完成过一次 fresh、operator-driven 的固定范围 T2 边界任务；
 项目完成且 requester report 不再 pending，validator、首提、幂等重试、冲突
 拒绝、冲突后读回与 Leader `effective` 均通过。同一 capability 换路径和
 Reviewer 入口均返回 403，Locator 直连 Broker 被 NetworkPolicy 阻断。证据不
@@ -57,17 +66,18 @@ Reviewer 入口均返回 403，Locator 直连 Broker 被 NetworkPolicy 阻断。
 
 ## 10. 为什么不直接用覆盖率证明系统可靠？
 
-覆盖率只说明哪些代码被执行，不证明职责边界正确或现场闭环真实。2026-07-28
-决赛分支冻结前一次完整结果是 971 passed、17 skipped、84.75%（6,314
-statements / 963 missed），但其后代码仍有变化，不能当作最终 tag 证据。提交前
-必须在冻结版本上复跑；最终证据还要包含行为评测、拒绝测试、真实服务器状态和
-人工门记录。
+覆盖率只说明哪些代码被执行，不证明职责边界正确或现场闭环真实。2026-07-30
+当前候选工作树完整结果是 1,330 passed、24 skipped、84.06%（6,325
+statements / 1,008 missed），但尚未绑定 clean commit、CI 或 release provenance，
+不能当作最终 tag 证据。提交前必须在冻结版本上复跑；最终证据还要包含行为评测、
+拒绝测试、真实服务器状态和人工门记录。
 
-## 11. 三仓库 24 项是否等于完整补丁解决基准？
+## 11. 三仓库 21 项是否等于完整补丁解决基准？
 
-不等于。它测量真实源码条件下的路由、边界、安全与成本。完整 issue-resolution
-必须在固定、可复现的仓库环境中应用补丁并运行项目测试。当前 24 项不得表述为
-“修复 24 个缺陷”，也不得写成“SWE-bench 24/24”。
+不等于。三个固定 revision 各有 7 个 execution-ready 任务，但当前 Agent
+attempted=0、executed=0。完整 issue-resolution 必须在固定、可复现的仓库环境中
+应用补丁并运行项目测试。历史 24 项路由/边界基准是另一层证据；两者都不得表述为
+“修复 21/24 个缺陷”，也不得写成“SWE-bench 21/21”或“24/24”。
 
 ## 12. AgentTeams 真实运行到底完成了什么？
 
@@ -121,7 +131,7 @@ Skill。我们不会把旧分数平移给新 Skill，新增行为评测完成后
 
 ## 18. 角色 Skill 已经“完全隔离”了吗？
 
-不能这样表述。现场 apply 与独立只读检查证明的是固定七项 DevFlow Skill 策略
+不能这样表述。2026-07-27/28 历史现场 apply 与独立只读检查证明的是固定七项 DevFlow Skill 策略
 在控制器归档缓存、控制器持久 Skill 缓存、Worker 本地树和 MinIO 一致，即
 `devflowPolicyVerified=true`，最新独立检查为 0 drift，六个角色 Pod 为 6/6
 Ready。结果同时明确
@@ -132,11 +142,11 @@ TOCTOU 风险。
 
 ## 19. TeamHarness 和 MCP 如何避免只信调用者自述？
 
-当前 Guard 代码与测试从根权限账本读取项目风险、从持久项目状态读取来源，
+当前 Guard 代码与本地测试从根权限账本读取项目风险、从持久项目状态读取来源，
 直接查询 Matrix 以验证私有邀请规则和完整实际成员集合，并用 taskId 与提交摘要
 约束幂等/冲突。成功路径驱动直接使用 stdio 与 Streamable HTTP，敏感值不进入
-子进程 argv，同时校验角色×服务器配置/schema 并设置硬截止。一次 fresh T2
-现场任务已沿该路径完成：项目完成、报告关闭，validator、三种提交语义、冲突后
+子进程 argv，同时校验角色×服务器配置/schema 并设置硬截止。2026-07-28 一次
+fresh T2 历史现场任务沿该路径完成：项目完成、报告关闭，validator、三种提交语义、冲突后
 读回与 Leader `effective` 均验证；项目 push 报告 2/2，对 `meta.json` 与
 `plan.md` 又分别执行了 `stat exists=true`。这些独立 stat 只证明对象存在，
 不证明远端字节摘要；一次 T2 也不能替代六阶段修复或总体成功率基准。这里的

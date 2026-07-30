@@ -1,4 +1,9 @@
-# Server CI/CD MCP integration evidence
+# Historical portable-profile Server CI/CD MCP integration evidence
+
+> This is dated evidence for infrastructure release `921162c` and its former
+> five-tool portable MCP surface. It is not the current AgentTeams Tester-only
+> `run_tests` candidate, not v2.1.0 deployment evidence, and not an AgentTeams
+> Team Room or six-stage run.
 
 Date: 2026-07-24 (Asia/Shanghai)
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import contextlib
 import hashlib
 import hmac
 import http.client
@@ -24,7 +25,10 @@ import os
 import re
 import secrets
 import ssl
+import stat
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -32,8 +36,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
-CAPABILITY_SCHEMA = "devflow.github-content-capability/v1"
-CONTENT_RESPONSE_SCHEMA = "devflow.github-content-response/v1"
+CAPABILITY_SCHEMA = "devflow.github-content-capability/v2"
+CONTENT_RESPONSE_SCHEMA = "devflow.github-content-response/v2"
+RECEIPT_SIGNATURE_DOMAIN = b"devflow.github-content-receipt/v2\0"
 GITHUB_HOST = "api.github.com"
 GITHUB_PORT = 443
 ISSUER_DEFAULT_PORT = 8081
@@ -55,6 +60,14 @@ EXPECTED_LEADER_USERNAME = (
 )
 DEFAULT_REVIEWER_TOKEN_PATH = "/var/run/secrets/agentteams-issuer/token"
 DEFAULT_REVIEWER_CA_PATH = "/var/run/secrets/agentteams-issuer/ca.crt"
+PRODUCTION_OPENSSL_PATH = Path("/usr/bin/openssl")
+PRODUCTION_RECEIPT_PRIVATE_KEY_PATH = Path(
+    "/var/run/secrets/devflow-github-receipt/receipt-ed25519.pem"
+)
+ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
+ED25519_SPKI_BYTES = 44
+ED25519_SIGNATURE_BYTES = 64
+OPENSSL_TIMEOUT_SECONDS = 10
 
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 OWNER_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
@@ -89,6 +102,15 @@ class UpstreamError(BrokerError):
 
 class AuthenticationUnavailableError(BrokerError):
     """The issuer identity provider could not make an authoritative decision."""
+
+
+class ReceiptSigner(Protocol):
+    """Sign one domain-separated canonical content receipt."""
+
+    @property
+    def public_key_sha256(self) -> str: ...
+
+    def sign(self, value: dict[str, Any]) -> str: ...
 
 
 def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -211,7 +233,9 @@ def parse_repository_allowlist(value: str) -> frozenset[tuple[str, str]]:
 
 @dataclass(frozen=True)
 class Scope:
+    run_id: str
     task_id: str
+    trace_id: str
     owner: str
     repo: str
     revision: str
@@ -220,15 +244,24 @@ class Scope:
     @classmethod
     def from_issuer_document(cls, value: Any) -> Scope:
         if not isinstance(value, dict) or set(value) != {
+            "run_id",
             "task_id",
+            "trace_id",
             "owner",
             "repo",
             "revision",
             "paths",
         }:
             raise RequestRejected(400, "issuer_schema_invalid")
+        run_id = validate_task_id(value["run_id"])
+        task_id = validate_task_id(value["task_id"])
+        trace_id = validate_task_id(value["trace_id"])
+        if trace_id != f"{run_id}:{task_id}":
+            raise RequestRejected(400, "trace_id_invalid")
         return cls(
-            task_id=validate_task_id(value["task_id"]),
+            run_id=run_id,
+            task_id=task_id,
+            trace_id=trace_id,
             owner=validate_owner(value["owner"]),
             repo=validate_repo(value["repo"]),
             revision=validate_revision(value["revision"]),
@@ -239,7 +272,9 @@ class Scope:
 @dataclass(frozen=True)
 class CapabilityClaims:
     schema: str
+    run_id: str
     task_id: str
+    trace_id: str
     owner: str
     repo: str
     revision: str
@@ -252,7 +287,9 @@ class CapabilityClaims:
     def from_payload(cls, value: Any) -> CapabilityClaims:
         expected = {
             "schema",
+            "run_id",
             "task_id",
+            "trace_id",
             "owner",
             "repo",
             "revision",
@@ -280,9 +317,16 @@ class CapabilityClaims:
             raise RequestRejected(403, "capability_jti_invalid")
         try:
             paths = validate_paths(value["paths"])
+            run_id = validate_task_id(value["run_id"])
+            task_id = validate_task_id(value["task_id"])
+            trace_id = validate_task_id(value["trace_id"])
+            if trace_id != f"{run_id}:{task_id}":
+                raise RequestRejected(403, "capability_trace_invalid")
             return cls(
                 schema=schema,
-                task_id=validate_task_id(value["task_id"]),
+                run_id=run_id,
+                task_id=task_id,
+                trace_id=trace_id,
                 owner=validate_owner(value["owner"]),
                 repo=validate_repo(value["repo"]),
                 revision=validate_revision(value["revision"]),
@@ -297,7 +341,9 @@ class CapabilityClaims:
     def payload(self) -> dict[str, Any]:
         return {
             "schema": self.schema,
+            "run_id": self.run_id,
             "task_id": self.task_id,
+            "trace_id": self.trace_id,
             "owner": self.owner,
             "repo": self.repo,
             "revision": self.revision,
@@ -341,7 +387,9 @@ class CapabilityCodec:
             raise BrokerError("generated capability jti is invalid")
         claims = CapabilityClaims(
             schema=CAPABILITY_SCHEMA,
+            run_id=scope.run_id,
             task_id=scope.task_id,
+            trace_id=scope.trace_id,
             owner=scope.owner,
             repo=scope.repo,
             revision=scope.revision,
@@ -391,13 +439,6 @@ class CapabilityCodec:
         if _canonical_json(claims.payload()) != payload_bytes:
             raise RequestRejected(403, "capability_payload_noncanonical")
         return claims
-
-    def sign_receipt(self, value: dict[str, Any]) -> str:
-        """Sign a canonical receipt with domain separation from capabilities."""
-
-        message = b"devflow-github-content-receipt/v1\0" + _canonical_json(value)
-        return hmac.new(self._key, message, hashlib.sha256).hexdigest()
-
 
 @dataclass(frozen=True)
 class ContentRequest:
@@ -465,6 +506,133 @@ class GitHubContent:
     content_base64: str
 
 
+class OpenSSLEd25519ReceiptSigner:
+    """Use a fixed OpenSSL binary and externally mounted Ed25519 private key."""
+
+    def __init__(
+        self,
+        private_key_path: Path,
+        *,
+        openssl_path: Path = PRODUCTION_OPENSSL_PATH,
+        enforce_production_metadata: bool = False,
+    ) -> None:
+        self._private_key_path = private_key_path
+        self._openssl_path = openssl_path
+        self._validate_paths(enforce_production_metadata=enforce_production_metadata)
+        public_der = self._run(
+            [
+                str(self._openssl_path),
+                "pkey",
+                "-in",
+                str(self._private_key_path),
+                "-pubout",
+                "-outform",
+                "DER",
+            ],
+            input_data=None,
+            maximum=ED25519_SPKI_BYTES,
+            label="receipt signing key validation",
+        )
+        if (
+            len(public_der) != ED25519_SPKI_BYTES
+            or not public_der.startswith(ED25519_SPKI_PREFIX)
+        ):
+            raise BrokerError("receipt signing key must be Ed25519")
+        self._public_key_sha256 = hashlib.sha256(public_der).hexdigest()
+
+    @property
+    def public_key_sha256(self) -> str:
+        return self._public_key_sha256
+
+    def _validate_paths(self, *, enforce_production_metadata: bool) -> None:
+        try:
+            key_metadata = self._private_key_path.lstat()
+            openssl_metadata = self._openssl_path.lstat()
+        except OSError as exc:
+            raise BrokerError("receipt signing dependency is missing") from exc
+        if (
+            not stat.S_ISREG(key_metadata.st_mode)
+            or self._private_key_path.is_symlink()
+            or key_metadata.st_nlink != 1
+            or not stat.S_ISREG(openssl_metadata.st_mode)
+            or self._openssl_path.is_symlink()
+            or not os.access(self._openssl_path, os.X_OK)
+        ):
+            raise BrokerError("receipt signing dependency metadata is unsafe")
+        if enforce_production_metadata and (
+            self._private_key_path != PRODUCTION_RECEIPT_PRIVATE_KEY_PATH
+            or self._openssl_path != PRODUCTION_OPENSSL_PATH
+            or os.name == "posix"
+            and (
+                key_metadata.st_uid != 0
+                or key_metadata.st_gid != 0
+                or stat.S_IMODE(key_metadata.st_mode) != 0o400
+                or openssl_metadata.st_uid != 0
+                or openssl_metadata.st_gid != 0
+                or stat.S_IMODE(openssl_metadata.st_mode) & 0o022
+            )
+        ):
+            raise BrokerError("production receipt signing dependency metadata is unsafe")
+
+    @staticmethod
+    def _run(
+        args: list[str],
+        *,
+        input_data: bytes | None,
+        maximum: int,
+        label: str,
+    ) -> bytes:
+        try:
+            completed = subprocess.run(
+                args,
+                input=input_data,
+                capture_output=True,
+                check=False,
+                timeout=OPENSSL_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise BrokerError(f"{label} failed") from exc
+        if completed.returncode != 0 or not 1 <= len(completed.stdout) <= maximum:
+            raise BrokerError(f"{label} failed")
+        return completed.stdout
+
+    def sign(self, value: dict[str, Any]) -> str:
+        message = RECEIPT_SIGNATURE_DOMAIN + _canonical_json(value)
+        message_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix="devflow-github-receipt-",
+                suffix=".msg",
+                delete=False,
+            ) as stream:
+                message_path = Path(stream.name)
+                stream.write(message)
+                stream.flush()
+            message_path.chmod(0o600)
+            signature = self._run(
+                [
+                    str(self._openssl_path),
+                    "pkeyutl",
+                    "-sign",
+                    "-inkey",
+                    str(self._private_key_path),
+                    "-rawin",
+                    "-in",
+                    str(message_path),
+                ],
+                input_data=None,
+                maximum=ED25519_SIGNATURE_BYTES,
+                label="receipt signing",
+            )
+        finally:
+            if message_path is not None:
+                with contextlib.suppress(OSError):
+                    message_path.unlink()
+        if len(signature) != ED25519_SIGNATURE_BYTES:
+            raise BrokerError("receipt signing returned an invalid signature")
+        return _b64url_encode(signature)
+
+
 def parse_github_content(
     response: UpstreamResponse,
     *,
@@ -521,7 +689,7 @@ def parse_github_content(
 
 def content_receipt(
     *,
-    codec: CapabilityCodec,
+    signer: ReceiptSigner,
     capability: str,
     claims: CapabilityClaims,
     request: ContentRequest,
@@ -529,18 +697,30 @@ def content_receipt(
     authorized_at: int,
 ) -> dict[str, Any]:
     scope_document = {
+        "run_id": claims.run_id,
         "task_id": claims.task_id,
+        "trace_id": claims.trace_id,
         "owner": claims.owner,
         "repo": claims.repo,
         "revision": claims.revision,
         "paths": list(claims.paths),
     }
+    scope_digest = hashlib.sha256(_canonical_json(scope_document)).hexdigest()
     evidence: dict[str, Any] = {
         "schema_version": CONTENT_RESPONSE_SCHEMA,
+        "assignment": {
+            "run_id": claims.run_id,
+            "task_id": claims.task_id,
+            "trace_id": claims.trace_id,
+            "repository": f"{claims.owner}/{claims.repo}",
+            "revision": claims.revision,
+            "paths": list(claims.paths),
+            "scope_digest": scope_digest,
+        },
         "authorization": {
             "decision": "allow",
             "task_id": request.task_id,
-            "scope_digest": hashlib.sha256(_canonical_json(scope_document)).hexdigest(),
+            "scope_digest": scope_digest,
             "capability_digest": hashlib.sha256(capability.encode("ascii")).hexdigest(),
             "authorized_at": authorized_at,
         },
@@ -552,11 +732,12 @@ def content_receipt(
             "content_base64": content.content_base64,
             "encoding": "base64",
         },
+        "receipt_key_sha256": signer.public_key_sha256,
     }
-    # The digest covers the evidence payload. The HMAC then covers that payload
-    # plus response_digest, avoiding a self-referential digest definition.
+    # The response digest covers all evidence and the trusted receipt key ID.
+    # Ed25519 then covers that digest as part of the complete unsigned receipt.
     evidence["response_digest"] = hashlib.sha256(_canonical_json(evidence)).hexdigest()
-    evidence["receipt_signature"] = codec.sign_receipt(evidence)
+    evidence["receipt_signature"] = signer.sign(evidence)
     return evidence
 
 
@@ -854,6 +1035,7 @@ class ServerPolicy:
     max_response_bytes: int
     allowed_repositories: frozenset[tuple[str, str]]
     max_content_bytes: int = DEFAULT_MAX_CONTENT_BYTES
+    receipt_signer: ReceiptSigner | None = None
 
     def require_repository(self, owner: str, repo: str) -> None:
         if (owner, repo) not in self.allowed_repositories:
@@ -907,6 +1089,7 @@ class ServerPolicy:
                 max_response_bytes=DEFAULT_MAX_RESPONSE_BYTES,
                 allowed_repositories=allowed_repositories,
                 max_content_bytes=DEFAULT_MAX_CONTENT_BYTES,
+                receipt_signer=None,
             )
         max_bytes = _read_integer_environment(
             "DEVFLOW_GITHUB_MAX_RESPONSE_BYTES",
@@ -938,6 +1121,11 @@ class ServerPolicy:
             max_response_bytes=max_bytes,
             allowed_repositories=allowed_repositories,
             max_content_bytes=max_content_bytes,
+            receipt_signer=OpenSSLEd25519ReceiptSigner(
+                PRODUCTION_RECEIPT_PRIVATE_KEY_PATH,
+                openssl_path=PRODUCTION_OPENSSL_PATH,
+                enforce_production_metadata=True,
+            ),
         )
 
 
@@ -1167,8 +1355,11 @@ class BrokerRequestHandler(BaseHTTPRequestHandler):
                 expected_path=request.path,
                 max_content_bytes=self.broker.policy.max_content_bytes,
             )
+            signer = self.broker.policy.receipt_signer
+            if signer is None:
+                raise BrokerError("content receipt signer is unavailable")
             receipt = content_receipt(
-                codec=self.broker.policy.codec,
+                signer=signer,
                 capability=capability,
                 claims=claims,
                 request=request,

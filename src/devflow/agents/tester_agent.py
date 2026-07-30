@@ -6,6 +6,7 @@ from typing import Any
 
 from devflow.agents.base import AgentIdentity, BaseAgent
 from devflow.exceptions import AgentError
+from devflow.mcp.cicd import PORTABLE_CICD_SERVER
 from devflow.models.issue import ComplexityLevel
 from devflow.models.patch import PatchCandidate
 from devflow.models.test_result import (
@@ -30,7 +31,7 @@ class TesterAgent(BaseAgent):
     _CAPABILITIES = (
         "test_execution",
         "baseline_comparison",
-        "coverage_analysis",
+        "integrity_validation",
         "regression_detection",
     )
     _BOUNDARIES = (
@@ -73,12 +74,11 @@ class TesterAgent(BaseAgent):
             "test-runner", issue_id=issue_id, tier=tier.value, full_suite=full_suite
         ):
             raw = await self._call_mcp(
-                "cicd",
+                PORTABLE_CICD_SERVER,
                 "run_tests",
                 {
                     "issue_id": issue_id,
                     "patch": patch.model_dump(mode="json"),
-                    "full_suite": full_suite,
                 },
                 skill="test-runner",
                 issue_id=issue_id,

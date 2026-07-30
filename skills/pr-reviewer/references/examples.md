@@ -3,8 +3,10 @@
 ## Success
 
 A T2 candidate has matching green test evidence and a clean security scan.
-Return `approved`, then create a PR through the scoped tool and record its
-actual URL and audit evidence.
+Return `approved` with `pr_url=null` to TeamLeader. TeamLeader validates and
+records candidate eligibility; neither role creates, reviews, or merges a PR.
+Any later repository transition belongs to a separately authorized external
+release process and is outside this Skill result.
 
 ## Failure
 

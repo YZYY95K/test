@@ -19,7 +19,6 @@
     "experience.stored"
   ],
   "required_successful_tools": [
-    "github:get_file_contents",
-    "cicd:run_tests"
+    "devflow-cicd-portable:run_tests"
   ]
 }

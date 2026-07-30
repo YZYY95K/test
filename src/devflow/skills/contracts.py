@@ -28,6 +28,8 @@ class ArtifactContract(StrictContractModel):
 
     @model_validator(mode="after")
     def _require_disjoint_fields(self) -> ArtifactContract:
+        if len(self.required_fields) != len(set(self.required_fields)):
+            raise ValueError("required artifact fields must be unique")
         if set(self.required_fields).intersection(self.optional_fields):
             raise ValueError("required and optional artifact fields must be disjoint")
         if len(self.optional_fields) != len(set(self.optional_fields)):
@@ -108,6 +110,48 @@ class FailureEvidenceContract(StrictContractModel):
     bounds: FailureEvidenceBounds
     integrity: FailureEvidenceIntegrity
     privacy: FailureEvidencePrivacy
+
+
+class TestExecutionReceiptContract(StrictContractModel):
+    """Cryptographic CI provenance required by the test-runner Skill."""
+
+    schema_: Literal["devflow.test-execution-receipt/v1"] = Field(alias="schema")
+    algorithm: Literal["Ed25519"]
+    issuer: Literal["devflow-tester-cicd"]
+    audience: Literal["devflow-teamharness"]
+    signature_domain: Literal["devflow.test-execution-receipt/v1"]
+    lifetime_seconds: Literal[120]
+    required_claims: list[str] = Field(min_length=1)
+    trust_boundary: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _require_complete_claim_set(self) -> TestExecutionReceiptContract:
+        expected = {
+            "run_id",
+            "task_id",
+            "trace_id",
+            "issue_id",
+            "repository",
+            "revision",
+            "workspace_binding",
+            "candidate_digest",
+            "tier",
+            "execution_profile",
+            "isolation_profile",
+            "test_result_digest",
+            "execution_policy_digest",
+            "policy_digest",
+            "server_digest",
+            "key_sha256",
+            "iat",
+            "exp",
+            "jti",
+        }
+        if len(self.required_claims) != len(set(self.required_claims)):
+            raise ValueError("TestExecutionReceipt claims must be unique")
+        if set(self.required_claims) != expected:
+            raise ValueError("TestExecutionReceipt claim set is incomplete")
+        return self
 
 
 class FailureHandoffContract(StrictContractModel):
@@ -220,25 +264,49 @@ class SkillContract(StrictContractModel):
     release: ReleasePolicy
     examples_ref: str = Field(pattern=r"^references/[^/]+$")
     failure_evidence: FailureEvidenceContract | None = None
+    test_execution_receipt: TestExecutionReceiptContract | None = None
     failure_handoff: FailureHandoffContract | None = None
     retry_protocol: RetryProtocolContract | None = None
     retry_handoff: RetryHandoffContract | None = None
 
     @model_validator(mode="after")
     def _validate_recovery_bounds(self) -> SkillContract:
+        failure_codes = [failure.code for failure in self.failures]
+        if len(failure_codes) != len(set(failure_codes)):
+            raise ValueError("failure codes must be unique")
+        verification_ids = [rule.id for rule in self.verification]
+        if len(verification_ids) != len(set(verification_ids)):
+            raise ValueError("verification ids must be unique")
+        handoff_edges = [
+            (rule.on, rule.consumer, rule.artifact_type, rule.event)
+            for rule in self.handoffs
+        ]
+        if len(handoff_edges) != len(set(handoff_edges)):
+            raise ValueError("handoff edges must be unique")
+        if any(rule.consumer != "TeamLeader" for rule in self.handoffs):
+            raise ValueError("Worker handoffs must be mediated by TeamLeader")
+        success_edges = [rule for rule in self.handoffs if rule.on == "success"]
+        if len(success_edges) != 1 or success_edges[0].artifact_type != self.output.type:
+            raise ValueError("exactly one success handoff must carry the declared output")
         for failure in self.failures:
+            if failure.route_to != "TeamLeader":
+                raise ValueError(f"{failure.code}: failures must route to TeamLeader")
             if not failure.retryable and failure.max_attempts != 0:
                 raise ValueError(f"{failure.code}: non-retryable failures need max_attempts=0")
+            if failure.retryable and failure.max_attempts == 0:
+                raise ValueError(f"{failure.code}: retryable failures need a positive budget")
         if self.name == "test-runner":
             if not all(
                 (
                     self.failure_evidence,
+                    self.test_execution_receipt,
                     self.failure_handoff,
                     self.retry_protocol,
                 )
             ):
                 raise ValueError(
-                    "test-runner requires failure_evidence, failure_handoff, and retry_protocol"
+                    "test-runner requires failure_evidence, test_execution_receipt, "
+                    "failure_handoff, and retry_protocol"
                 )
             assert self.failure_handoff is not None
             assert self.retry_protocol is not None
@@ -273,7 +341,14 @@ class SkillContract(StrictContractModel):
             regression_rules = [item for item in self.failures if item.code == "TEST_REGRESSION"]
             if len(regression_rules) != 1 or regression_rules[0].route_to != "TeamLeader":
                 raise ValueError("TEST_REGRESSION must route through TeamLeader")
-        elif any((self.failure_evidence, self.failure_handoff, self.retry_protocol)):
+        elif any(
+            (
+                self.failure_evidence,
+                self.test_execution_receipt,
+                self.failure_handoff,
+                self.retry_protocol,
+            )
+        ):
             raise ValueError("failure retry extensions are reserved for test-runner")
 
         if self.name == "patch-generator":

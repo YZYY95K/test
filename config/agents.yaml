@@ -63,7 +63,9 @@ agents:
       - plan_generation      # produce executable plan DAG
     boundaries:
       - "Cannot write code directly"
-      - "Cannot approve PRs without human review for T4/T5 issues"
+      - "Cannot invoke a Worker domain Skill in its own role"
+      - "Cannot create, review, merge, deploy, or roll back repository state"
+      - "Cannot substitute for external human approval on T4/T5 issues"
       - "Cannot modify files outside the .devflow/ state directory"
       - "Cannot bypass the approval workflow defined in security.yaml"
     watches:
@@ -140,6 +142,7 @@ agents:
     boundaries:
       - "Cannot write or modify source files"
       - "Cannot execute repository code"
+      - "Only github-evidence may perform the task-scoped GitHub read; code-root-cause has no MCP"
       - "Context payload must stay under the CoderAgent input token budget"
     watches:
       - "codebase.indexed"   # notification only; never a task hand-off
@@ -188,60 +191,57 @@ agents:
       - "patch-generator"
 
   # ===========================================================================
-  # 5. TesterAgent — Verification & Coverage
+  # 5. TesterAgent — Verification & Integrity
   # ===========================================================================
-  # Runs the test suite against the candidate patch, compares results to the
-  # baseline, and reports coverage delta. It is the gate that determines
-  # whether a patch may proceed to review.
+  # Runs the server-selected test profile against the candidate patch, compares
+  # its process outcome to the baseline, and verifies execution/integrity
+  # evidence. Current adapters do not parse real case counts or coverage.
   # ===========================================================================
   - name: "TesterAgent"
     identity:
       role: "Tester Agent"
       description: >-
-        Executes tests, compares results against the baseline, and analyses
-        coverage to gate patch promotion.
+        Executes the server-selected test profile, compares baseline and
+        candidate outcomes, and verifies integrity evidence before promotion.
       model: "glm-5.2"
       temperature: 0.1  # near-deterministic — test orchestration must be stable
     capabilities:
-      - test_execution        # invoke test runner via CI/CD MCP
-      - baseline_comparison   # diff pass/fail/coverage vs baseline
-      - coverage_analysis     # line & branch coverage delta
+      - test_execution        # invoke exactly one policy-owned run_tests action
+      - baseline_comparison   # compare bounded baseline/candidate process outcomes
+      - integrity_validation  # verify policy, manifests, receipt, and result binding
       - regression_detection  # flag newly failing previously-passing tests
     boundaries:
       - "Cannot modify source code"
       - "Cannot modify test files"
       - "Cannot mark a patch as approved — only report pass/fail"
       - "Must run full suite, not a subset, for T3+ issues"
+      - "Cannot provide a shell command, repository path, or executable path"
     watches: []            # task intake only through TeamLeader routes
     depends_on_skills:
       - "test-runner"
 
   # ===========================================================================
-  # 6. ReviewerAgent — Review, optional PR & Security Gate
+  # 6. ReviewerAgent — Candidate Review & Security Gate
   # ===========================================================================
-  # Final autonomous gate. Runs automated code review and security scanning,
-  # and applies the approval policy from security.yaml. The portable profile
-  # may create a pull request only when an explicit GitHub write grant is
-  # installed. The current AgentTeams deployment intentionally installs no
-  # such Reviewer grant. For T4/T5 it must block pending human approval.
+  # Final autonomous candidate gate. Runs automated review and security
+  # reasoning and applies the approval policy from security.yaml. It has no
+  # GitHub write grant. For T4/T5 it must block pending human approval.
   # ===========================================================================
   - name: "ReviewerAgent"
     identity:
       role: "Reviewer Agent"
       description: >-
-        Performs automated code review and security scanning, records PR-ready
-        evidence, and drives the approval workflow per the security policy.
-        PR creation is optional and requires an explicit deployment grant.
+        Performs automated candidate review and security reasoning, records
+        promotion eligibility, and drives the approval workflow per policy.
       model: "glm-5.2"
       temperature: 0.3
     capabilities:
-      - pr_creation          # portable profile only; absent from AgentTeams deployment
       - code_review          # static analysis + style + correctness
       - security_scan        # dependency & secret scanning
       - approval_workflow    # enforce T1-T3 auto / T4-T5 human gate
     boundaries:
-      - "Cannot merge any PR; it may only record review eligibility"
-      - "Cannot merge when CI is red"
+      - "Cannot create, review, approve, or merge a pull request"
+      - "Cannot mark a candidate eligible when CI is red"
       - "Cannot bypass security scan findings classified critical/high"
       - "Cannot self-approve a PR it authored"
     watches: []            # task intake only through TeamLeader routes
@@ -258,7 +258,7 @@ agents:
 #   issue.created
 #     -> TriageAgent  (issue-classifier)
 #        -> TeamLeader decomposes by tier
-#           -> LocatorAgent (code-root-cause)
+#           -> LocatorAgent (github-evidence, then code-root-cause via TeamLeader)
 #              -> CoderAgent (patch-generator)
 #                 -> TesterAgent (test-runner)
 #                    -> ReviewerAgent (pr-reviewer)

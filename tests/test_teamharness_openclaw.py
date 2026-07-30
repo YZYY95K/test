@@ -156,6 +156,67 @@ def _approval_key_fixture(root: Path) -> tuple[Path, Path, Path]:
     return private_key, public_key, openssl_path
 
 
+def _test_execution_receipt_fixture(root: Path) -> dict[str, Path]:
+    """Build public-only TeamHarness trust for a distinct CI signing identity."""
+
+    fixture = root / "test-execution-receipt-fixture"
+    _private_key, public_key, openssl_path = _approval_key_fixture(fixture)
+    installed_root = fixture / "installed"
+    public_key_path = installed_root / "test-receipt-ed25519.pub"
+    policy_path = installed_root / "test-receipt-policy.json"
+    ledger_path = fixture / "state/test-receipt-ledger.json"
+    policy_source = fixture / "source/test-receipt-policy.json"
+    policy = {
+        "algorithm": "Ed25519",
+        "audience": "devflow-teamharness",
+        "ciPolicySha256": "1" * 64,
+        "ciServerSha256": "2" * 64,
+        "issuer": "devflow-tester-cicd",
+        "maxClockSkewSeconds": 5,
+        "maxReceiptLifetimeSeconds": 120,
+        "opensslPath": str(openssl_path),
+        "policyAttestationPath": str(policy_path),
+        "publicKeyFileSha256": hashlib.sha256(public_key.read_bytes()).hexdigest(),
+        "publicKeyPath": str(public_key_path),
+        "publicKeySha256": adapter._ed25519_public_key_digest(
+            public_key,
+            openssl_path,
+        ),
+        "remainingThreat": (
+            "A container or node root compromise remains in scope. The replay "
+            "ledger is Pod-local; Leader Pod replacement can lose replay history "
+            "for the 120-second receipt lifetime."
+        ),
+        "replayLedgerPath": str(ledger_path),
+        "replayScope": "pod-incarnation",
+        "replayLedgerPersistentAcrossPodReplacement": False,
+        "receiptLifetimeSeconds": 120,
+        "repositoryArchiveSha256": "3" * 64,
+        "repositoryManifestSha256": "4" * 64,
+        "repositoryRevision": "5" * 40,
+        "schemaVersion": "1.0",
+        "signatureDomain": "devflow.test-execution-receipt/v1",
+    }
+    policy_source.parent.mkdir(parents=True, exist_ok=True)
+    policy_source.write_bytes(
+        json.dumps(
+            policy,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+    return {
+        "public_key": public_key,
+        "policy_source": policy_source,
+        "public_key_path": public_key_path,
+        "policy_path": policy_path,
+        "ledger_path": ledger_path,
+        "openssl_path": openssl_path,
+    }
+
+
 def _runtime_text(role: str, runtime_name: str | None = None) -> str:
     name = runtime_name or f"{role}-runtime"
     return (
@@ -234,6 +295,12 @@ def _project_store(arguments):
     if path.exists():
         return path, json.loads(path.read_text(encoding="utf-8"))
     return path, {}
+def _task_store(arguments):
+    workspace = Path(arguments["workspaceDir"])
+    path = workspace / ".fixture-tasks.json"
+    if path.exists():
+        return path, json.loads(path.read_text(encoding="utf-8"))
+    return path, {}
 def _payload(arguments):
     value = arguments.get("payload", {})
     return json.loads(value) if isinstance(value, str) else value
@@ -273,6 +340,45 @@ def handle_request(request):
         elif action == "complete_project":
             project["status"] = "completed"
         elif action == "accept_task_result":
+            mode = payload.get("_fixtureAcceptMode", "success")
+            if mode == "fail-before-mutation":
+                return {"jsonrpc": "2.0", "id": request.get("id"), "result": {
+                    "ok": False, "tool": "projectflow", "action": action,
+                    "error": "fixture upstream failure"
+                }}
+            delay = payload.get("_fixtureAcceptDelaySeconds", 0)
+            if delay:
+                time.sleep(float(delay))
+            task_id = payload.get("taskId") or payload.get("task_id")
+            result_status = payload.get("resultStatus") or payload.get("result_status") or "SUCCESS"
+            accepted = payload.get("accepted", True)
+            node_status = (
+                "completed" if accepted and result_status in {"SUCCESS", "SUCCESS_WITH_NOTES"}
+                else "blocked" if result_status in {"BLOCKED", "INTERRUPTED"}
+                else "revision"
+            )
+            if mode == "conflict":
+                node_status = "blocked"
+            matches = [item for item in project.get("tasks", []) if item.get("task_id") == task_id]
+            if not matches:
+                project.setdefault("tasks", []).append({"task_id": task_id, "status": "submitted"})
+                matches = [project["tasks"][-1]]
+            matches[0]["status"] = node_status
+            if node_status == "completed":
+                project["requester_report"] = {
+                    "pending": True,
+                    "reason": "task_result_accepted",
+                    "task_id": task_id,
+                    "result_status": result_status,
+                    "summary": str(payload.get("summary") or ""),
+                    "report_path": f"shared/projects/{project_id}/result.md",
+                }
+            else:
+                report = project.get("requester_report", {})
+                if report.get("task_id") == task_id:
+                    report["pending"] = False
+                    report["reason"] = f"task_result_{node_status}"
+                    project["requester_report"] = report
             marker = Path(arguments["workspaceDir"]) / ".fixture-accept-transitions"
             marker.write_text(
                 marker.read_text(encoding="utf-8") + "accepted\\n"
@@ -280,6 +386,10 @@ def handle_request(request):
                 else "accepted\\n",
                 encoding="utf-8",
             )
+            projects[project_id] = project
+            path.write_text(json.dumps(projects), encoding="utf-8")
+            if mode == "response-lost":
+                return None
         projects[project_id] = project
         path.write_text(json.dumps(projects), encoding="utf-8")
         return {"jsonrpc": "2.0", "id": request.get("id"), "result": {
@@ -314,7 +424,27 @@ def handle_request(request):
             result["exists"] = True
         return {"jsonrpc": "2.0", "id": request.get("id"), "result": result}
     if params.get("name") == "taskflow" and arguments.get("action") == "check_task":
-        task = arguments.get("_fixtureTask", {})
+        payload = _payload(arguments)
+        task_id = payload.get("taskId") or payload.get("task_id")
+        task_path, tasks = _task_store(arguments)
+        fixture_task = arguments.get("_fixtureTask", {})
+        if task_id not in tasks and isinstance(fixture_task, dict) and fixture_task:
+            tasks[task_id] = fixture_task
+            task_path.write_text(json.dumps(tasks), encoding="utf-8")
+        task = tasks.get(task_id, {})
+        project_id = payload.get("projectId") or payload.get("project_id")
+        if project_id:
+            project_path, projects = _project_store(arguments)
+            project = projects.get(project_id)
+            if project:
+                matches = [item for item in project.get("tasks", []) if item.get("task_id") == task_id]
+                if not matches and task:
+                    project.setdefault("tasks", []).append({
+                        "task_id": task_id,
+                        "status": task.get("status", "submitted"),
+                    })
+                    projects[project_id] = project
+                    project_path.write_text(json.dumps(projects), encoding="utf-8")
         return {"jsonrpc": "2.0", "id": request.get("id"), "result": {
             "content": [{"type": "text", "text": json.dumps({"task": task})}]
         }}
@@ -352,6 +482,7 @@ def _install_fake(
     approval_domain: str = TEST_APPROVAL_DOMAIN,
     approval_key_root: Path | None = None,
     approval_state_root: Path | None = None,
+    include_test_receipt: bool = False,
 ) -> dict[str, Any]:
     runtime_name_match = re.search(r"(?m)^  runtimeName: ([^\n]+)$", runtime.read_text(encoding="utf-8"))
     assert runtime_name_match is not None
@@ -371,6 +502,37 @@ def _install_fake(
             "_test_ledger_path": state_root / "approval-state/ledger.json",
             "_test_openssl_path": openssl_path,
         }
+    if runtime_name == "devflow-locator":
+        receipt_root = plugin.parent / "github-receipt-fixture"
+        _receipt_private_key, receipt_public_key, receipt_openssl_path = (
+            _approval_key_fixture(receipt_root)
+        )
+        approval_args.update(
+            {
+                "github_receipt_public_key": receipt_public_key,
+                "_test_github_receipt_public_key_path": (
+                    receipt_root / "installed/receipt-ed25519.pub"
+                ),
+                "_test_github_receipt_policy_path": (
+                    receipt_root / "installed/receipt-policy.json"
+                ),
+                "_test_github_receipt_openssl_path": receipt_openssl_path,
+            }
+        )
+    if include_test_receipt:
+        test_receipt = _test_execution_receipt_fixture(plugin.parent)
+        approval_args.update(
+            {
+                "test_receipt_public_key": test_receipt["public_key"],
+                "test_receipt_policy": test_receipt["policy_source"],
+                "_test_test_receipt_public_key_path": test_receipt[
+                    "public_key_path"
+                ],
+                "_test_test_receipt_policy_path": test_receipt["policy_path"],
+                "_test_test_receipt_ledger_path": test_receipt["ledger_path"],
+                "_test_test_receipt_openssl_path": test_receipt["openssl_path"],
+            }
+        )
     return install(
         plugin,
         workspace,
@@ -423,6 +585,151 @@ def test_install_is_role_scoped_and_credential_free(tmp_path: Path) -> None:
         "teamName": "devflow-swe",
     }
     assert all(check.ok for check in _verify_fake(plugin, workspace, "worker"))
+
+
+def test_locator_installs_only_fixed_public_receipt_trust(tmp_path: Path) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-locator"
+    runtime = tmp_path / "locator-runtime.yaml"
+    _write(runtime, _runtime_text("worker", "devflow-locator"))
+
+    record = _install_fake(plugin, workspace, "worker", runtime)
+
+    policy = record["githubReceiptPolicy"]
+    assert policy["algorithm"] == "Ed25519"
+    assert policy["audience"] == "devflow.github-content-response/v2"
+    assert policy["signatureDomain"] == "devflow.github-content-receipt/v2"
+    assert policy["consumerRuntimeName"] == "devflow-locator"
+    assert len(policy["publicKeySha256"]) == 64
+    assert "PRIVATE KEY" not in json.dumps(record)
+    assert all(check.ok for check in _verify_fake(plugin, workspace, "worker"))
+
+    policy_path = Path(policy["policyPath"])
+    tampered = json.loads(policy_path.read_text(encoding="utf-8"))
+    tampered["publicKeySha256"] = "0" * 64
+    policy_path.chmod(0o644)
+    policy_path.write_text(json.dumps(tampered), encoding="utf-8")
+    assert not next(
+        check
+        for check in _verify_fake(plugin, workspace, "worker")
+        if check.name == "github-receipt-policy"
+    ).ok
+
+
+def test_all_roles_install_public_test_receipt_verifier_and_replay_ledger(
+    tmp_path: Path,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    installed: list[tuple[Path, str, dict[str, Any]]] = []
+    for role, runtime_name in (
+        ("leader", "devflow-lead"),
+        ("worker", "devflow-triage"),
+        ("worker", "devflow-locator"),
+        ("worker", "devflow-coder"),
+        ("worker", "devflow-reviewer"),
+        ("worker", "devflow-tester"),
+    ):
+        workspace = tmp_path / runtime_name
+        runtime = tmp_path / f"{runtime_name}.yaml"
+        _write(runtime, _runtime_text(role, runtime_name))
+        record = _install_fake(
+            plugin,
+            workspace,
+            role,
+            runtime,
+            include_test_receipt=True,
+        )
+        installed.append((workspace, role, record))
+
+    expected_policy: dict[str, Any] | None = None
+    for workspace, role, record in installed:
+        policy = record["testExecutionReceiptPolicy"]
+        policy_path = Path(record["testExecutionReceiptPolicyPath"])
+        public_key_path = Path(record["testExecutionReceiptPublicKeyPath"])
+        ledger_path = Path(policy["replayLedgerPath"])
+        assert record["testExecutionReceiptReplayScope"] == "pod-incarnation"
+        assert (
+            record[
+                "testExecutionReceiptReplayLedgerPersistentAcrossPodReplacement"
+            ]
+            is False
+        )
+        assert record["testExecutionReceiptLifetimeSeconds"] == 120
+        assert record["testExecutionReceiptLedgerSchema"] == (
+            "devflow.test-execution-receipt-ledger/v2"
+        )
+        assert record["testExecutionReceiptConsumptionProtocol"] == (
+            "reserve-upstream-dual-authority-readback-commit/v1"
+        )
+        assert record["testExecutionReceiptReservationLeaseSeconds"] == 30
+        assert record["testExecutionReceiptAuthoritativeReadback"] == [
+            "taskflow.check_task",
+            "projectflow.resolve_project",
+        ]
+        assert record["testExecutionReceiptPolicySha256"] == hashlib.sha256(
+            policy_path.read_bytes()
+        ).hexdigest()
+        assert record["testExecutionReceiptPublicKeyFileSha256"] == hashlib.sha256(
+            public_key_path.read_bytes()
+        ).hexdigest()
+        assert json.loads(policy_path.read_text(encoding="utf-8")) == policy
+        assert json.loads(ledger_path.read_text(encoding="utf-8")) == {
+            "schemaVersion": "devflow.test-execution-receipt-ledger/v2",
+            "reservations": {},
+        }
+        if os.name != "nt":
+            assert stat.S_IMODE(ledger_path.stat().st_mode) == 0o600
+        assert "PRIVATE KEY" not in public_key_path.read_text(encoding="ascii")
+        assert "PRIVATE KEY" not in json.dumps(record, sort_keys=True)
+        assert all(check.ok for check in _verify_fake(plugin, workspace, role))
+        expected_policy = expected_policy or policy
+        assert policy == expected_policy
+
+    tester_workspace, tester_role, tester_record = installed[-1]
+    tester_ledger = Path(
+        tester_record["testExecutionReceiptPolicy"]["replayLedgerPath"]
+    )
+    tester_ledger.write_text('{"schemaVersion":"wrong","usedJtis":{}}', encoding="utf-8")
+    receipt_check = next(
+        check
+        for check in _verify_fake(plugin, tester_workspace, tester_role)
+        if check.name == "test-execution-receipt-policy"
+    )
+    assert receipt_check.ok is False
+
+
+def test_test_receipt_v1_ledger_migration_preserves_replay_denial(
+    tmp_path: Path,
+) -> None:
+    ledger = tmp_path / "legacy-test-receipt-ledger.json"
+    ledger.write_text(
+        json.dumps(
+            {
+                "schemaVersion": "devflow.test-execution-receipt-ledger/v1",
+                "usedJtis": {
+                    "a" * 32: {
+                        "exp": 2_000_000_120,
+                        "receiptSha256": "b" * 64,
+                        "runId": "run-1",
+                        "taskId": "task-1",
+                        "consumedAt": 2_000_000_000,
+                    }
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    adapter._migrate_test_receipt_ledger_v1(ledger)
+    adapter._validate_test_receipt_ledger(ledger)
+
+    migrated = json.loads(ledger.read_text(encoding="utf-8"))
+    record = migrated["reservations"]["a" * 32]
+    assert migrated["schemaVersion"] == "devflow.test-execution-receipt-ledger/v2"
+    assert record["state"] == "committed"
+    assert record["receiptSha256"] == "b" * 64
+    assert record["acceptRequestSha256"] == record["acceptResultSha256"]
 
 
 @pytest.mark.parametrize("approval_domain", ["", "A" * 64, "0" * 63, "g" * 64])
@@ -826,6 +1133,7 @@ def _skill_handoff(
     inline: dict[str, Any],
     created_at: str,
     parent: dict[str, Any] | None = None,
+    status: str = "ready",
 ) -> dict[str, Any]:
     run_id = "skill-gate-run"
     artifact_digest = hashlib.sha256(
@@ -847,7 +1155,7 @@ def _skill_handoff(
         "trace_id": f"{run_id}:{task_id}",
         "idempotency_key": f"{run_id}:{task_id}:{consumer}:issue-classifier",
         "created_at": created_at,
-        "status": "ready",
+        "status": status,
         "artifact": {
             "type": artifact_type,
             "schema_version": artifact_schema,
@@ -874,6 +1182,7 @@ def _write_skill_gate_fixture(
     task_status: str,
     mutation: str | None = None,
     include_task_skill: bool = True,
+    failure: bool = False,
 ) -> dict[str, Any]:
     skill_root = workspace / "skills" / "issue-classifier"
     for relative in (
@@ -905,28 +1214,88 @@ def _write_skill_gate_fixture(
         },
         created_at=rendered_now,
     )
+    success_inline: dict[str, Any] = {
+        "issue": {
+            "issue_number": 17,
+            "title": "Classify fixture",
+            "body": None,
+            "labels": ["bug"],
+            "state": "open",
+            "author": "fixture",
+            "repo_owner": "example",
+            "repo_name": "repo",
+            "created_at": rendered_now,
+        },
+        "complexity_level": "T2",
+        "category": "bug",
+        "priority": "high",
+        "duplicate_of": None,
+        "estimated_effort_hours": 1,
+        "rationale": "bounded fixture",
+        "confidence": 0.9,
+        "evidence": {
+            "risk_floor": {
+                "proposed_tier": "T2",
+                "effective_tier": "T2",
+                "rule_ids": [],
+                "model_confidence": 0.9,
+                "conflict": False,
+            },
+            "deduplication": {
+                "status": "checked",
+                "threshold": 0.92,
+                "candidate_issue": None,
+                "candidate_score": None,
+            },
+        },
+    }
+    failure_inline: dict[str, Any] = {
+        "schema_version": "1.0",
+        "skill": "issue-classifier",
+        "code": "INPUT_INVALID",
+        "retryable": False,
+        "retry_count": 0,
+        "max_attempts": 0,
+        "exhausted": True,
+        "route_to": "TeamLeader",
+        "event": "triage.failed",
+        "source_artifact_sha256": source_handoff["artifact"]["sha256"],
+        "summary": "The normalized intake failed bounded validation.",
+        "diagnostics": ["fixture input was invalid"],
+    }
     result_handoff = _skill_handoff(
         task_id=task_id,
         producer="devflow-triage",
         consumer="devflow-lead",
-        artifact_type="ClassifiedIssue",
+        artifact_type="SkillFailure" if failure else "ClassifiedIssue",
         artifact_schema="1.0",
-        inline={
-            "issue": {"issue_number": 17},
-            "complexity_level": "simple",
-            "category": "bug",
-            "priority": "P2",
-            "duplicate_of": None,
-            "estimated_effort_hours": 1,
-            "rationale": "bounded fixture",
-            "confidence": 0.9,
-            "evidence": [],
-        },
+        inline=failure_inline if failure else success_inline,
         created_at=rendered_now,
         parent=source_handoff,
+        status="failed" if failure else "ready",
     )
     if mutation == "invalid":
         del result_handoff["artifact"]["inline"]["rationale"]
+        result_handoff["artifact"]["sha256"] = hashlib.sha256(
+            json.dumps(
+                result_handoff["artifact"]["inline"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+    elif mutation == "failure-route":
+        result_handoff["artifact"]["inline"]["route_to"] = "HumanReviewer"
+        result_handoff["artifact"]["sha256"] = hashlib.sha256(
+            json.dumps(
+                result_handoff["artifact"]["inline"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+    elif mutation == "failure-source":
+        result_handoff["artifact"]["inline"]["source_artifact_sha256"] = "0" * 64
         result_handoff["artifact"]["sha256"] = hashlib.sha256(
             json.dumps(
                 result_handoff["artifact"]["inline"],
@@ -1039,6 +1408,75 @@ def test_stdio_skill_gate_validates_before_submit_transition(tmp_path: Path) -> 
             "validatorSha256",
         )
     )
+
+
+def test_stdio_skill_gate_accepts_declared_failure_only_as_failed_result(
+    tmp_path: Path,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-triage"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("worker", "devflow-triage"))
+    _install_fake(plugin, workspace, "worker", runtime)
+    task = _write_skill_gate_fixture(
+        workspace,
+        task_status="in_progress",
+        failure=True,
+    )
+    request = _task_request(
+        "submit_task",
+        assigned_to="devflow-triage",
+        status="in_progress",
+        result_status="FAILED",
+        deliverables=task["deliverables"],
+    )
+    request["params"]["arguments"]["_fixtureTask"] = task
+
+    accepted = _guard_call(workspace, "worker", request)
+
+    assert accepted["result"]["ok"] is True
+    assert accepted["result"]["skillValidation"]["outcome"] == "failure"
+    assert (workspace / ".fixture-submit-transitions").read_text(
+        encoding="utf-8"
+    ) == "submitted\n"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "result_status"),
+    (("failure-route", "FAILED"), ("failure-source", "FAILED"), (None, "SUCCESS")),
+)
+def test_stdio_skill_gate_rejects_unbound_or_success_claiming_failure(
+    tmp_path: Path,
+    mutation: str | None,
+    result_status: str,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-triage"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("worker", "devflow-triage"))
+    _install_fake(plugin, workspace, "worker", runtime)
+    task = _write_skill_gate_fixture(
+        workspace,
+        task_status="in_progress",
+        mutation=mutation,
+        failure=True,
+    )
+    request = _task_request(
+        "submit_task",
+        assigned_to="devflow-triage",
+        status="in_progress",
+        result_status=result_status,
+        deliverables=task["deliverables"],
+    )
+    request["params"]["arguments"]["_fixtureTask"] = task
+
+    denied = _guard_call(workspace, "worker", request)
+
+    assert _guard_payload(denied)["error"] in {
+        "skill_failure_invalid",
+        "skill_result_status_invalid",
+    }
+    assert not (workspace / ".fixture-submit-transitions").exists()
 
 
 def test_stdio_skill_gate_derives_skill_from_verified_assignment_envelope(
@@ -1186,6 +1624,94 @@ def test_stdio_skill_gate_validates_before_accept_transition(tmp_path: Path) -> 
     assert (workspace / ".fixture-accept-transitions").read_text(encoding="utf-8") == (
         "accepted\n"
     )
+
+
+def test_leader_verifies_declared_failure_without_accepting_it_as_success(
+    tmp_path: Path,
+) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-lead"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader", "devflow-lead"))
+    _install_fake(plugin, workspace, "leader", runtime)
+    task = _write_skill_gate_fixture(
+        workspace,
+        task_status="submitted",
+        failure=True,
+    )
+    worker_skill = tmp_path / "devflow-triage" / "skills" / "issue-classifier"
+    for relative in (
+        "scripts/validate.py",
+        "scripts/_contract.py",
+        "references/contract.yaml",
+    ):
+        source = workspace / "skills" / "issue-classifier" / relative
+        target = worker_skill / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "failed-result-project", riskTier="T2"),
+    )
+    request = _project_request(
+        "accept_task_result",
+        "failed-result-project",
+        taskId="task-fixture",
+        accepted=False,
+        resultStatus="FAILED",
+    )
+    request["params"]["arguments"]["_fixtureTask"] = task
+
+    acknowledged = _guard_call(workspace, "leader", request)
+
+    assert acknowledged["result"]["ok"] is True
+    assert (workspace / ".fixture-accept-transitions").read_text(
+        encoding="utf-8"
+    ) == "accepted\n"
+
+
+def test_leader_cannot_accept_declared_failure_as_success(tmp_path: Path) -> None:
+    plugin = _fake_plugin(tmp_path)
+    workspace = tmp_path / "devflow-lead"
+    runtime = tmp_path / "runtime.yaml"
+    _write(runtime, _runtime_text("leader", "devflow-lead"))
+    _install_fake(plugin, workspace, "leader", runtime)
+    task = _write_skill_gate_fixture(
+        workspace,
+        task_status="submitted",
+        failure=True,
+    )
+    worker_skill = tmp_path / "devflow-triage" / "skills" / "issue-classifier"
+    for relative in (
+        "scripts/validate.py",
+        "scripts/_contract.py",
+        "references/contract.yaml",
+    ):
+        source = workspace / "skills" / "issue-classifier" / relative
+        target = worker_skill / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+    _guard_call(
+        workspace,
+        "leader",
+        _project_request("create_project", "false-success-project", riskTier="T2"),
+    )
+    request = _project_request(
+        "accept_task_result",
+        "false-success-project",
+        taskId="task-fixture",
+        accepted=True,
+        resultStatus="FAILED",
+    )
+    request["params"]["arguments"]["_fixtureTask"] = task
+
+    denied = _guard_call(workspace, "leader", request)
+
+    assert _guard_payload(denied)["error"] == (
+        "approval_denied:skill_result_status_invalid"
+    )
+    assert not (workspace / ".fixture-accept-transitions").exists()
 
 
 @pytest.mark.parametrize("claimed_status", ["FAILED", None])

@@ -33,6 +33,13 @@ from devflow.skills.contracts import HandoffEnvelope, HandoffStatus
 ROOT = Path(__file__).resolve().parents[1]
 TEST_VALIDATOR = ROOT / "skills/test-runner/scripts/validate.py"
 PATCH_VALIDATOR = ROOT / "skills/patch-generator/scripts/validate.py"
+REVISION = "a" * 40
+WORKSPACE_BINDING = "e" * 64
+SERVER_DIGEST = "f" * 64
+REPOSITORY = {
+    "archive_sha256": "1" * 64,
+    "manifest_sha256": "2" * 64,
+}
 
 
 def _digest(value: dict[str, Any]) -> str:
@@ -48,8 +55,8 @@ def _digest(value: dict[str, Any]) -> str:
 def _integrity_attestation(*, full_suite: bool = False) -> dict[str, Any]:
     return {
         "schema_version": "1.0",
-        "policy": "immutable-baseline-tests/v1",
-        "policy_digest": "e30d5b49b5bbde322301604354d21f604687483b54d1b4dd0f2e86473462516c",
+        "policy": "agentteams-bwrap-tests/v1",
+        "policy_digest": "e1527ec714370ab983443b14559953d1a0d6a0a4d838930a120c3559f095fe13",
         "command_digest": "a" * 64,
         "baseline_manifest_digest": "b" * 64,
         "candidate_baseline_manifest_digest": "b" * 64,
@@ -60,8 +67,114 @@ def _integrity_attestation(*, full_suite: bool = False) -> dict[str, Any]:
         "added_test_file_count": 0,
         "full_suite": full_suite,
         "verified": True,
-        "isolation_boundary": "stdlib-temporary-directory-process-only-not-os-sandbox",
+        "isolation_boundary": (
+            "linux-bubblewrap-unshare-all-cap-drop-process-boundary-"
+            "not-node-root-or-kernel"
+        ),
     }
+
+
+def _portable_integrity_attestation(*, full_suite: bool = False) -> dict[str, Any]:
+    """Return local-runtime evidence, which is intentionally not AgentTeams proof."""
+
+    value = _integrity_attestation(full_suite=full_suite)
+    value.update(
+        {
+            "policy": "immutable-baseline-tests/v1",
+            "policy_digest": (
+                "e30d5b49b5bbde322301604354d21f604687483b54d1b4dd0f2e86473462516c"
+            ),
+            "isolation_boundary": (
+                "stdlib-temporary-directory-process-only-not-os-sandbox"
+            ),
+        }
+    )
+    return value
+
+
+def _execution_policy(*, tier: str) -> dict[str, Any]:
+    profile = "full" if tier in {"T3", "T4", "T5"} else "focused"
+    return {
+        "schema": "devflow.test-execution-policy/v1",
+        "profile": profile,
+        "isolation_profile": "agentteams-bwrap-tests/v1",
+        "isolation_boundary": (
+            "linux-bubblewrap-unshare-all-cap-drop-process-boundary-"
+            "not-node-root-or-kernel"
+        ),
+        "credentials_forwarded": False,
+        "network": "bubblewrap-unshare-all-mask-runtime-credentials",
+        "shell": False,
+        "deployment_tools_exposed": False,
+        "timeout_seconds": 120,
+        "resource_limits_applied": True,
+        "policy_digest": WORKSPACE_BINDING,
+        "server_digest": SERVER_DIGEST,
+        "repository_archive_sha256": REPOSITORY["archive_sha256"],
+        "repository_manifest_sha256": REPOSITORY["manifest_sha256"],
+        "remaining_threat": "Host root or kernel compromise remains outside this boundary.",
+    }
+
+
+def _refresh_execution_receipt(
+    payload: dict[str, Any],
+    *,
+    run_id: str = "issue-42",
+    task_id: str = "42-testeragent-test-runner",
+) -> dict[str, Any]:
+    policy = payload["execution_policy"]
+    payload["test_execution_receipt"] = {
+        "schema": "devflow.test-execution-receipt/v1",
+        "algorithm": "Ed25519",
+        "issuer": "devflow-tester-cicd",
+        "audience": "devflow-teamharness",
+        "run_id": run_id,
+        "task_id": task_id,
+        "trace_id": f"{run_id}:{task_id}",
+        "issue_id": payload["issue_id"],
+        "repository": payload["repository"],
+        "revision": payload["revision"],
+        "workspace_binding": payload["workspace_binding"],
+        "candidate_digest": payload["candidate_digest"],
+        "tier": payload["tier"],
+        "execution_profile": payload["execution_profile"],
+        "isolation_profile": payload["isolation_profile"],
+        "test_result_digest": _digest(payload["test_result"]),
+        "execution_policy_digest": _digest(policy),
+        "policy_digest": policy["policy_digest"],
+        "server_digest": policy["server_digest"],
+        "key_sha256": "3" * 64,
+        "iat": 1_800_000_000,
+        "exp": 1_800_000_120,
+        "jti": "4" * 32,
+        # The standalone validator checks shape and binding only. TeamHarness
+        # performs fixed-key Ed25519 verification before accepting the route.
+        "signature": "A" * 86,
+    }
+    return payload
+
+
+def _with_execution_receipt(
+    payload: dict[str, Any],
+    *,
+    tier: str = "T2",
+    run_id: str = "issue-42",
+    task_id: str = "42-testeragent-test-runner",
+) -> dict[str, Any]:
+    payload.update(
+        {
+            "tier": tier,
+            "repository": dict(REPOSITORY),
+            "revision": REVISION,
+            "workspace_binding": WORKSPACE_BINDING,
+            "execution_profile": (
+                "full" if tier in {"T3", "T4", "T5"} else "focused"
+            ),
+            "isolation_profile": "agentteams-bwrap-tests/v1",
+            "execution_policy": _execution_policy(tier=tier),
+        }
+    )
+    return _refresh_execution_receipt(payload, run_id=run_id, task_id=task_id)
 
 
 def _run_validator(
@@ -286,14 +399,16 @@ def _failure_evidence() -> dict[str, Any]:
 
 def _failure_payload() -> dict[str, Any]:
     evidence = _failure_evidence()
-    return {
-        "issue_id": 42,
-        "candidate_digest": evidence["candidate_digest"],
-        "test_result": _sanitized_result(),
-        "test_result_redacted": True,
-        "failing_tests": evidence["failing_tests"],
-        "failure_evidence": evidence,
-    }
+    return _with_execution_receipt(
+        {
+            "issue_id": 42,
+            "candidate_digest": evidence["candidate_digest"],
+            "test_result": _sanitized_result(),
+            "test_result_redacted": True,
+            "failing_tests": evidence["failing_tests"],
+            "failure_evidence": evidence,
+        }
+    )
 
 
 def _failure_handoff() -> dict[str, Any]:
@@ -435,7 +550,8 @@ def test_contracts_publish_compatible_retry_protocol() -> None:
         (ROOT / "skills/patch-generator/references/contract.yaml").read_text(encoding="utf-8")
     )
 
-    assert test_contract["version"] == "4.0.0"
+    assert test_contract["version"] == "6.0.0"
+    assert test_contract["mcp_tools"] == ["devflow-cicd:run_tests"]
     assert patch_contract["version"] == "3.0.0"
     assert patch_contract["input"] == {
         "type": "SkillInvocation",
@@ -461,11 +577,21 @@ def test_contracts_publish_compatible_retry_protocol() -> None:
     assert test_contract["input"]["required_fields"] == patch_contract["output"]["required_fields"]
     assert test_contract["output"]["required_fields"] == [
         "issue_id",
+        "tier",
         "candidate_digest",
+        "repository",
+        "revision",
+        "workspace_binding",
+        "execution_profile",
+        "isolation_profile",
+        "execution_policy",
         "test_result",
         "test_result_redacted",
         "failing_tests",
+        "test_execution_receipt",
     ]
+    assert test_contract["test_execution_receipt"]["algorithm"] == "Ed25519"
+    assert test_contract["test_execution_receipt"]["lifetime_seconds"] == 120
     assert test_contract["failure_evidence"]["schema_version"] == "1.2"
     failure_fields = test_contract["failure_evidence"]["required_fields"]
     assert "test_result_digest" in failure_fields
@@ -499,13 +625,15 @@ def test_main_contract_validators_accept_real_agent_boundary_artifacts(
     tmp_path: Path,
 ) -> None:
     patch_candidate = _patch_candidate()
-    passing_evidence = {
-        "issue_id": 42,
-        "candidate_digest": patch_candidate["candidate_digest"],
-        "test_result": _passing_result(),
-        "test_result_redacted": False,
-        "failing_tests": [],
-    }
+    passing_evidence = _with_execution_receipt(
+        {
+            "issue_id": 42,
+            "candidate_digest": patch_candidate["candidate_digest"],
+            "test_result": _passing_result(),
+            "test_result_redacted": False,
+            "failing_tests": [],
+        }
+    )
     processes = [
         _run_validator(tmp_path, PATCH_VALIDATOR, "input", _initial_invocation()),
         _run_validator(
@@ -814,16 +942,19 @@ def test_runtime_coder_enforces_located_blast_radius() -> None:
 
 
 def test_new_failures_cannot_pass_without_failure_evidence(tmp_path: Path) -> None:
-    artifact: dict[str, Any] = {
-        "issue_id": 42,
-        "candidate_digest": _patch_candidate()["candidate_digest"],
-        "test_result": _passing_result(),
-        "test_result_redacted": False,
-        "failing_tests": [],
-    }
+    artifact = _with_execution_receipt(
+        {
+            "issue_id": 42,
+            "candidate_digest": _patch_candidate()["candidate_digest"],
+            "test_result": _passing_result(),
+            "test_result_redacted": False,
+            "failing_tests": [],
+        }
+    )
     artifact["test_result"]["baseline_comparison"]["new_failures"] = [
         "tests/test_calc.py::test_add"
     ]
+    _refresh_execution_receipt(artifact)
 
     process = _run_validator(tmp_path, TEST_VALIDATOR, "output", artifact)
 
@@ -862,13 +993,16 @@ def test_test_runner_pass_requires_exact_integrity_attestation(
     result = _passing_result()
     source = _patch_candidate()
     mutate(result, source)
-    artifact = {
-        "issue_id": 42,
-        "candidate_digest": source["candidate_digest"],
-        "test_result": result,
-        "test_result_redacted": False,
-        "failing_tests": [],
-    }
+    artifact = _with_execution_receipt(
+        {
+            "issue_id": 42,
+            "candidate_digest": source["candidate_digest"],
+            "test_result": result,
+            "test_result_redacted": False,
+            "failing_tests": [],
+        },
+        tier=source["tier"],
+    )
 
     process = _run_validator(
         tmp_path,
@@ -1005,6 +1139,7 @@ def test_full_result_redaction_does_not_falsely_mark_bounded_evidence(
     tmp_path: Path,
 ) -> None:
     raw = _sanitized_result()
+    raw["integrity_attestation"] = _portable_integrity_attestation()
     raw["results"][0]["error_message"] = "ordinary assertion"
     raw["results"][1]["name"] += " ghp_" + "P" * 30
     result = RunResult.model_validate(raw)
@@ -1014,14 +1149,20 @@ def test_full_result_redaction_does_not_falsely_mark_bounded_evidence(
         candidate=Patch.model_validate(_previous_patch()),
         result=result,
     )
-    payload = {
-        "issue_id": 42,
-        "candidate_digest": evidence.candidate_digest,
-        "test_result": sanitized.model_dump(mode="json"),
-        "test_result_redacted": result_redacted,
-        "failing_tests": evidence.failing_tests,
-        "failure_evidence": evidence.model_dump(mode="json"),
-    }
+    sanitized_payload = sanitized.model_dump(mode="json")
+    sanitized_payload["integrity_attestation"] = _integrity_attestation()
+    evidence_payload = evidence.model_dump(mode="json")
+    evidence_payload["test_result_digest"] = _digest(sanitized_payload)
+    payload = _with_execution_receipt(
+        {
+            "issue_id": 42,
+            "candidate_digest": evidence.candidate_digest,
+            "test_result": sanitized_payload,
+            "test_result_redacted": result_redacted,
+            "failing_tests": evidence.failing_tests,
+            "failure_evidence": evidence_payload,
+        }
+    )
     value = HandoffEnvelope.create(
         run_id="issue-42",
         issue_id=42,
@@ -1092,6 +1233,7 @@ def test_runtime_models_produce_validator_accepted_boundary_artifacts(
 ) -> None:
     patch = Patch.model_validate(_previous_patch())
     raw_result = _sanitized_result()
+    raw_result["integrity_attestation"] = _portable_integrity_attestation()
     raw_result["results"][0]["error_message"] = "token=ghp_" + "C" * 30
     result = RunResult.model_validate(raw_result)
     sanitized, result_redacted = redact_test_result_for_handoff(result)
@@ -1100,14 +1242,20 @@ def test_runtime_models_produce_validator_accepted_boundary_artifacts(
         candidate=patch,
         result=result,
     )
-    failure_payload = {
-        "issue_id": 42,
-        "candidate_digest": canonical_artifact_digest(patch),
-        "test_result": sanitized.model_dump(mode="json"),
-        "test_result_redacted": result_redacted,
-        "failing_tests": evidence.failing_tests,
-        "failure_evidence": evidence.model_dump(mode="json"),
-    }
+    sanitized_payload = sanitized.model_dump(mode="json")
+    sanitized_payload["integrity_attestation"] = _integrity_attestation()
+    evidence_payload = evidence.model_dump(mode="json")
+    evidence_payload["test_result_digest"] = _digest(sanitized_payload)
+    failure_payload = _with_execution_receipt(
+        {
+            "issue_id": 42,
+            "candidate_digest": canonical_artifact_digest(patch),
+            "test_result": sanitized_payload,
+            "test_result_redacted": result_redacted,
+            "failing_tests": evidence.failing_tests,
+            "failure_evidence": evidence_payload,
+        }
+    )
     failure_envelope = HandoffEnvelope.create(
         run_id="issue-42",
         issue_id=42,

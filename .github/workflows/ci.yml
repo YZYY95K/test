@@ -3,6 +3,7 @@ name: quality-gate
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
 
@@ -53,10 +54,41 @@ jobs:
         run: python scripts/evaluate_skills.py
       - name: Validate behavioral evaluation suite
         run: python scripts/run_behavior_evals.py --validate-only
+      - name: Rebuild, compare, and verify finals submission archive
+        if: matrix.python-version == '3.12'
+        run: |
+          final_name="DevFlow_GOAI_2026_finals-${GITHUB_SHA}.zip"
+          rebuild_name=".DevFlow_GOAI_2026_finals-rebuild-${GITHUB_SHA}.zip"
+          final_path="dist/${final_name}"
+          rebuild_path="dist/${rebuild_name}"
+          python scripts/build_finals_submission.py build \
+            --ref "${GITHUB_SHA}" \
+            --output "${final_path}"
+          python scripts/build_finals_submission.py build \
+            --ref "${GITHUB_SHA}" \
+            --output "${rebuild_path}"
+          cmp -- "${final_path}" "${rebuild_path}"
+          python scripts/build_finals_submission.py verify \
+            "${final_path}"
+          python scripts/build_finals_submission.py verify \
+            "${rebuild_path}"
+          (
+            cd dist
+            sha256sum "${final_name}" > "${final_name}.sha256"
+            sha256sum --check "${final_name}.sha256"
+          )
       - uses: actions/upload-artifact@v4
         with:
-          name: devflow-role-packages-v2.0.0-python-${{ matrix.python-version }}
+          name: devflow-role-packages-v2.1.0-python-${{ matrix.python-version }}
           path: |
-            dist/devflow-*-v2.0.0.zip
-            dist/devflow-*-v2.0.0.zip.sha256
+            dist/devflow-*-v2.1.0.zip
+            dist/devflow-*-v2.1.0.zip.sha256
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: matrix.python-version == '3.12'
+        with:
+          name: devflow-finals-submission-${{ github.sha }}
+          path: |
+            dist/DevFlow_GOAI_2026_finals-${{ github.sha }}.zip
+            dist/DevFlow_GOAI_2026_finals-${{ github.sha }}.zip.sha256
           if-no-files-found: error

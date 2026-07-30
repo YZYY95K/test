@@ -56,6 +56,9 @@ after a valid invocation starts.
 - A revision may address supplied digest-bound test findings only; review
   findings require an explicitly typed route. Unrelated cleanup is a new task.
 - Escalate after the retry budget; never relax a gate.
+- Return stale localization and every other execution failure only to
+  TeamLeader. Never request work from LocatorAgent directly; TeamLeader alone
+  may create a fresh localization route.
 
 ## Boundaries
 

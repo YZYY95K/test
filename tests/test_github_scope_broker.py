@@ -19,10 +19,12 @@ from typing import Any
 
 import pytest
 
+import scripts.github_scope_broker as broker_module
 from scripts.github_scope_broker import (
     CAPABILITY_SCHEMA,
     CONTENT_RESPONSE_SCHEMA,
     EXPECTED_LEADER_USERNAME,
+    RECEIPT_SIGNATURE_DOMAIN,
     TOKEN_REVIEW_AUDIENCE,
     BrokerError,
     BrokerHTTPServer,
@@ -30,6 +32,7 @@ from scripts.github_scope_broker import (
     ContentRequest,
     FixedGitHubUpstream,
     KubernetesTokenReviewer,
+    OpenSSLEd25519ReceiptSigner,
     RequestRejected,
     Scope,
     ServerPolicy,
@@ -47,11 +50,22 @@ GITHUB_TOKEN = "github_pat_test_only_credential"
 GITHUB_AUTHORIZATION = f"Bearer {GITHUB_TOKEN}"
 REVISION = "a" * 40
 ALLOWED_REPOSITORIES = frozenset({("openai", "example-repository")})
+OPENSSL = next(
+    path
+    for path in (
+        Path(r"C:\Program Files\Git\usr\bin\openssl.exe"),
+        Path(r"C:\Program Files\Git\mingw64\bin\openssl.exe"),
+        Path("/usr/bin/openssl"),
+    )
+    if path.is_file()
+)
 
 
 def _scope(**changes: Any) -> Scope:
     document: dict[str, Any] = {
+        "run_id": "run-001",
         "task_id": "task-001",
+        "trace_id": "run-001:task-001",
         "owner": "openai",
         "repo": "example-repository",
         "revision": REVISION,
@@ -100,6 +114,45 @@ class FakeUpstream:
         )
 
 
+@pytest.fixture
+def receipt_signer(
+    tmp_path: Path,
+) -> tuple[OpenSSLEd25519ReceiptSigner, Path, Path]:
+    private_key = tmp_path / "test-only-receipt-ed25519.pem"
+    public_key = tmp_path / "test-only-receipt-ed25519.pub"
+    subprocess.run(
+        [
+            str(OPENSSL),
+            "genpkey",
+            "-algorithm",
+            "ED25519",
+            "-out",
+            str(private_key),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            str(OPENSSL),
+            "pkey",
+            "-in",
+            str(private_key),
+            "-pubout",
+            "-out",
+            str(public_key),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    private_key.chmod(0o400)
+    return (
+        OpenSSLEd25519ReceiptSigner(private_key, openssl_path=OPENSSL),
+        private_key,
+        public_key,
+    )
+
+
 @contextlib.contextmanager
 def _running_server(policy: ServerPolicy) -> Iterator[int]:
     server = BrokerHTTPServer(("127.0.0.1", 0), policy)
@@ -144,7 +197,9 @@ def test_capability_has_exact_claims_and_strict_expiry() -> None:
     )
     assert payload == {
         "schema": CAPABILITY_SCHEMA,
+        "run_id": "run-001",
         "task_id": "task-001",
+        "trace_id": "run-001:task-001",
         "owner": "openai",
         "repo": "example-repository",
         "revision": REVISION,
@@ -182,7 +237,9 @@ def test_capability_tamper_and_noncanonical_scope_are_rejected() -> None:
     with pytest.raises(RequestRejected, match="issuer_schema_invalid"):
         Scope.from_issuer_document(
             {
+                "run_id": "run-001",
                 "task_id": "task-001",
+                "trace_id": "run-001:task-001",
                 "owner": "openai",
                 "repo": "example-repository",
                 "revision": REVISION,
@@ -244,7 +301,9 @@ def test_issuer_http_contract_and_audit_do_not_log_secrets() -> None:
         ALLOWED_REPOSITORIES,
     )
     request_document = {
+        "run_id": "run-001",
         "task_id": "task-001",
+        "trace_id": "run-001:task-001",
         "owner": "openai",
         "repo": "example-repository",
         "revision": REVISION,
@@ -303,12 +362,22 @@ def test_issuer_http_contract_and_audit_do_not_log_secrets() -> None:
     assert response["capability"] not in audit
 
 
-def test_content_http_requires_capability_header_and_never_logs_it() -> None:
+def test_content_http_requires_capability_header_and_never_logs_it(
+    receipt_signer: tuple[OpenSSLEd25519ReceiptSigner, Path, Path],
+    tmp_path: Path,
+) -> None:
     codec = CapabilityCodec(HMAC_KEY, ttl_seconds=60)
     capability, _ = codec.issue(_scope())
     upstream = FakeUpstream()
+    signer, _private_key, public_key = receipt_signer
     policy = ServerPolicy(
-        "content", codec, None, upstream, 64_000, ALLOWED_REPOSITORIES
+        "content",
+        codec,
+        None,
+        upstream,
+        64_000,
+        ALLOWED_REPOSITORIES,
+        receipt_signer=signer,
     )
     output = io.StringIO()
     with contextlib.redirect_stdout(output), _running_server(policy) as port:
@@ -322,12 +391,35 @@ def test_content_http_requires_capability_header_and_never_logs_it() -> None:
         assert isinstance(response, dict)
         assert set(response) == {
             "schema_version",
+            "assignment",
             "authorization",
             "github",
+            "receipt_key_sha256",
             "response_digest",
             "receipt_signature",
         }
         assert response["schema_version"] == CONTENT_RESPONSE_SCHEMA
+        scope_document = {
+            "run_id": "run-001",
+            "task_id": "task-001",
+            "trace_id": "run-001:task-001",
+            "owner": "openai",
+            "repo": "example-repository",
+            "revision": REVISION,
+            "paths": ["README.md", "src/main.py"],
+        }
+        scope_digest = hashlib.sha256(
+            json.dumps(scope_document, separators=(",", ":"), sort_keys=True).encode()
+        ).hexdigest()
+        assert response["assignment"] == {
+            "run_id": "run-001",
+            "task_id": "task-001",
+            "trace_id": "run-001:task-001",
+            "repository": "openai/example-repository",
+            "revision": REVISION,
+            "paths": ["README.md", "src/main.py"],
+            "scope_digest": scope_digest,
+        }
         assert set(response["authorization"]) == {
             "decision",
             "task_id",
@@ -349,8 +441,35 @@ def test_content_http_requires_capability_header_and_never_logs_it() -> None:
             "encoding": "base64",
         }
         signed = dict(response)
-        signature = signed.pop("receipt_signature")
-        assert signature == codec.sign_receipt(signed)
+        signature_text = signed.pop("receipt_signature")
+        signature = base64.urlsafe_b64decode(
+            signature_text + "=" * (-len(signature_text) % 4)
+        )
+        message_path = tmp_path / "receipt-message.bin"
+        signature_path = tmp_path / "receipt-signature.bin"
+        message_path.write_bytes(
+            RECEIPT_SIGNATURE_DOMAIN
+            + json.dumps(signed, separators=(",", ":"), sort_keys=True).encode()
+        )
+        signature_path.write_bytes(signature)
+        verified = subprocess.run(
+            [
+                str(OPENSSL),
+                "pkeyutl",
+                "-verify",
+                "-pubin",
+                "-inkey",
+                str(public_key),
+                "-rawin",
+                "-in",
+                str(message_path),
+                "-sigfile",
+                str(signature_path),
+            ],
+            check=False,
+            capture_output=True,
+        )
+        assert verified.returncode == 0
         digest = signed.pop("response_digest")
         assert digest == hashlib.sha256(
             json.dumps(signed, separators=(",", ":"), sort_keys=True).encode()
@@ -382,12 +501,20 @@ def test_content_http_requires_capability_header_and_never_logs_it() -> None:
     assert "src/main.py" not in audit
 
 
-def test_content_rejects_client_authorization_before_upstream() -> None:
+def test_content_rejects_client_authorization_before_upstream(
+    receipt_signer: tuple[OpenSSLEd25519ReceiptSigner, Path, Path],
+) -> None:
     codec = CapabilityCodec(HMAC_KEY)
     capability, _ = codec.issue(_scope())
     upstream = FakeUpstream()
     policy = ServerPolicy(
-        "content", codec, None, upstream, 64_000, ALLOWED_REPOSITORIES
+        "content",
+        codec,
+        None,
+        upstream,
+        64_000,
+        ALLOWED_REPOSITORIES,
+        receipt_signer=receipt_signer[0],
     )
     with _running_server(policy) as port:
         status, response = _request(
@@ -404,13 +531,21 @@ def test_content_rejects_client_authorization_before_upstream() -> None:
     assert upstream.calls == []
 
 
-def test_content_rechecks_repository_ceiling_even_for_valid_hmac() -> None:
+def test_content_rechecks_repository_ceiling_even_for_valid_hmac(
+    receipt_signer: tuple[OpenSSLEd25519ReceiptSigner, Path, Path],
+) -> None:
     codec = CapabilityCodec(HMAC_KEY)
     outside_scope = _scope(owner="another-owner", repo="another-repo")
     capability, _ = codec.issue(outside_scope)
     upstream = FakeUpstream()
     policy = ServerPolicy(
-        "content", codec, None, upstream, 64_000, ALLOWED_REPOSITORIES
+        "content",
+        codec,
+        None,
+        upstream,
+        64_000,
+        ALLOWED_REPOSITORIES,
+        receipt_signer=receipt_signer[0],
     )
     with _running_server(policy) as port:
         status, response = _request(
@@ -424,7 +559,9 @@ def test_content_rechecks_repository_ceiling_even_for_valid_hmac() -> None:
     assert upstream.calls == []
 
 
-def test_content_http_maps_github_error_without_returning_upstream_body() -> None:
+def test_content_http_maps_github_error_without_returning_upstream_body(
+    receipt_signer: tuple[OpenSSLEd25519ReceiptSigner, Path, Path],
+) -> None:
     class DeniedUpstream:
         def get(
             self,
@@ -444,6 +581,7 @@ def test_content_http_maps_github_error_without_returning_upstream_body() -> Non
         DeniedUpstream(),
         64_000,
         ALLOWED_REPOSITORIES,
+        receipt_signer=receipt_signer[0],
     )
     with _running_server(policy) as port:
         status, response = _request(
@@ -690,13 +828,21 @@ def test_fixed_upstream_fails_closed_on_redirect_type_and_size(
 
 def test_mode_specific_environment_keeps_github_token_content_only(
     monkeypatch: pytest.MonkeyPatch,
+    receipt_signer: tuple[OpenSSLEd25519ReceiptSigner, Path, Path],
 ) -> None:
+    _signer, private_key, _public_key = receipt_signer
     monkeypatch.setenv("DEVFLOW_GITHUB_BROKER_HMAC_KEY", HMAC_KEY.decode())
     monkeypatch.setenv(
         "DEVFLOW_GITHUB_ALLOWED_REPOSITORIES", "openai/example-repository"
     )
     monkeypatch.delenv("DEVFLOW_GITHUB_BROKER_ISSUER_TOKEN", raising=False)
     monkeypatch.setenv("DEVFLOW_GITHUB_TOKEN", GITHUB_TOKEN)
+    monkeypatch.setattr(
+        broker_module,
+        "PRODUCTION_RECEIPT_PRIVATE_KEY_PATH",
+        private_key,
+    )
+    monkeypatch.setattr(broker_module, "PRODUCTION_OPENSSL_PATH", OPENSSL)
 
     assert ServerPolicy.from_environment("content").issuer_authenticator is None
     with pytest.raises(BrokerError, match="ISSUER_TOKEN"):

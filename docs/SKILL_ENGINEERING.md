@@ -1,9 +1,11 @@
 # DevFlow Skill engineering standard
 
 This document records the evidence behind DevFlow's Skill design and the
-project-specific quality gate. A `100/100` result means the package satisfies
-this static standard; it does **not** claim that the Skill improves task
-success. Outcome utility needs paired evaluation on real repositories.
+project-specific quality gate. A `100/100` result means only that the package
+satisfies the structural rubric below; it is **not release qualification** and
+does not claim that the Skill improves task success. Semantic contract gates,
+deployment reachability, adversarial validator tests, and paired evaluation on
+real repositories remain mandatory.
 
 ## Evidence reviewed
 
@@ -58,6 +60,31 @@ validation is a blocking failure regardless of total points. Run:
 ```powershell
 .\.venv\Scripts\python.exe scripts\evaluate_skills.py
 ```
+
+## Semantic release blockers
+
+Structural scoring cannot detect a validator that accepts plausible-looking
+nonsense or a Skill that declares a tool absent from its deployed role. A
+Skill release is therefore blocked unless all of these machine-checkable facts
+also hold:
+
+1. every declared success and failure artifact can be represented, submitted,
+   and independently validated by TeamHarness;
+2. validators reject unknown fields, duplicate keys, non-finite values, wrong
+   enums/types, broken cross-field constraints, stale source bindings, and
+   digest/signature tampering;
+3. every declared MCP tool is reachable only from the owning deployed role,
+   and no undeclared server/tool is visible there;
+4. a producer's output and its consumer's input are field-compatible, or a
+   named TeamLeader-owned adapter has its own schema and tests;
+5. external receipts are verified against a deployment-attested trust root,
+   not accepted because they merely look like a signature; and
+6. positive, failure, boundary, replay, and cross-task negative cases execute
+   the real validator/control path rather than only inspecting text.
+
+The historical `7/7 = 100/100` report predates these semantic blockers. It is
+retained only as structural evidence and must not be used as the current Skill
+quality conclusion until the semantic suite passes.
 
 ## Collaboration invariant
 

@@ -29,8 +29,10 @@ after a valid invocation starts.
 4. Link large artifacts by immutable reference instead of copying them.
 5. Deduplicate existing patterns and update provenance rather than amplifying
    duplicates.
-6. Run `python scripts/validate.py output <artifact.json>` and store only after
-   every evidence and redaction gate passes.
+6. Store idempotently only after every evidence and redaction gate passes.
+7. Run `python scripts/validate.py output <artifact.json> <source.json>` after
+   durable store acknowledgement; success requires `stored=true` and exact
+   provenance binding to the source bundle.
 
 ## Decision rules
 
@@ -41,6 +43,15 @@ after a valid invocation starts.
 - Redaction uncertainty is quarantined for HumanReviewer.
 - Storage outage emits a retryable failure; it does not alter the completed
   run.
+
+## Failure output
+
+On storage, provenance, or redaction failure, emit a `failed` HandoffEnvelope
+containing `SkillFailure` 1.0 to TeamLeader only and submit the task as
+`FAILED`. Bind `source_artifact_sha256` to the exact `VerifiedRunBundle` and
+match the declared code, retry budget, exhaustion flag, and event. Never emit
+`ExperiencePattern` with `stored=false` as a successful result; TeamLeader
+owns any human escalation.
 
 ## Boundaries
 

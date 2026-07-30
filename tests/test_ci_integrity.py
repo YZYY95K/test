@@ -69,9 +69,11 @@ def _repository(root: Path, *, broken: bool = True) -> tuple[Path, str, str]:
 
 
 def _service(repository: Path, command: tuple[str, ...] | None = None) -> IsolatedTestService:
+    selected = command or (sys.executable, "-m", "unittest", "discover", "-v")
     return IsolatedTestService(
         repository,
-        command or (sys.executable, "-m", "unittest", "discover", "-v"),
+        selected,
+        selected,
         timeout_seconds=30,
     )
 
@@ -180,7 +182,7 @@ async def test_ci_rechecks_existing_test_immutability_when_coder_is_bypassed(
     )
 
     with pytest.raises(MCPError, match="test_integrity_violation"):
-        await _service(repository).run_tests(candidate, full_suite=True)
+        await _service(repository).run_tests(candidate, risk_tier="T3")
 
     assert (repository / "test_calculator.py").read_text(encoding="utf-8") == original_test
 
@@ -198,7 +200,7 @@ async def test_ci_rejects_new_test_control_file(tmp_path: Path) -> None:
     )
 
     with pytest.raises(MCPError, match="test_control_file_changed"):
-        await _service(repository).run_tests(candidate, full_suite=True)
+        await _service(repository).run_tests(candidate, risk_tier="T3")
 
 
 @pytest.mark.asyncio
@@ -214,8 +216,8 @@ async def test_success_attests_policy_command_and_immutable_manifests(tmp_path: 
     )
     service = _service(repository)
 
-    first = await service.run_tests(candidate, full_suite=True)
-    second = await service.run_tests(candidate, full_suite=True)
+    first = await service.run_tests(candidate, risk_tier="T3")
+    second = await service.run_tests(candidate, risk_tier="T3")
 
     assert first.passed == 1
     assert first.integrity_attestation is not None
@@ -233,6 +235,60 @@ async def test_success_attests_policy_command_and_immutable_manifests(tmp_path: 
     assert second.integrity_attestation == attestation
     assert (repository / "calculator.py").read_text(encoding="utf-8") == original
     assert (repository / "test_calculator.py").read_text(encoding="utf-8") == original_test
+
+
+@pytest.mark.asyncio
+async def test_trusted_risk_tier_selects_distinct_fixed_argv_profiles(
+    tmp_path: Path,
+) -> None:
+    repository, original, _original_test = _repository(tmp_path)
+    candidate = _patch(
+        _change(
+            "calculator.py",
+            ChangeType.MODIFY,
+            original=original,
+            current="def add(a, b):\n    return a + b\n",
+        )
+    )
+    focused = (sys.executable, "-m", "unittest", "discover", "-v")
+    full = (sys.executable, "-c", "raise SystemExit(7)")
+    service = IsolatedTestService(repository, focused, full, timeout_seconds=30)
+
+    focused_result = await service.run_tests(candidate, risk_tier="T2")
+    full_result = await service.run_tests(candidate, risk_tier="T3")
+
+    assert focused_result.results[0].name == "server-owned-focused-suite"
+    assert focused_result.integrity_attestation is not None
+    assert focused_result.integrity_attestation.full_suite is False
+    assert full_result.results[0].name == "server-owned-full-suite"
+    assert full_result.integrity_attestation is not None
+    assert full_result.integrity_attestation.full_suite is True
+    assert (
+        focused_result.integrity_attestation.command_digest
+        != full_result.integrity_attestation.command_digest
+    )
+
+
+@pytest.mark.asyncio
+async def test_portable_service_rejects_missing_or_unknown_trusted_risk_tier(
+    tmp_path: Path,
+) -> None:
+    repository, original, _original_test = _repository(tmp_path)
+    candidate = _patch(
+        _change(
+            "calculator.py",
+            ChangeType.MODIFY,
+            original=original,
+            current="def add(a, b):\n    return a + b\n",
+        )
+    )
+    command = (sys.executable, "-c", "raise SystemExit(0)")
+    service = IsolatedTestService(repository, command, command, timeout_seconds=30)
+
+    with pytest.raises(MCPError, match="trusted risk tier"):
+        await service.run_tests(candidate, risk_tier="")
+    with pytest.raises(MCPError, match="trusted risk tier"):
+        await service.run_tests(candidate, risk_tier="T6")
 
 
 @pytest.mark.asyncio
@@ -254,7 +310,7 @@ async def test_honest_new_test_is_digest_bound_without_changing_baseline(tmp_pat
         )
     )
 
-    result = await _service(repository).run_tests(candidate, full_suite=True)
+    result = await _service(repository).run_tests(candidate, risk_tier="T3")
 
     assert result.passed == 1
     assert result.integrity_attestation is not None
@@ -290,7 +346,7 @@ async def test_test_process_mutation_is_detected_but_canonical_repo_is_untouched
     with pytest.raises(MCPError, match="candidate_tests_mutated_during_execution"):
         await _service(repository, (sys.executable, "-c", script)).run_tests(
             candidate,
-            full_suite=True,
+            risk_tier="T3",
         )
 
     assert (repository / "calculator.py").read_text(encoding="utf-8") == original

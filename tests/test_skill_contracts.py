@@ -101,7 +101,10 @@ def test_each_skill_validator_accepts_contract_shape(tmp_path: Path) -> None:
         if name in {
             "experience-distiller",
             "github-evidence",
+            "issue-classifier",
+            "code-root-cause",
             "patch-generator",
+            "pr-reviewer",
             "test-runner",
         }:
             continue

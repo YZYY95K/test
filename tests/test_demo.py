@@ -100,8 +100,7 @@ async def test_demo_proves_baseline_fix_and_review(tmp_path: Path) -> None:
         for entry in report["mcp_audit"]
         if entry["outcome"] == "succeeded"
     } == {
-        ("LocatorAgent", "code-root-cause", "github", "get_file_contents"),
-        ("TesterAgent", "test-runner", "cicd", "run_tests"),
+        ("TesterAgent", "test-runner", "devflow-cicd-portable", "run_tests"),
     }
     assert {event["event_type"] for event in report["events"]} >= {
         "triage.completed",

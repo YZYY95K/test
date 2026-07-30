@@ -21,10 +21,16 @@ SECRET = re.compile(
     re.IGNORECASE,
 )
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
+REVISION = re.compile(r"^[a-f0-9]{40}$")
+JTI = re.compile(r"^[a-f0-9]{32}$")
+BASE64URL_SIGNATURE = re.compile(r"^[A-Za-z0-9_-]{86}$")
 REDACTION_MARKER = "[REDACTED]"
-INTEGRITY_POLICY = "immutable-baseline-tests/v1"
-INTEGRITY_POLICY_DIGEST = "e30d5b49b5bbde322301604354d21f604687483b54d1b4dd0f2e86473462516c"
-ISOLATION_BOUNDARY = "stdlib-temporary-directory-process-only-not-os-sandbox"
+PORTABLE_EXECUTION_PROFILE = "portable-process-only/v1"
+INTEGRITY_POLICY = "agentteams-bwrap-tests/v1"
+INTEGRITY_POLICY_DIGEST = "e1527ec714370ab983443b14559953d1a0d6a0a4d838930a120c3559f095fe13"
+ISOLATION_BOUNDARY = (
+    "linux-bubblewrap-unshare-all-cap-drop-process-boundary-not-node-root-or-kernel"
+)
 INTEGRITY_FIELDS = {
     "schema_version",
     "policy",
@@ -40,6 +46,65 @@ INTEGRITY_FIELDS = {
     "full_suite",
     "verified",
     "isolation_boundary",
+}
+TEST_EXECUTION_RECEIPT_SCHEMA = "devflow.test-execution-receipt/v1"
+TEST_EXECUTION_RECEIPT_FIELDS = {
+    "schema",
+    "algorithm",
+    "issuer",
+    "audience",
+    "run_id",
+    "task_id",
+    "trace_id",
+    "issue_id",
+    "repository",
+    "revision",
+    "workspace_binding",
+    "candidate_digest",
+    "tier",
+    "execution_profile",
+    "isolation_profile",
+    "test_result_digest",
+    "execution_policy_digest",
+    "policy_digest",
+    "server_digest",
+    "key_sha256",
+    "iat",
+    "exp",
+    "jti",
+    "signature",
+}
+TEST_EVIDENCE_REQUIRED_FIELDS = {
+    "issue_id",
+    "tier",
+    "candidate_digest",
+    "repository",
+    "revision",
+    "workspace_binding",
+    "execution_profile",
+    "isolation_profile",
+    "execution_policy",
+    "test_result",
+    "test_result_redacted",
+    "failing_tests",
+    "test_execution_receipt",
+}
+EXECUTION_POLICY_FIELDS = {
+    "schema",
+    "profile",
+    "isolation_profile",
+    "isolation_boundary",
+    "credentials_forwarded",
+    "network",
+    "shell",
+    "deployment_tools_exposed",
+    "timeout_seconds",
+    "resource_limits_applied",
+    "policy_digest",
+    "server_digest",
+    "repository_archive_sha256",
+    "repository_manifest_sha256",
+    "remaining_threat",
 }
 FAILURE_FIELDS = {
     "schema_version",
@@ -266,6 +331,8 @@ def _validate_candidate_binding(
         raise ValueError("evidence issue_id does not match the verified PatchCandidate")
     if evidence.get("candidate_digest") != candidate["candidate_digest"]:
         raise ValueError("evidence candidate_digest does not match the verified PatchCandidate")
+    if "tier" in evidence and evidence.get("tier") != candidate["tier"]:
+        raise ValueError("evidence tier does not match the verified PatchCandidate")
 
 
 def _bounded_names(value: Any, label: str, *, maximum: int = 128) -> list[str]:
@@ -345,6 +412,125 @@ def _canonical_digest(value: dict[str, Any]) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_execution_binding(
+    artifact: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    tier = artifact["tier"]
+    if tier not in {"T1", "T2", "T3", "T4", "T5"}:
+        raise ValueError("TestEvidence tier is invalid")
+    expected_profile = "full" if tier in {"T3", "T4", "T5"} else "focused"
+    if artifact["execution_profile"] != expected_profile:
+        raise ValueError("execution_profile does not match the candidate tier")
+    if artifact["isolation_profile"] != INTEGRITY_POLICY:
+        raise ValueError("AgentTeams evidence must use the bwrap isolation profile")
+    revision = artifact["revision"]
+    if not isinstance(revision, str) or REVISION.fullmatch(revision) is None:
+        raise ValueError("revision must be a full lowercase Git commit")
+    workspace_binding = _require_digest(
+        artifact["workspace_binding"],
+        "workspace_binding",
+    )
+    repository = artifact["repository"]
+    if not isinstance(repository, dict) or set(repository) != {
+        "archive_sha256",
+        "manifest_sha256",
+    }:
+        raise ValueError("repository identity fields are invalid")
+    archive_digest = _require_digest(
+        repository["archive_sha256"],
+        "repository.archive_sha256",
+    )
+    manifest_digest = _require_digest(
+        repository["manifest_sha256"],
+        "repository.manifest_sha256",
+    )
+    execution_policy = artifact["execution_policy"]
+    if not isinstance(execution_policy, dict) or set(execution_policy) != EXECUTION_POLICY_FIELDS:
+        raise ValueError("execution_policy fields are invalid")
+    if (
+        execution_policy["schema"] != "devflow.test-execution-policy/v1"
+        or execution_policy["profile"] != expected_profile
+        or execution_policy["isolation_profile"] != INTEGRITY_POLICY
+        or execution_policy["isolation_boundary"] != ISOLATION_BOUNDARY
+        or execution_policy["credentials_forwarded"] is not False
+        or execution_policy["network"]
+        != "bubblewrap-unshare-all-mask-runtime-credentials"
+        or execution_policy["shell"] is not False
+        or execution_policy["deployment_tools_exposed"] is not False
+        or execution_policy["policy_digest"] != workspace_binding
+        or execution_policy["repository_archive_sha256"] != archive_digest
+        or execution_policy["repository_manifest_sha256"] != manifest_digest
+    ):
+        raise ValueError("execution_policy does not match the signed execution boundary")
+    _require_boolean(
+        execution_policy["resource_limits_applied"],
+        "execution_policy.resource_limits_applied",
+    )
+    _require_integer(
+        execution_policy["timeout_seconds"],
+        "execution_policy.timeout_seconds",
+        minimum=1,
+    )
+    _require_digest(execution_policy["server_digest"], "execution_policy.server_digest")
+    remaining_threat = _require_text(
+        execution_policy["remaining_threat"],
+        "execution_policy.remaining_threat",
+        maximum=1024,
+    )
+    if "root" not in remaining_threat.lower():
+        raise ValueError("execution_policy must disclose the remaining root threat")
+    attestation = result["integrity_attestation"]
+    if isinstance(attestation, dict):
+        if expected_profile == "full" and not attestation["full_suite"]:
+            raise ValueError("T3 through T5 passes require a full-suite attestation")
+        if expected_profile == "focused" and attestation["full_suite"]:
+            raise ValueError("execution_profile does not match the integrity suite mode")
+
+    receipt = artifact["test_execution_receipt"]
+    if not isinstance(receipt, dict) or set(receipt) != TEST_EXECUTION_RECEIPT_FIELDS:
+        raise ValueError("TestExecutionReceipt fields are invalid")
+    if (
+        receipt["schema"] != TEST_EXECUTION_RECEIPT_SCHEMA
+        or receipt["algorithm"] != "Ed25519"
+        or receipt["issuer"] != "devflow-tester-cicd"
+        or receipt["audience"] != "devflow-teamharness"
+    ):
+        raise ValueError("TestExecutionReceipt identity is invalid")
+    for field in ("run_id", "task_id"):
+        _require_text(receipt[field], f"receipt.{field}", maximum=128)
+    if receipt["trace_id"] != f'{receipt["run_id"]}:{receipt["task_id"]}':
+        raise ValueError("TestExecutionReceipt trace is not task-bound")
+    if (
+        receipt["issue_id"] != artifact["issue_id"]
+        or receipt["repository"] != repository
+        or receipt["revision"] != revision
+        or receipt["workspace_binding"] != workspace_binding
+        or receipt["candidate_digest"] != artifact["candidate_digest"]
+        or receipt["tier"] != tier
+        or receipt["execution_profile"] != expected_profile
+        or receipt["isolation_profile"] != INTEGRITY_POLICY
+        or receipt["test_result_digest"] != _canonical_digest(result)
+        or receipt["execution_policy_digest"] != _canonical_digest(execution_policy)
+        or receipt["policy_digest"] != workspace_binding
+        or receipt["server_digest"] != execution_policy["server_digest"]
+    ):
+        raise ValueError("TestExecutionReceipt does not bind the complete evidence")
+    _require_digest(receipt["key_sha256"], "receipt.key_sha256")
+    issued_at = _require_integer(receipt["iat"], "receipt.iat")
+    expires_at = _require_integer(receipt["exp"], "receipt.exp")
+    if expires_at - issued_at != 120:
+        raise ValueError("TestExecutionReceipt lifetime is invalid")
+    if not isinstance(receipt["jti"], str) or JTI.fullmatch(receipt["jti"]) is None:
+        raise ValueError("TestExecutionReceipt jti is invalid")
+    signature = receipt["signature"]
+    if not isinstance(signature, str) or BASE64URL_SIGNATURE.fullmatch(signature) is None:
+        raise ValueError("TestExecutionReceipt signature encoding is invalid")
+    # This portable validator deliberately does not claim cryptographic trust.
+    # TeamHarness verifies the signature with its fixed deployment public key
+    # and consumes the JTI before it accepts a successful task transition.
 
 
 def _validate_integrity_attestation(value: Any) -> dict[str, Any] | None:
@@ -537,14 +723,7 @@ def _derive_failure_view(
 
 
 def _validate_failure_payload(artifact: dict[str, Any]) -> None:
-    required = {
-        "issue_id",
-        "candidate_digest",
-        "test_result",
-        "test_result_redacted",
-        "failing_tests",
-        "failure_evidence",
-    }
+    required = TEST_EVIDENCE_REQUIRED_FIELDS | {"failure_evidence"}
     missing = sorted(required - set(artifact))
     if missing:
         raise ValueError(f"missing failure handoff fields: {', '.join(missing)}")
@@ -558,6 +737,7 @@ def _validate_failure_payload(artifact: dict[str, Any]) -> None:
         "test_result_redacted",
     )
     result = _validate_test_result(artifact["test_result"])
+    _validate_execution_binding(artifact, result)
     evidence = artifact["failure_evidence"]
     if not isinstance(evidence, dict):
         raise ValueError("failure_evidence must be an object")
@@ -595,13 +775,7 @@ def _validate_failure_payload(artifact: dict[str, Any]) -> None:
 
 
 def _validate_test_evidence(artifact: dict[str, Any]) -> None:
-    required = {
-        "issue_id",
-        "candidate_digest",
-        "test_result",
-        "test_result_redacted",
-        "failing_tests",
-    }
+    required = TEST_EVIDENCE_REQUIRED_FIELDS
     allowed = required | {"failure_evidence"}
     missing = sorted(required - set(artifact))
     if missing:
@@ -611,6 +785,7 @@ def _validate_test_evidence(artifact: dict[str, Any]) -> None:
     _require_integer(artifact["issue_id"], "issue_id", minimum=1)
     _require_digest(artifact["candidate_digest"], "candidate_digest")
     result = _validate_test_result(artifact["test_result"])
+    _validate_execution_binding(artifact, result)
     result_redacted = _require_boolean(
         artifact["test_result_redacted"],
         "test_result_redacted",
@@ -713,8 +888,17 @@ def _validate_failure_handoff(envelope: dict[str, Any]) -> None:
     if artifact["sha256"] != _canonical_digest(artifact["inline"]):
         raise ValueError("failure artifact digest does not match its inline payload")
     _validate_failure_payload(artifact["inline"])
-    if artifact["inline"]["issue_id"] != issue_id:
+    inline = artifact["inline"]
+    if inline["issue_id"] != issue_id:
         raise ValueError("failure envelope issue_id does not match its payload")
+    receipt = inline["test_execution_receipt"]
+    if (
+        receipt["run_id"] != run_id
+        or receipt["task_id"] != task_id
+        or receipt["trace_id"] != envelope["trace_id"]
+        or receipt["issue_id"] != issue_id
+    ):
+        raise ValueError("TestExecutionReceipt does not bind the failure route")
 
 
 def _find_values(value: Any, target: str) -> list[Any]:

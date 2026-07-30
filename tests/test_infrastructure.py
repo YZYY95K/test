@@ -91,7 +91,7 @@ async def test_pipeline_runs_in_disposable_copy_and_captures_coverage(
     )
     commit_sha, tree_sha = _commit_repository(repository)
     (repository / "canonical.txt").write_text("dirty-working-tree", encoding="utf-8")
-    service = PipelineService(IsolatedTestService(repository, command))
+    service = PipelineService(IsolatedTestService(repository, command, command))
 
     record = await service.trigger(branch="devflow/benchmark", suite="full")
     assert record.status == "queued"
@@ -113,7 +113,11 @@ async def test_pipeline_rejects_unknown_ref_and_unconfigured_suite(tmp_path: Pat
     (repository / "tracked.txt").write_text("tracked", encoding="utf-8")
     _commit_repository(repository)
     service = PipelineService(
-        IsolatedTestService(repository, (sys.executable, "-c", "raise SystemExit(0)"))
+        IsolatedTestService(
+            repository,
+            (sys.executable, "-c", "raise SystemExit(0)"),
+            (sys.executable, "-c", "raise SystemExit(0)"),
+        )
     )
 
     with pytest.raises(MCPError, match="ref is unavailable"):
@@ -134,7 +138,7 @@ def test_test_command_environment_is_allowlisted_and_output_is_redacted(
         "import os; print(os.getenv('UNRELATED_PROVIDER_TOKEN', 'not-inherited')); "
         f"print({sentinel!r})",
     )
-    service = IsolatedTestService(tmp_path, command)
+    service = IsolatedTestService(tmp_path, command, command)
 
     outcome = service.execute(tmp_path)
 

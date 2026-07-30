@@ -83,6 +83,22 @@ def test_team_manifest_maps_all_domain_workers() -> None:
     for worker in resource["spec"]["workers"]:
         for server in worker.get("mcpServers", []):
             assert set(server) >= {"name", "url"}
+    role_servers = {
+        worker["name"]: {
+            server["name"]: server["url"] for server in worker.get("mcpServers", [])
+        }
+        for worker in resource["spec"]["workers"]
+    }
+    assert role_servers["devflow-tester"] == {
+        "devflow-cicd": (
+            "http://devflow-tester-cicd.agentteams-system.svc.cluster.local:8080/mcp"
+        )
+    }
+    assert all(
+        "devflow-cicd" not in servers
+        for role, servers in role_servers.items()
+        if role != "devflow-tester"
+    )
     members = [resource["spec"]["leader"], *resource["spec"]["workers"]]
     assert {member["name"]: Path(member["package"]).name for member in members} == {
         role: f"{role}-v{PACKAGE_VERSION}.zip" for role in ROLE_SKILLS
@@ -149,6 +165,62 @@ def test_ci_uploads_all_versioned_role_packages_and_digest_sidecars() -> None:
     assert upload["with"]["if-no-files-found"] == "error"
 
 
+def test_ci_rebuilds_compares_verifies_and_hashes_finals_archive() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["verify"]["steps"]
+    gate = next(
+        step
+        for step in steps
+        if step.get("name") == "Rebuild, compare, and verify finals submission archive"
+    )
+    script = gate["run"]
+
+    assert gate["if"] == "matrix.python-version == '3.12'"
+    assert script.count("python scripts/build_finals_submission.py build") == 2
+    assert script.count('--ref "${GITHUB_SHA}"') == 2
+    assert '--output "${final_path}"' in script
+    assert '--output "${rebuild_path}"' in script
+    compare = 'cmp -- "${final_path}" "${rebuild_path}"'
+    final_verify = (
+        "python scripts/build_finals_submission.py verify \\\n"
+        '  "${final_path}"'
+    )
+    rebuild_verify = (
+        "python scripts/build_finals_submission.py verify \\\n"
+        '  "${rebuild_path}"'
+    )
+    sidecar_write = 'sha256sum "${final_name}" > "${final_name}.sha256"'
+    sidecar_check = 'sha256sum --check "${final_name}.sha256"'
+    assert compare in script
+    assert script.count("python scripts/build_finals_submission.py verify") == 2
+    assert final_verify in script
+    assert rebuild_verify in script
+    assert sidecar_write in script
+    assert sidecar_check in script
+    assert (
+        script.index(compare)
+        < script.index(final_verify)
+        < script.index(rebuild_verify)
+        < script.index(sidecar_write)
+        < script.index(sidecar_check)
+    )
+
+    finals_upload = next(
+        step
+        for step in steps
+        if str(step.get("with", {}).get("name", "")).startswith(
+            "devflow-finals-submission-"
+        )
+    )
+    archive = "dist/DevFlow_GOAI_2026_finals-${{ github.sha }}.zip"
+    assert finals_upload["if"] == "matrix.python-version == '3.12'"
+    assert set(finals_upload["with"]["path"].splitlines()) == {
+        archive,
+        f"{archive}.sha256",
+    }
+    assert finals_upload["with"]["if-no-files-found"] == "error"
+
+
 def test_all_declared_skills_are_distributable() -> None:
     configured = yaml.safe_load((ROOT / "config" / "skills.yaml").read_text(encoding="utf-8"))
     configured_names = {skill["name"] for skill in configured["skills"]}
@@ -187,6 +259,27 @@ def test_skill_contract_graph_has_no_violations() -> None:
     assert validate_mcp_alignment(catalog, ROOT / "config" / "mcp_servers.yaml") == []
     assert all(len(contract.forbidden_actions) >= 3 for contract in catalog.values())
     assert all(len(contract.verification) >= 3 for contract in catalog.values())
+
+
+def test_mcp_alignment_rejects_unknown_skill_grants(tmp_path: Path) -> None:
+    catalog = load_catalog(ROOT / "skills")
+    policy = tmp_path / "mcp.yaml"
+    policy.write_text(
+        """
+servers:
+  rogue:
+    enabled: true
+    tools:
+      - name: mutate
+        allowed_agents: [TeamLeader]
+        allowed_skills: [not-a-real-skill]
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    violations = validate_mcp_alignment(catalog, policy)
+
+    assert "unknown MCP Skill grant not-a-real-skill: rogue:mutate" in violations
 
 
 def test_runtime_agent_skill_ownership_matches_contracts() -> None:

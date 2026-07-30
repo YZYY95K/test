@@ -14,16 +14,19 @@ DevFlow 不是让六个模型自由聊天，而是让六个有边界的 Agent �
 
 ## 演示口径与放行门
 
-屏幕左上角始终显示当前证据标签：`LIVE AGENTTEAMS`、`LOCAL REPRODUCIBLE` 或
-`RECORDED REHEARSAL`，三者不得混用。
+材料统一按四层标注：`LOCAL VERIFIED`（本地已验证）、`DEPLOYMENT PREFLIGHT`
+（候选/部署预检）、`HISTORICAL LIVE 2026-07-27/28`（历史现场）和
+`PENDING SERVER EVIDENCE`（当前版本待服务器实证）。台上只有当前实际运行且放行的
+链路可以显示 `LIVE AGENTTEAMS`；本地运行显示 `LOCAL VERIFIED`，历史录屏显示
+`RECORDED HISTORICAL LIVE`。预检与 pending 都不得伪装成端到端成功。
 
 | 演示链 | 当前可以证明 | 决赛主链放行条件 |
 |---|---|---|
-| 成功链 | 本地凭据无关 Demo 真实执行六阶段、基线红到候选绿、6/6 路由封存、18 条哈希链审计；真实集群另有一个两节点 T2 项目完成 | 同一真实 AgentTeams 项目完成六阶段，并留存 Team Room、任务状态、共享制品和终态回执 |
-| 失败链 | 本地集成测试真实覆盖 Tester→Leader→Coder、有界失败证据、幂等/冲突与全局三次生成预算；真实集群有一次版本错配 `FAILED`、幂等重提和冲突拒绝 | Team Room 中真实出现红测、`FAILED` 回传、Leader 验证、Coder 第二候选和最终转绿 |
-| T4 审批链 | 本地集成覆盖精确目标签名、恢复、一次性消费与防重放；真实集群已证明 `paused` 和无批准恢复被拒 | 外部真人在独立签名端批准精确目标，真实项目成功恢复，并再次重放被拒绝 |
+| 成功链 | 本地凭据无关 Demo 真实执行六阶段、基线红到候选绿、6/6 路由封存、18 条哈希链审计；2026-07-27/28 历史集群另有一个两节点 T2 项目完成 | 当前版本在同一真实 AgentTeams 项目完成六阶段，并留存 Team Room、任务状态、共享制品和终态回执 |
+| 失败链 | 本地集成测试真实覆盖 Tester→Leader→Coder、有界失败证据、幂等/冲突与全局三次生成预算；历史集群有一次版本错配 `FAILED`、幂等重提和冲突拒绝 | 当前 Team Room 中真实出现红测、`FAILED` 回传、Leader 验证、Coder 第二候选和最终转绿 |
+| T4 审批链 | 本地集成覆盖精确目标签名、恢复、一次性消费与防重放；历史集群已证明 `paused` 和无批准恢复被拒 | 外部真人在独立签名端批准精确目标，当前真实项目成功恢复，并再次重放被拒绝 |
 
-当前现场证据详见[验收矩阵](ACCEPTANCE_MATRIX_CN.md)和
+证据现状详见[验收矩阵](ACCEPTANCE_MATRIX_CN.md)和
 [AgentTeams 现场记录](../evidence/AGENTTEAMS_LIVE_20260727.md)。只有右栏全部完成并
 绑定最终 commit 后，才把对应画面标为 `LIVE AGENTTEAMS`。
 

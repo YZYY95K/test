@@ -316,7 +316,7 @@ def test_release_tree_digest_matches_the_pinned_archive_layout(
 ) -> None:
     digests = expected_controller_skill_digests(controller_releases)
     assert digests["devflow-coder"]["patch-generator"] == (
-        "d394c311776b3698251480897339349d0aa90ec32b010340bc919e4a6639c811"
+        "0d80c01fb8308081f4b6aea551180b5ad1d17de559730a3d5cfbc27b7242e216"
     )
     assert digests["devflow-lead"] == {}
     assert {role: tuple(sorted(value)) for role, value in digests.items()} == {
@@ -329,6 +329,12 @@ def test_apply_helpers_keep_staging_outside_agents_and_only_move_fixed_skills() 
     assert 'mv -nT "$probe" "$moved"' in CONTROLLER_PREPARE_HELPER
     assert 'tx="$base/.devflow-role-skills-$txid"' in CONTROLLER_CONVERGE_HELPER
     assert 'root="/root/hiclaw-fs/agents/$role/skills"' in CONTROLLER_CONVERGE_HELPER
+
+
+def test_audit_accepts_only_the_exact_absent_zero_skill_leader_cache() -> None:
+    assert '[ "$role" = devflow-lead ] || fail' in CONTROLLER_AUDIT_HELPER
+    assert 'parent=${root%/skills}; meta_dir "$parent"' in CONTROLLER_AUDIT_HELPER
+    assert "every role with an allowlist still requires" in CONTROLLER_AUDIT_HELPER
     assert 'mv -nT "$source" "$destination"' in CONTROLLER_CONVERGE_HELPER
     assert "rm -rf" not in CONTROLLER_CONVERGE_HELPER
     assert "rm -rf" not in CONTROLLER_PREPARE_HELPER
@@ -337,9 +343,9 @@ def test_apply_helpers_keep_staging_outside_agents_and_only_move_fixed_skills() 
 
 
 def test_archive_replacement_is_exact_path_bounded_atomic_and_recoverable() -> None:
-    assert 'path=/tmp/import/$role-v2.0.0.zip' in CONTROLLER_AUDIT_HELPER
-    assert 'target="$base/$role-v2.0.0.zip"' in CONTROLLER_ARCHIVE_REPLACE_HELPER
-    assert 'archive="/tmp/import/$role-v2.0.0.zip"' in CONTROLLER_CONVERGE_HELPER
+    assert 'path=/tmp/import/$role-v2.1.0.zip' in CONTROLLER_AUDIT_HELPER
+    assert 'target="$base/$role-v2.1.0.zip"' in CONTROLLER_ARCHIVE_REPLACE_HELPER
+    assert 'archive="/tmp/import/$role-v2.1.0.zip"' in CONTROLLER_CONVERGE_HELPER
     for role in ROLE_SKILLS:
         assert (
             f"audit_archive {role} {ARCHIVE_SIZES[role]} {ARCHIVE_DIGESTS[role]}"

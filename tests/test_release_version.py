@@ -32,7 +32,7 @@ def test_application_and_worker_release_versions_are_aligned() -> None:
     )
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
-    assert project_version == "2.0.0"
+    assert project_version == "2.1.0"
     assert __version__ == project_version
     assert observability_match.group(1) == project_version
     assert worker["version"] == project_version

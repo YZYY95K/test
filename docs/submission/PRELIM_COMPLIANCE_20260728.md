@@ -13,7 +13,7 @@
 
 | 官方要求 | DevFlow 证据 | 结论 |
 |---|---|---|
-| 作品简介，500 字以内 | `docs/submission/INTRO_500_CN.md`；只粘贴正文时本地计数为 486（去除空白为 450），源文件计入末尾换行为 487；平台计数器仍需最终复核 | 通过，待网页计数器确认 |
+| 作品简介，500 字以内 | `docs/submission/INTRO_500_CN.md`；只粘贴正文时本地计数为 499（去除空白为 463），源文件计入末尾换行为 500；平台计数器仍需最终复核 | 通过，待网页计数器确认 |
 | 方案 PPT/PDF | `outputs/DevFlow_GOAI_2026_初赛方案_20260728.pptx` 与同名 PDF；12 页，已完成渲染和安全检查 | 通过 |
 | 至少 3 个不同职能 Agent | TeamLeader、Triage、Locator、Coder、Tester、Reviewer，共 6 个自主 Agent | 通过 |
 | Agent Identity 清单 | `docs/submission/AGENT_IDENTITY_APPENDIX.md`；包含身份、能力边界、协同关系与不可做事项 | 通过 |

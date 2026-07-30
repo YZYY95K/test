@@ -60,11 +60,43 @@ OVERLAY_FILES = (
     PurePosixPath("agentteams/teamharness/guarded_server.py"),
 )
 APPROVAL_PUBLIC_KEY_NAME = "approval-ed25519.pub"
+GITHUB_RECEIPT_PUBLIC_KEY_NAME = "github-receipt-ed25519.pub"
+TEST_RECEIPT_PUBLIC_KEY_NAME = "test-receipt-ed25519.pub"
+TEST_RECEIPT_POLICY_NAME = "test-receipt-policy.json"
 RUNTIME_BINDING_NAME = "runtime-binding.json"
 RUNTIME_CONFIG_NAME = "runtime-config.yaml"
 ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
 DNS_LABEL = re.compile(r"^[a-z0-9](?:[-a-z0-9.]*[a-z0-9])?$")
 APPROVAL_DOMAIN = re.compile(r"^[0-9a-f]{64}$")
+TEST_RECEIPT_POLICY_FIELDS = frozenset(
+    {
+        "schemaVersion",
+        "algorithm",
+        "audience",
+        "issuer",
+        "signatureDomain",
+        "publicKeyPath",
+        "publicKeyFileSha256",
+        "publicKeySha256",
+        "policyAttestationPath",
+        "opensslPath",
+        "replayLedgerPath",
+        "replayScope",
+        "replayLedgerPersistentAcrossPodReplacement",
+        "receiptLifetimeSeconds",
+        "maxReceiptLifetimeSeconds",
+        "maxClockSkewSeconds",
+        "ciServerSha256",
+        "ciPolicySha256",
+        "repositoryArchiveSha256",
+        "repositoryManifestSha256",
+        "repositoryRevision",
+        "remainingThreat",
+    }
+)
+TEST_RECEIPT_PUBLIC_KEY_PATH = "/etc/devflow/teamharness/test-receipt-ed25519.pub"
+TEST_RECEIPT_POLICY_PATH = "/etc/devflow/teamharness/test-receipt-policy.json"
+TEST_RECEIPT_LEDGER_PATH = "/var/lib/devflow/teamharness/test-receipt-ledger.json"
 REMOTE_HASH_CHECK = """
 import hashlib
 import json
@@ -194,6 +226,12 @@ class SourceBundle:
     overlay_hashes: dict[str, str]
     approval_public_key: bytes
     approval_public_key_sha256: str
+    github_receipt_public_key: bytes
+    github_receipt_public_key_sha256: str
+    test_receipt_public_key: bytes
+    test_receipt_public_key_sha256: str
+    test_receipt_policy: bytes
+    test_receipt_policy_sha256: str
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:
@@ -315,8 +353,18 @@ def _leader_has_github_issuer_token(document: dict[str, Any]) -> bool:
     }
 
 
-def discover_targets(team: dict[str, Any], pods: dict[str, Any]) -> list[Target]:
-    """Return exactly six unique, active, Ready role Pods or fail closed."""
+def discover_targets(
+    team: dict[str, Any],
+    pods: dict[str, Any],
+    *,
+    require_github_issuer_token: bool = True,
+) -> list[Target]:
+    """Return exactly six unique, active, Ready role Pods or fail closed.
+
+    Callers that actually issue GitHub capabilities retain the default token
+    projection requirement.  Leader-only workflows may explicitly scope that
+    unrelated capability out while preserving the fixed Team and Pod checks.
+    """
 
     metadata = _object(team.get("metadata"), "Team metadata")
     spec = _object(team.get("spec"), "Team spec")
@@ -392,7 +440,11 @@ def discover_targets(team: dict[str, Any], pods: dict[str, Any]) -> list[Target]
             or not _worker_container_ready(pod)
         ):
             raise ReconcileError(f"role Pod is not Ready: {role_name}")
-        if role_name == LEADER_ROLE and not _leader_has_github_issuer_token(pod):
+        if (
+            require_github_issuer_token
+            and role_name == LEADER_ROLE
+            and not _leader_has_github_issuer_token(pod)
+        ):
             raise ReconcileError(
                 "Leader Pod lacks the fixed audience-bound issuer token projection"
             )
@@ -423,35 +475,108 @@ def _hash_policy(test_hash_policy: dict[str, str] | None) -> dict[str, str]:
     return policy
 
 
-def _approval_public_key(path: Path) -> tuple[bytes, str]:
+def _ed25519_public_key(path: Path, label: str) -> tuple[bytes, str]:
     """Load one canonical Ed25519 SubjectPublicKeyInfo PEM, never a private key."""
 
     path = path.resolve()
     if not path.is_file() or path.is_symlink():
-        raise ReconcileError("approval public key is missing or unsafe")
+        raise ReconcileError(f"{label} public key is missing or unsafe")
     try:
         payload = path.read_bytes()
         lines = payload.decode("ascii").splitlines()
     except (OSError, UnicodeDecodeError) as exc:
-        raise ReconcileError("approval public key is not canonical ASCII PEM") from exc
+        raise ReconcileError(f"{label} public key is not canonical ASCII PEM") from exc
     if (
         len(lines) != 3
         or lines[0] != "-----BEGIN PUBLIC KEY-----"
         or lines[2] != "-----END PUBLIC KEY-----"
         or not lines[1]
     ):
-        raise ReconcileError("approval public key is not canonical public-key PEM")
+        raise ReconcileError(f"{label} public key is not canonical public-key PEM")
     try:
         der = base64.b64decode(lines[1], validate=True)
     except ValueError as exc:
-        raise ReconcileError("approval public key contains invalid base64") from exc
+        raise ReconcileError(f"{label} public key contains invalid base64") from exc
     canonical = (
         f"-----BEGIN PUBLIC KEY-----\n{base64.b64encode(der).decode('ascii')}\n"
         "-----END PUBLIC KEY-----\n"
     ).encode("ascii")
     if payload != canonical or len(der) != 44 or not der.startswith(ED25519_SPKI_PREFIX):
-        raise ReconcileError("approval public key is not canonical Ed25519 SPKI")
+        raise ReconcileError(f"{label} public key is not canonical Ed25519 SPKI")
     return payload, hashlib.sha256(payload).hexdigest()
+
+
+def _test_receipt_trust(
+    public_key_path: Path,
+    policy_path: Path,
+) -> tuple[bytes, str, bytes, str]:
+    public_key, public_key_file_sha256 = _ed25519_public_key(
+        public_key_path,
+        "test receipt",
+    )
+    try:
+        payload = policy_path.resolve().read_bytes()
+        policy = json.loads(payload.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReconcileError("test receipt policy is unavailable or malformed") from exc
+    canonical = json.dumps(
+        policy,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    der = base64.b64decode(public_key.decode("ascii").splitlines()[1], validate=True)
+    key_sha256 = hashlib.sha256(der).hexdigest()
+    if (
+        policy_path.is_symlink()
+        or not isinstance(policy, dict)
+        or set(policy) != TEST_RECEIPT_POLICY_FIELDS
+        or payload != canonical
+        or policy.get("schemaVersion") != "1.0"
+        or policy.get("algorithm") != "Ed25519"
+        or policy.get("audience") != "devflow-teamharness"
+        or policy.get("issuer") != "devflow-tester-cicd"
+        or policy.get("signatureDomain") != "devflow.test-execution-receipt/v1"
+        or policy.get("publicKeyPath") != TEST_RECEIPT_PUBLIC_KEY_PATH
+        or policy.get("publicKeyFileSha256") != public_key_file_sha256
+        or policy.get("publicKeySha256") != key_sha256
+        or policy.get("policyAttestationPath") != TEST_RECEIPT_POLICY_PATH
+        or policy.get("replayLedgerPath") != TEST_RECEIPT_LEDGER_PATH
+        or policy.get("replayScope") != "pod-incarnation"
+        or policy.get("replayLedgerPersistentAcrossPodReplacement") is not False
+        or policy.get("receiptLifetimeSeconds") != 120
+        or policy.get("opensslPath") != "/usr/bin/openssl"
+        or policy.get("maxReceiptLifetimeSeconds") != 120
+        or isinstance(policy.get("maxClockSkewSeconds"), bool)
+        or not isinstance(policy.get("maxClockSkewSeconds"), int)
+        or not 0 <= policy["maxClockSkewSeconds"] <= 30
+        or not isinstance(policy.get("remainingThreat"), str)
+        or "root" not in policy["remainingThreat"].lower()
+        or "pod replacement" not in policy["remainingThreat"].lower()
+        or "120" not in policy["remainingThreat"]
+    ):
+        raise ReconcileError("test receipt policy identity or key binding is invalid")
+    for field in (
+        "ciServerSha256",
+        "ciPolicySha256",
+        "repositoryArchiveSha256",
+        "repositoryManifestSha256",
+    ):
+        if not isinstance(policy.get(field), str) or re.fullmatch(
+            r"[0-9a-f]{64}", policy[field]
+        ) is None:
+            raise ReconcileError("test receipt policy digest binding is invalid")
+    if not isinstance(policy.get("repositoryRevision"), str) or re.fullmatch(
+        r"[0-9a-f]{40}", policy["repositoryRevision"]
+    ) is None:
+        raise ReconcileError("test receipt policy revision binding is invalid")
+    return (
+        public_key,
+        public_key_file_sha256,
+        payload,
+        hashlib.sha256(payload).hexdigest(),
+    )
 
 
 def validate_sources(
@@ -459,6 +584,9 @@ def validate_sources(
     agentteams_repo: Path,
     devflow_repo: Path,
     approval_public_key: Path,
+    github_receipt_public_key: Path,
+    test_receipt_public_key: Path,
+    test_receipt_policy: Path,
     *,
     _test_hash_policy: dict[str, str] | None = None,
 ) -> SourceBundle:
@@ -546,7 +674,24 @@ def validate_sources(
         if not path.is_file() or path.is_symlink():
             raise ReconcileError(f"DevFlow overlay source is missing: {relative}")
         overlay_hashes[relative.as_posix()] = _sha256(path)
-    public_key, public_key_sha256 = _approval_public_key(approval_public_key)
+    public_key, public_key_sha256 = _ed25519_public_key(
+        approval_public_key,
+        "approval",
+    )
+    receipt_public_key, receipt_public_key_sha256 = _ed25519_public_key(
+        github_receipt_public_key,
+        "GitHub receipt",
+    )
+    if public_key == receipt_public_key:
+        raise ReconcileError("approval and GitHub receipt keys must be distinct")
+    (
+        test_public_key,
+        test_public_key_sha256,
+        test_policy,
+        test_policy_sha256,
+    ) = _test_receipt_trust(test_receipt_public_key, test_receipt_policy)
+    if test_public_key in {public_key, receipt_public_key}:
+        raise ReconcileError("approval, GitHub, and test receipt keys must be distinct")
     return SourceBundle(
         plugin_dir=plugin_dir,
         plugin_files=tuple(plugin_files),
@@ -554,6 +699,12 @@ def validate_sources(
         overlay_hashes=overlay_hashes,
         approval_public_key=public_key,
         approval_public_key_sha256=public_key_sha256,
+        github_receipt_public_key=receipt_public_key,
+        github_receipt_public_key_sha256=receipt_public_key_sha256,
+        test_receipt_public_key=test_public_key,
+        test_receipt_public_key_sha256=test_public_key_sha256,
+        test_receipt_policy=test_policy,
+        test_receipt_policy_sha256=test_policy_sha256,
     )
 
 
@@ -583,20 +734,31 @@ def _tar_files(root: Path, files: tuple[Path, ...]) -> bytes:
     return buffer.getvalue()
 
 
-def _tar_public_key(payload: bytes) -> bytes:
-    """Create the deterministic, public-only approval-policy archive."""
+def _tar_public_keys(
+    approval_payload: bytes,
+    receipt_payload: bytes,
+    test_receipt_payload: bytes,
+    test_receipt_policy: bytes,
+) -> bytes:
+    """Create a deterministic archive containing only public verifier trust."""
 
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as archive:
-        info = tarfile.TarInfo(APPROVAL_PUBLIC_KEY_NAME)
-        info.size = len(payload)
-        info.mode = 0o444
-        info.mtime = 0
-        info.uid = 0
-        info.gid = 0
-        info.uname = "root"
-        info.gname = "root"
-        archive.addfile(info, io.BytesIO(payload))
+        for name, payload in (
+            (APPROVAL_PUBLIC_KEY_NAME, approval_payload),
+            (GITHUB_RECEIPT_PUBLIC_KEY_NAME, receipt_payload),
+            (TEST_RECEIPT_PUBLIC_KEY_NAME, test_receipt_payload),
+            (TEST_RECEIPT_POLICY_NAME, test_receipt_policy),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            info.mode = 0o444
+            info.mtime = 0
+            info.uid = 0
+            info.gid = 0
+            info.uname = "root"
+            info.gname = "root"
+            archive.addfile(info, io.BytesIO(payload))
     return buffer.getvalue()
 
 
@@ -670,7 +832,10 @@ set -eu
 expected=$1
 test "${HOME:?HOME is required}" = "$expected"
 test "$PWD" = "$expected"
-test -f "$expected/runtime/runtime.json"
+# AgentTeams v1.2.0-beta.1 creates the OpenClaw runtime file before the
+# TeamHarness overlay.  The overlay itself owns runtime/runtime.json and must
+# therefore not require that post-install identity artifact during preflight.
+test -f "$expected/openclaw.json"
 test "$(cat /etc/hostname)" = "$2"
 command -v python3 >/dev/null
 command -v tar >/dev/null
@@ -707,6 +872,9 @@ def _stage_sources(
     plugin_hashes: dict[str, str],
     overlay_hashes: dict[str, str],
     approval_public_key_sha256: str,
+    github_receipt_public_key_sha256: str,
+    test_receipt_public_key_sha256: str,
+    test_receipt_policy_sha256: str,
     runtime_binding_sha256: str,
     runtime_config_sha256: str,
 ) -> None:
@@ -832,7 +1000,14 @@ mkdir -p -- "$stage/plugin" "$stage/overlay" "$stage/policy" "$stage/identity"
             REMOTE_HASH_CHECK,
             f"{REMOTE_STAGE}/policy",
             json.dumps(
-                {APPROVAL_PUBLIC_KEY_NAME: approval_public_key_sha256},
+                {
+                    APPROVAL_PUBLIC_KEY_NAME: approval_public_key_sha256,
+                    GITHUB_RECEIPT_PUBLIC_KEY_NAME: (
+                        github_receipt_public_key_sha256
+                    ),
+                    TEST_RECEIPT_PUBLIC_KEY_NAME: test_receipt_public_key_sha256,
+                    TEST_RECEIPT_POLICY_NAME: test_receipt_policy_sha256,
+                },
                 sort_keys=True,
                 separators=(",", ":"),
             ),
@@ -847,6 +1022,32 @@ mkdir -p -- "$stage/plugin" "$stage/overlay" "$stage/policy" "$stage/identity"
             "-pubin",
             "-in",
             f"{REMOTE_STAGE}/policy/{APPROVAL_PUBLIC_KEY_NAME}",
+            "-text",
+            "-noout",
+        )
+    )
+    runner.run(
+        _exec(
+            kubectl,
+            target,
+            "/usr/bin/openssl",
+            "pkey",
+            "-pubin",
+            "-in",
+            f"{REMOTE_STAGE}/policy/{TEST_RECEIPT_PUBLIC_KEY_NAME}",
+            "-text",
+            "-noout",
+        )
+    )
+    runner.run(
+        _exec(
+            kubectl,
+            target,
+            "/usr/bin/openssl",
+            "pkey",
+            "-pubin",
+            "-in",
+            f"{REMOTE_STAGE}/policy/{GITHUB_RECEIPT_PUBLIC_KEY_NAME}",
             "-text",
             "-noout",
         )
@@ -876,6 +1077,14 @@ def _install_and_verify(
         if target.role_name == LEADER_ROLE
         else []
     )
+    receipt_args = (
+        [
+            "--github-receipt-public-key",
+            f"{REMOTE_STAGE}/policy/{GITHUB_RECEIPT_PUBLIC_KEY_NAME}",
+        ]
+        if target.role_name == "devflow-locator"
+        else []
+    )
     runner.run(
         _exec(
             kubectl,
@@ -891,6 +1100,11 @@ def _install_and_verify(
             "--runtime-binding",
             f"{REMOTE_STAGE}/identity/{RUNTIME_BINDING_NAME}",
             *approval_args,
+            *receipt_args,
+            "--test-receipt-public-key",
+            f"{REMOTE_STAGE}/policy/{TEST_RECEIPT_PUBLIC_KEY_NAME}",
+            "--test-receipt-policy",
+            f"{REMOTE_STAGE}/policy/{TEST_RECEIPT_POLICY_NAME}",
             "--replace",
         )
     )
@@ -913,6 +1127,9 @@ def reconcile(
     agentteams_repo: Path,
     approval_public_key: Path,
     approval_domain: str,
+    github_receipt_public_key: Path,
+    test_receipt_public_key: Path,
+    test_receipt_policy: Path,
     devflow_repo: Path = ROOT,
     _test_hash_policy: dict[str, str] | None = None,
 ) -> list[Target]:
@@ -946,6 +1163,9 @@ def reconcile(
         agentteams_repo,
         devflow_repo,
         approval_public_key,
+        github_receipt_public_key,
+        test_receipt_public_key,
+        test_receipt_policy,
         _test_hash_policy=_test_hash_policy,
     )
     plugin_archive = _tar_files(sources.plugin_dir, sources.plugin_files)
@@ -953,7 +1173,12 @@ def reconcile(
         devflow_repo.resolve().joinpath(*relative.parts) for relative in OVERLAY_FILES
     )
     overlay_archive = _tar_files(devflow_repo.resolve(), overlay_paths)
-    approval_archive = _tar_public_key(sources.approval_public_key)
+    approval_archive = _tar_public_keys(
+        sources.approval_public_key,
+        sources.github_receipt_public_key,
+        sources.test_receipt_public_key,
+        sources.test_receipt_policy,
+    )
 
     # Preflight every role before staging or installing into any Pod.
     for target in targets:
@@ -973,6 +1198,9 @@ def reconcile(
             sources.plugin_hashes,
             sources.overlay_hashes,
             sources.approval_public_key_sha256,
+            sources.github_receipt_public_key_sha256,
+            sources.test_receipt_public_key_sha256,
+            sources.test_receipt_policy_sha256,
             runtime_binding_sha256,
             runtime_config_sha256,
         )
@@ -990,6 +1218,24 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="local AgentTeams checkout at the pinned upstream commit",
+    )
+    parser.add_argument(
+        "--github-receipt-public-key",
+        type=Path,
+        required=True,
+        help="external Ed25519 receipt public key PEM; must differ from approval key",
+    )
+    parser.add_argument(
+        "--test-receipt-public-key",
+        type=Path,
+        required=True,
+        help="public Ed25519 key extracted from the exact Tester CI image",
+    )
+    parser.add_argument(
+        "--test-receipt-policy",
+        type=Path,
+        required=True,
+        help="canonical verifier policy extracted from the exact Tester CI image",
     )
     parser.add_argument(
         "--devflow-repo",
@@ -1021,6 +1267,9 @@ def main(argv: list[str] | None = None) -> int:
             agentteams_repo=args.agentteams_repo,
             approval_public_key=args.approval_public_key,
             approval_domain=args.approval_domain,
+            github_receipt_public_key=args.github_receipt_public_key,
+            test_receipt_public_key=args.test_receipt_public_key,
+            test_receipt_policy=args.test_receipt_policy,
             devflow_repo=args.devflow_repo,
         )
     except ReconcileError as exc:

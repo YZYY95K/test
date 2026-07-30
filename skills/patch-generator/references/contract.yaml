@@ -77,8 +77,8 @@ failures:
   - code: EVIDENCE_STALE
     retryable: false
     max_attempts: 0
-    action: Request fresh localization for the current revision.
-    route_to: LocatorAgent
+    action: Return the stale-evidence failure to TeamLeader, which alone may request fresh localization.
+    route_to: TeamLeader
     event: coder.blocked
   - code: BOUNDARY_VIOLATION
     retryable: false

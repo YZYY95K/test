@@ -1,7 +1,10 @@
 # Build agentteams/github-scope-broker.Containerfile and import or publish the
 # exact immutable image index referenced below before applying this manifest.
 # Create Secret/devflow-github-scope-broker out of band with keys hmac-key and
-# github-token. This template deliberately contains no secret values.
+# github-token. Separately create Secret/devflow-github-receipt-signing with
+# key receipt-ed25519.pem. The latter must be an Ed25519 private key and is
+# mounted only into the content plane as a root-only 0400 file. This template
+# deliberately contains no secret values.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -147,6 +150,9 @@ spec:
               cpu: 250m
               memory: 128Mi
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -193,10 +199,12 @@ spec:
       serviceAccountName: devflow-github-content-broker
       automountServiceAccountToken: false
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
+        # The private-key Secret is deliberately root-only. Root has no Linux
+        # capabilities, no writable root filesystem, and no service-account
+        # token in this single-process content Pod.
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -277,10 +285,32 @@ spec:
               cpu: 500m
               memory: 192Mi
           securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            - name: receipt-signing-key
+              mountPath: /var/run/secrets/devflow-github-receipt/receipt-ed25519.pem
+              subPath: receipt-ed25519.pem
+              readOnly: true
+            - name: receipt-signing-tmp
+              mountPath: /tmp
+      volumes:
+        - name: receipt-signing-key
+          secret:
+            secretName: devflow-github-receipt-signing
+            defaultMode: 0400
+            items:
+              - key: receipt-ed25519.pem
+                path: receipt-ed25519.pem
+        - name: receipt-signing-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Mi
 ---
 apiVersion: v1
 kind: Service

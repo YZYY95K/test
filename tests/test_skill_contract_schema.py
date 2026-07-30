@@ -78,7 +78,7 @@ def test_test_runner_requires_mediated_failure_protocol() -> None:
         item for item in bypass["failures"] if item["code"] == "TEST_REGRESSION"
     )
     regression["route_to"] = "CoderAgent"
-    with pytest.raises(ValidationError, match="must route through TeamLeader"):
+    with pytest.raises(ValidationError, match=r"must route (?:through|to) TeamLeader"):
         SkillContract.model_validate(bypass)
 
 
@@ -97,3 +97,13 @@ def test_patch_generator_requires_exact_retry_owner_and_budget() -> None:
     excessive["retry_handoff"]["attempt_bounds"]["maximum_total"] = 9
     with pytest.raises(ValidationError, match="Input should be 3"):
         SkillContract.model_validate(excessive)
+
+
+def test_every_worker_failure_rule_returns_to_team_leader() -> None:
+    catalog = load_catalog(ROOT / "skills")
+
+    assert all(
+        failure.route_to == "TeamLeader"
+        for contract in catalog.values()
+        for failure in contract.failures
+    )

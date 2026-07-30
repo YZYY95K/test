@@ -9,11 +9,11 @@ an explicit grant. Every unspecified combination is denied.
 
 | Actor | Owns | Accepts | Produces | MCP authority | Explicit non-responsibilities |
 |---|---|---|---|---|---|
-| TeamLeader | `team-orchestration` capability | issue and worker lifecycle events | plan, assignment, retry, escalation | read/comment on issues; human-approved rollback | no code generation, testing, review, merge, or approval substitution |
+| TeamLeader | framework-native orchestration capability (not a Skill) | issue and worker lifecycle events | plan, assignment, retry, pause, escalation | guarded AgentTeams TeamHarness only; no repository or CI/CD MCP | no code generation, testing, review, repository mutation, merge, rollback, or approval substitution |
 | TriageAgent | `issue-classifier` | new or materially changed issue | `ClassifiedIssue` for TeamLeader | none | no repository read/write, patching, or tier above T5 |
-| LocatorAgent | `code-root-cause`, `github-evidence` | classified task with fixed revision/scope | `LocatedContext` or digest-bound repository evidence for TeamLeader | `github:get_file_contents` only | no source modification, code execution, test execution, or scope expansion |
+| LocatorAgent | `code-root-cause`, `github-evidence` | classified task with fixed revision/scope | `LocatedContext` or digest-bound repository evidence for TeamLeader | only `github-evidence` may call one revision/path-scoped read tool; `code-root-cause` has none | no source modification, code execution, test execution, direct GitHub from root-cause analysis, or scope expansion |
 | CoderAgent | `patch-generator` | located context or retry evidence | `PatchCandidate` for TeamLeader validation | none | no canonical file write, test execution, PR operation, review, or approval |
-| TesterAgent | `test-runner` | patch candidate | integrity-attested `TestEvidence` or bounded failure evidence for TeamLeader | isolated CI/CD test tools only | no agent-supplied shell command, canonical checkout mutation, direct Coder routing, review, or merge |
+| TesterAgent | `test-runner` | patch candidate | integrity-attested `TestEvidence` or bounded failure evidence for TeamLeader | exactly one policy-owned isolated `run_tests` action | no agent-supplied command/path, canonical checkout mutation, direct Coder routing, review, or merge |
 | ReviewerAgent | `pr-reviewer`, `experience-distiller` | passing test evidence or a verified terminal bundle | review/experience result for TeamLeader, including a typed human-gate request | no GitHub write in the current AgentTeams deployment | no merge, deployment, rollback, test execution, or self-authored approval |
 | Human reviewer | approval authority, not an Agent | T4/T5 evidence bundle | digest-bound approval or rejection | no ambient MCP grant | approval cannot be inferred from chat text or supplied by an Agent |
 
@@ -133,6 +133,23 @@ failure evidence. Reviewer status is bound to its typed decision, and only a
 T4/T5 `human_approval_required` decision may be `blocked`. This prevents an
 AgentTeams task from laundering domain failure into transport success.
 
+For a signed Tester result, validation is deliberately separated from
+consumption. The Leader first verifies the fixed Ed25519 trust, handoff,
+semantic result and packaged validator, then atomically reserves the receipt;
+it never permanently consumes the JTI before the upstream transition. The
+reservation lock remains held while AgentTeams is called and while both real
+state authorities are read back. In pinned AgentTeams commit
+`78d0ceda336befa6e62bf89fc1a6b08b965e128d`, `taskflow.check_task` proves the
+unchanged submitted result while `projectflow.resolve_project` proves the plan
+node acceptance and requester-report binding. Only their canonical composite
+digest can move the ledger from `pending` to `committed`. Non-applied failures
+are retryable, response loss is recovered idempotently, and conflicts remain
+pending/fail-closed. Receipt-bound acceptance forbids `publishArtifacts=true`
+because publication is a separate external side effect that this reservation
+does not cover. A failed DevFlow test acknowledgement is mapped only after
+validation from `FAILED` to AgentTeams' real `REVISION_NEEDED` enum; the
+original DevFlow status remains bound in the accept-request digest.
+
 ### Guarded TeamHarness surface
 
 | Runtime role | Direct TeamHarness tools |
@@ -236,20 +253,24 @@ the host deadline, bounds captured diagnostics, and performs cleanup. The
 operator-driven T2 run above completed through this path; it is not a claim of
 an autonomous or general six-stage success.
 
-For `cicd:run_tests`, the repository implementation makes the server own the
-test command as an argument vector. Local integration tests show that it
-accepts a typed Patch, copies the repository to a disposable directory, checks
-stale original content, applies create/modify/delete operations there, and
-runs with `shell=False` and a bounded timeout. Those tests verify that the
-canonical repository is not mutated; a live AgentTeams CI/CD run has not yet
-been retained as server evidence.
+The two CI MCP profiles intentionally have different names and wire protocols.
+AgentTeams `devflow-cicd:run_tests` accepts only
+`taskId/revision/workspaceBinding` and resolves the ACKed candidate and suite
+server-side. Local `devflow-cicd-portable:run_tests` accepts only
+`issue_id/patch`; a signed local `risk_tier` selects one of two fixed argv
+profiles. Local integration tests show that the portable service copies the
+repository to disposable directories, rejects stale content, applies the typed
+patch there, and runs with `shell=False` and a bounded timeout. Its explicit
+`portable-process-only/v1` profile is not AgentTeams isolation evidence.
 
 ## Sources of truth and drift prevention
 
 - `config/agents.yaml` declares identities, capabilities, watched events, and
   human-readable boundaries.
 - `skills/*/references/contract.yaml` declares each Skill's exact MCP tools.
-- `config/mcp_servers.yaml` declares the corresponding Agent + Skill grants.
+- `config/mcp_servers.yaml` declares the canonical AgentTeams grants and wire
+  contract; `config/mcp_servers.portable.yaml` separately declares local-only
+  adapters.
 - `config/security.yaml` declares credential capabilities, branch protection,
   approval, and rollback policy.
 - `src/devflow/agents/base.py` enforces hand-offs and constructs trusted MCP
@@ -271,11 +292,18 @@ approval denial paths.
    and consumes it. It does not perform the next stage itself.
 3. Evidence before promotion: tests precede review; review precedes a PR or
    approval gate; merge is outside autonomous authority.
-4. No agent-held secrets: credentials stay in the gateway/server environment
-   and secret-shaped arguments fail before transport.
-5. Human authority is authenticated and artifact-bound: a dangerous action
-   requires fresh server-signed evidence whose action, target, and SHA-256
-   digest match the exact MCP arguments.
+4. Scoped credential paths, not universal secret isolation: the historical
+   GitHub/Broker path kept the upstream provider token behind the Broker, and
+   the local credential-broker tests pass only a short-lived capability handle.
+   Current OpenClaw Worker workspaces still contain MCP consumer/configuration
+   material, so `strongBoundaryEnforceable=false` remains the system result.
+   Managed DevFlow transports reject configured secret-shaped arguments; this
+   is not a global hostile-runtime DLP guarantee.
+5. Approval authority is profile-specific and artifact-bound. The portable
+   local profile uses fresh HMAC evidence issued by its trusted local authority.
+   AgentTeams T4/T5 requires an external Human Authority Ed25519 signature over
+   the exact approval target. Historical live evidence proves only pause and
+   denial without approval; a human-signed cluster resume remains pending.
 6. Internal servers do not trust the caller wrapper alone; they independently
    authenticate and authorize the propagated call context, and bind only to a
    loopback address.

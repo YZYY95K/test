@@ -15,6 +15,7 @@ from devflow.agents.team_leader import Task, TeamLeader
 from devflow.agents.tester_agent import TesterAgent as DevFlowTesterAgent
 from devflow.event_bus import event_bus
 from devflow.exceptions import AgentError, BoundaryViolationError
+from devflow.mcp.cicd import PORTABLE_CICD_SERVER
 from devflow.mcp.contracts import MCPCallContext
 from devflow.models.issue import ComplexityLevel, IssueData
 from devflow.models.patch import (
@@ -86,8 +87,12 @@ class _StaticResultMCP:
         arguments: dict[str, Any],
         **_kwargs: Any,
     ) -> dict[str, Any]:
-        assert (server, tool) == ("cicd", "run_tests")
+        assert (server, tool) == (PORTABLE_CICD_SERVER, "run_tests")
         assert arguments["issue_id"] == 42
+        assert set(arguments) == {"issue_id", "patch"}
+        context = _kwargs["context"]
+        assert isinstance(context, MCPCallContext)
+        assert context.risk_tier is not None
         attested = self.result.model_copy(
             update={
                 "integrity_attestation": IntegrityAttestation(
@@ -101,7 +106,7 @@ class _StaticResultMCP:
                     added_tests_manifest_digest="d" * 64,
                     baseline_protected_file_count=1,
                     added_test_file_count=0,
-                    full_suite=bool(arguments["full_suite"]),
+                    full_suite=context.risk_tier in {"T3", "T4", "T5"},
                     verified=True,
                     isolation_boundary=TEST_ISOLATION_BOUNDARY,
                 )

@@ -138,8 +138,10 @@ class LocatorAgent(BaseAgent):
             # 1. RAG retrieval — broadens the query if results are empty.
             snippets = await self._retrieve_with_broadening(issue)
 
-            # 2. Fetch exact file contents for the top candidates via GitHub MCP.
-            file_contents = await self._fetch_file_contents(snippets, issue)
+            # 2. Consume only the bounded repository evidence already supplied
+            # by the retrieval adapter. Live GitHub reads belong exclusively to
+            # the separate github-evidence Skill and arrive digest-bound.
+            file_contents = self._verified_file_contents(snippets)
 
             # 3. LLM-backed root-cause reasoning over the retrieved context.
             root_cause = await self._identify_root_cause(issue, tier, snippets, file_contents)
@@ -242,45 +244,30 @@ class LocatorAgent(BaseAgent):
         return snippets
 
     # ------------------------------------------------------------------ #
-    # GitHub MCP — fetch exact file contents
+    # Verified evidence extraction
     # ------------------------------------------------------------------ #
-    async def _fetch_file_contents(
-        self,
-        snippets: list[dict[str, Any]],
-        issue: IssueData,
-    ) -> dict[str, str]:
-        """Fetch exact file contents for the top candidate paths via GitHub MCP.
+    @staticmethod
+    def _verified_file_contents(snippets: list[dict[str, Any]]) -> dict[str, str]:
+        """Extract bounded content without granting root-cause GitHub access.
 
-        Falls back to the snippet text baked into the RAG results when the MCP
-        is unavailable, so localization still produces *something* useful.
+        Production AgentTeams obtains these snippets through ``github-evidence``.
+        The local deterministic runtime uses its repository-owned retrieval
+        fixture; neither path lets ``code-root-cause`` call GitHub directly.
         """
         contents: dict[str, str] = {}
         seen: set[str] = set()
         for snippet in snippets:
             path = snippet.get("file") or snippet.get("path")
-            if not path or path in seen:
+            content = snippet.get("content")
+            if (
+                not isinstance(path, str)
+                or not path
+                or path in seen
+                or not isinstance(content, str)
+            ):
                 continue
             seen.add(path)
-            try:
-                result = await self._call_mcp(
-                    "github",
-                    "get_file_contents",
-                    {
-                        "owner": issue.repo_owner,
-                        "repo": issue.repo_name,
-                        "path": path,
-                    },
-                    skill="code-root-cause",
-                    issue_id=issue.issue_number,
-                )
-                contents[path] = _extract_content(result) or snippet.get("content", "")
-            except Exception as exc:  # noqa: BLE001 — degrade to snippet
-                logger.warning(
-                    "locator.mcp_fetch_failed",
-                    path=path,
-                    error=str(exc),
-                )
-                contents[path] = snippet.get("content", "")
+            contents[path] = content
         return contents
 
     # ------------------------------------------------------------------ #
@@ -462,15 +449,6 @@ def impact_files(impact: ImpactAnalysis, root_cause: RootCause) -> list[Affected
             reason = "Referenced by the root-cause region; review for impact."
         entries.append(AffectedFile(path=path, reason=reason, change_type=change_type))
     return entries
-
-
-def _extract_content(result: Any) -> str:
-    """Extract textual content from a GitHub MCP ``get_file_contents`` result."""
-    if isinstance(result, str):
-        return result
-    if isinstance(result, dict):
-        return result.get("content") or result.get("text") or ""
-    return getattr(result, "content", "") or ""
 
 
 def _estimate_tokens(text: str) -> int:

@@ -1,6 +1,6 @@
 schema_version: "1.0"
 name: issue-classifier
-version: "3.0.0"
+version: "4.0.0"
 owner: TriageAgent
 intent: Convert untrusted issue intake into a conservative routing artifact.
 invoke_when:
@@ -70,8 +70,11 @@ verification:
   - id: dedup
     requirement: Dedup was attempted or explicitly marked degraded.
     evidence: Evidence source, threshold, and candidate score.
+  - id: failure-contract
+    requirement: A failed invocation emits only SkillFailure 1.0 to TeamLeader, binds the exact IssueIntake SHA-256, and exactly matches a declared code, retry budget, exhaustion flag, and event.
+    evidence: Strict standalone validator result, failed HandoffEnvelope, source artifact digest, and TeamHarness Skill validation attestation.
 release:
   compatibility: AgentTeams v1beta1 and HandoffEnvelope 1.x.
-  change_policy: v3 makes the deterministic T4 risk floor mandatory; artifact field removal or risk relaxation requires a major version.
+  change_policy: v4 makes IssueIntake and ClassifiedIssue closed typed schemas, binds output to input, and standardizes failed execution as SkillFailure 1.0; artifact or risk relaxation requires a major version.
   rollback: Restore the prior signed Skill bundle and retain existing versioned artifacts.
 examples_ref: references/examples.md

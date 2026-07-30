@@ -1,8 +1,9 @@
 # DevFlow 决赛高压答辩题库
 
 回答原则：先给结论，再给可重跑证据，最后主动说明边界。所有数字以最终提交
-commit 的证据报告为准；本文中的“当前”指 2026-07-28 的候选工作树和已记录现场
-证据，不自动继承到未来版本。
+commit 的证据报告为准。回答必须标明四层证据之一：本地已验证、候选/部署
+预检、2026-07-27/28 历史现场、当前版本待服务器实证。历史现场不自动继承给
+未发布的 v2.1.0。
 
 ## 场景价值与结果可信度
 
@@ -41,7 +42,11 @@ DevFlow 把定位、生成、验证、评审和编排分给不同责任主体，
 ### 6. 你们怎样避免“测试绿了但业务没修好”？
 
 Tester 同时比较基线和候选，不接受只有“退出码 0”的结果；完整性 attestation 绑定
-测试清单、命令、策略和候选摘要，并拒绝删除测试、引入 skip/xfail 或篡改收集逻辑。
+测试清单、命令、策略和候选摘要，AgentTeams 候选链还要求独立 CI 的短时 Ed25519
+执行回执和固定公钥验签。当前 Leader Pod 内，完全相同的 JTI 与接受请求/结果
+绑定会幂等读回，冲突绑定被拒绝，不确定权威状态保持 `pending` 并 fail closed；
+同时拒绝删除测试、引入 skip/xfail 或篡改收集逻辑。该 ledger 不跨 Pod replacement
+持久，因此不宣称持久防重放或 exactly-once。独立 CI Pod 仍待服务器实跑。
 Reviewer 再检查正确性、安全和范围。但任何有限测试都不能证明无缺陷，因此输出是
 “在声明的验证范围内通过”，不是数学上的完全正确。
 
@@ -64,8 +69,9 @@ Triage 不读代码，Locator 不写代码，Coder 不跑测试，Tester 不改�
 ### 9. Leader 会不会成为单点故障或“超级 Agent”？
 
 它是调度权威，因此确实是控制面单点，但不是能力超级集合。Leader 不能生成补丁、
-测试、评审、合并或代替人批准；状态由持久账本、幂等键、租约和审计链支持恢复。
-生产高可用仍需外部选主和故障演练，当前实现不能宣称完成分布式共识。
+测试、评审、合并或代替人批准；本地 SQLite 路由账本支持跨进程租约、恢复和审计，
+但 Tester 回执 ledger 仅为 Pod-local，部分 replay/预算仍含进程内状态。生产高可用
+仍需共享权威、外部选主和故障演练，当前实现不能宣称完成分布式共识。
 
 ### 10. Agent 间通信如何减少损耗？
 
@@ -82,7 +88,7 @@ Leader 验证完整结果后生成有界 `TestFailureEvidence` 再路由 Coder�
 ### 12. 两个 Worker 给出冲突结论时谁说了算？
 
 Leader 只按证据门仲裁，不按语言置信度投票。红测不能被 Reviewer 的“看起来正确”
-覆盖，高/严重安全发现不能被绿测覆盖，缺失 attestation 不能被成功状态覆盖。需要
+覆盖，高/严重安全发现不能被绿测覆盖，缺失完整性证明或有效执行回执不能被成功状态覆盖。需要
 新需求判断时升级给人，而不是让模型互相辩论到超时。
 
 ### 13. 失败会不会无限循环烧钱？
@@ -134,7 +140,7 @@ Locator 只有范围绑定的 GitHub 读取，Tester 只有隔离 CI，当前 Re
 
 ### 20. 怎样证明 MCP 边界不是配置文件里的“伪实现”？
 
-真实集群已做固定仓库/revision/path 的正向 GitHub 读取，并分别观察同 capability
+2026-07-27/28 历史集群已做固定仓库/revision/path 的正向 GitHub 读取，并分别观察同 capability
 错路径 403、Reviewer 身份 403、Locator 直连 Broker 被 NetworkPolicy 阻断；receipt
 摘要可重算。它证明的是这一个精确读取边界，不证明任意仓库或完整六阶段。
 
@@ -171,9 +177,11 @@ Experience Distiller 只接受 Leader 路由的 `VerifiedRunBundle`，其中测�
 
 ### 26. 密钥怎么保护？
 
-Worker 不接收原始提供方密钥，而接收短期、范围绑定的能力句柄；真实凭据保留在可信
-Broker/适配器。日志和公开证据只保留摘要，secret-shaped 输出会被阻断。已有凭据若
-曾在聊天或终端暴露必须轮换，不能因为仓库未提交就视为安全。
+在已验证的固定范围 GitHub/Broker 路径中，Worker 不接收上游 GitHub token；本地
+credential-broker 测试也只把短期、范围绑定的能力句柄交给调用方。当前 OpenClaw
+工作区仍包含 MCP consumer/configuration 材料，因而不能概括成“所有 Worker 无
+凭据”。受管 DevFlow 路径会阻断其配置覆盖的 secret-shaped 输出；这不是全局 DLP。
+已有凭据若曾在聊天或终端暴露必须轮换，不能因为仓库未提交就视为安全。
 
 ### 27. 你们有强 OS 沙箱吗？
 
@@ -192,25 +200,29 @@ Broker/适配器。日志和公开证据只保留摘要，secret-shaped 输出�
 
 ### 29. CI/CD、OTLP、Prometheus 是真的还是 YAML 占位？
 
-仓库已有隔离测试服务、CI/CD 工具、批量 OTLP/gRPC 导出、loopback-only Prometheus
-端点、审计和回滚策略，并有本地测试。决赛级陈述还需要在干净服务器保留真实 MCP
-receipt、collector trace、Prometheus scrape 和回滚故障注入；配置存在不能代替现场
-集成证据。
+仓库有历史 portable 隔离测试服务记录、当前 AgentTeams Tester CI 候选、CI/CD
+工具、批量 OTLP/gRPC 导出、loopback-only Prometheus 端点、审计和回滚策略。
+当前候选的源代码、协议和负例有本地测试，但没有镜像/Bubblewrap/CNI 或
+`run_tests→签名回执→Leader accept` 的服务器证据。决赛级陈述还需要在干净服务器
+保留真实 MCP receipt、collector trace、Prometheus scrape 和回滚故障注入；配置
+或部署预检不能代替端到端集成证据。
 
 ### 30. 当前 AgentTeams 到底真实跑到了什么程度？
 
-真实环境已运行 1 Leader+5 Worker、机器人自动交接、一个两节点 T2 生命周期、一次
-operator-driven T2 GitHub 边界成功、Worker 越权拒绝、固定七 Skill 策略收敛、
-T4 暂停与无批准拒绝。尚未证明同一项目六阶段、Tester→Coder 现场重试或真人 T4
-签名恢复。完整细节见[现场证据](../evidence/AGENTTEAMS_LIVE_20260727.md)。
+2026-07-27/28 历史环境已运行 1 Leader+5 Worker、机器人自动交接、一个两节点 T2
+生命周期、一次 operator-driven T2 GitHub 边界成功、Worker 越权拒绝、固定七 Skill
+策略收敛、T4 暂停与无批准拒绝。未发布 v2.1.0 没有继承这些部署结论；当前仍未
+证明同一项目六阶段、Tester→Coder 现场重试、当前独立 CI E2E 或真人 T4 签名恢复。
+完整细节见[现场证据](../evidence/AGENTTEAMS_LIVE_20260727.md)。
 
 ### 31. 本地测试通过多少？覆盖率多少？
 
-2026-07-29 最近一次决赛 RC 全量门为 1,033 passed、17 skipped、84.79%（6,324
-statements / 962 missed）。该数字是 provenance 所指构建 commit 的本地工程证据，
-不能表述为官方评分、集群完整闭环或模型仓库基准成绩。
-答辩时只读取绑定最终 commit 的新报告并说明跳过项原因；不能用聚焦测试数、收集
-数或旧报告替代最终全量结果。
+当前候选工作树的完整结果是 1,330 passed、24 skipped，覆盖率 84.06%（6,325
+statements / 1,008 missed）；Ruff、严格 mypy、编译与配置门也在同一候选工作树
+通过。PPTX/PDF 同时完成 12/12 逐页 QA。这些数字可以表述为“当前候选本地证据”，
+但尚未绑定 clean final commit、CI 或 release attestation。答辩时必须说明跳过项原因，
+不能用聚焦测试数或收集数替代完整结果，也不能把工程覆盖率表述为官方评分、服务器
+AgentTeams 闭环、真人 T4 恢复或 21 个仓库任务的 Agent 修复成绩。
 
 ### 32. 网络断了还能演示吗？
 
@@ -250,6 +262,6 @@ statements / 962 missed）。该数字是 provenance 所指构建 commit 的本�
 | 官方权重与当前缺口 | [决赛验收矩阵](ACCEPTANCE_MATRIX_CN.md) |
 | 角色、Skill、MCP 边界 | [边界与 MCP 模型](../BOUNDARIES_AND_MCP.md) |
 | AgentTeams 已观察事实 | [现场证据](../evidence/AGENTTEAMS_LIVE_20260727.md) |
-| 本地候选测试与覆盖率 | [本地候选证据](../evidence/LOCAL_RELEASE_CANDIDATE_20260728.md)；最终须重跑 |
+| 本地候选测试、覆盖率与材料 QA | [当前候选门](../evidence/FINALS_LOCAL_GATE_20260729.md)、[材料 QA](MATERIAL_QA_20260728.md)；最终须在 clean commit/CI 上重跑并绑定发布证明 |
 | Skill 工程标准 | [Skill 工程规范](../SKILL_ENGINEERING.md) |
 | 仓库任务口径 | [Repository benchmark](../BENCHMARK.md) |

@@ -44,7 +44,7 @@ class RecordingTransport:
 def _context(
     *,
     agent: str = "LocatorAgent",
-    skill: str = "code-root-cause",
+    skill: str = "github-evidence",
     approval: ApprovalEvidence | None = None,
 ) -> MCPCallContext:
     return MCPCallContext(
@@ -79,7 +79,7 @@ def _patch(original: str = "def add(a, b):\n    return a - b\n") -> Patch:
 
 @pytest.fixture
 def policy() -> MCPPolicy:
-    return MCPPolicy.from_file(ROOT / "config" / "mcp_servers.yaml")
+    return MCPPolicy.from_file(ROOT / "config" / "mcp_servers.portable.yaml")
 
 
 @pytest.mark.asyncio
@@ -128,10 +128,12 @@ async def test_policy_denies_wrong_agent_or_skill_before_transport(
     assert [record.outcome for record in audit.records] == ["denied"]
 
 
-def test_policy_denies_protected_branch_and_repository_escape(policy: MCPPolicy) -> None:
+def test_policy_exposes_no_github_write_and_denies_repository_escape(
+    policy: MCPPolicy,
+) -> None:
     reviewer = _context(agent="ReviewerAgent", skill="pr-reviewer")
 
-    with pytest.raises(MCPAuthorizationError, match="protected branch"):
+    with pytest.raises(MCPAuthorizationError, match="not registered"):
         policy.authorize(
             reviewer,
             "github",
@@ -147,13 +149,37 @@ def test_policy_denies_protected_branch_and_repository_escape(policy: MCPPolicy)
         )
 
 
-def test_rollback_requires_signed_target_and_digest_bound_approval() -> None:
+def _rollback_policy(
+    tmp_path: Path,
+    authority: HMACApprovalAuthority | None,
+) -> MCPPolicy:
+    path = tmp_path / "test-only-rollback-policy.yaml"
+    path.write_text(
+        """
+servers:
+  cicd:
+    enabled: true
+    tools:
+      - name: rollback_deployment
+        allowed_agents: [TeamLeader]
+        allowed_skills: [test-only-approval-engine]
+        readonly: false
+        requires_confirmation: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+    return MCPPolicy.from_file(path, approval_verifier=authority)
+
+
+def test_approval_engine_requires_signed_target_and_digest_bound_evidence(
+    tmp_path: Path,
+) -> None:
     authority = HMACApprovalAuthority(b"test-only-approval-signing-key-32-bytes")
-    policy = MCPPolicy.from_file(ROOT / "config" / "mcp_servers.yaml", approval_verifier=authority)
+    policy = _rollback_policy(tmp_path, authority)
     arguments = {"environment": "production", "target_release": "v1.2.3"}
     serialized = json.dumps(arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-    leader = _context(agent="TeamLeader", skill="team-orchestration")
+    leader = _context(agent="TeamLeader", skill="test-only-approval-engine")
 
     with pytest.raises(MCPAuthorizationError, match="approval evidence"):
         policy.authorize(leader, "cicd", "rollback_deployment", arguments)
@@ -179,7 +205,9 @@ def test_rollback_requires_signed_target_and_digest_bound_approval() -> None:
         )
 
 
-def test_rollback_denies_unsigned_expired_or_unverifiable_approval() -> None:
+def test_approval_engine_denies_expired_or_unverifiable_evidence(
+    tmp_path: Path,
+) -> None:
     authority = HMACApprovalAuthority(b"test-only-approval-signing-key-32-bytes")
     arguments = {"environment": "production", "target_release": None}
     digest = hashlib.sha256(
@@ -192,12 +220,16 @@ def test_rollback_denies_unsigned_expired_or_unverifiable_approval() -> None:
         approved_by="human:reviewer",
         approved_at=datetime.now(timezone.utc) - timedelta(days=2),
     )
-    context = _context(agent="TeamLeader", skill="team-orchestration", approval=expired)
-    policy = MCPPolicy.from_file(ROOT / "config" / "mcp_servers.yaml", approval_verifier=authority)
+    context = _context(
+        agent="TeamLeader",
+        skill="test-only-approval-engine",
+        approval=expired,
+    )
+    policy = _rollback_policy(tmp_path, authority)
     with pytest.raises(MCPAuthorizationError, match="expiry"):
         policy.authorize(context, "cicd", "rollback_deployment", arguments)
 
-    no_verifier = MCPPolicy.from_file(ROOT / "config" / "mcp_servers.yaml")
+    no_verifier = _rollback_policy(tmp_path, None)
     with pytest.raises(MCPAuthorizationError, match="verifier is unavailable"):
         no_verifier.authorize(context, "cicd", "rollback_deployment", arguments)
 
@@ -210,9 +242,9 @@ async def test_internal_cicd_receives_verified_context(policy: MCPPolicy) -> Non
     tester = _context(agent="TesterAgent", skill="test-runner")
 
     await client.call_tool(
-        "cicd",
+        "devflow-cicd-portable",
         "run_tests",
-        {"issue_id": 42, "patch": _patch().model_dump(mode="json"), "full_suite": True},
+        {"issue_id": 42, "patch": _patch().model_dump(mode="json")},
         context=tester,
     )
 
@@ -234,14 +266,51 @@ async def test_internal_cicd_denies_when_context_signer_is_unavailable(
 
     with pytest.raises(MCPAuthorizationError, match="context signer"):
         await client.call_tool(
-            "cicd",
+            "devflow-cicd-portable",
             "run_tests",
-            {"issue_id": 42, "patch": _patch().model_dump(mode="json"), "full_suite": True},
+            {"issue_id": 42, "patch": _patch().model_dump(mode="json")},
             context=_context(agent="TesterAgent", skill="test-runner"),
         )
 
     assert transport.calls == []
     assert [entry.outcome for entry in audit.records] == ["denied"]
+
+
+def test_portable_cicd_rejects_caller_selected_suite(policy: MCPPolicy) -> None:
+    arguments = {
+        "issue_id": 42,
+        "patch": _patch().model_dump(mode="json"),
+        "full_suite": False,
+    }
+
+    with pytest.raises(MCPAuthorizationError, match="only issue_id and patch"):
+        policy.authorize(
+            _context(agent="TesterAgent", skill="test-runner"),
+            "devflow-cicd-portable",
+            "run_tests",
+            arguments,
+        )
+
+
+def test_canonical_agentteams_cicd_accepts_only_assignment_binding() -> None:
+    policy = MCPPolicy.from_file(ROOT / "config" / "mcp_servers.yaml")
+    context = _context(agent="TesterAgent", skill="test-runner")
+    arguments = {
+        "taskId": "task-42",
+        "revision": "a" * 40,
+        "workspaceBinding": "b" * 64,
+    }
+
+    grant = policy.authorize(context, "devflow-cicd", "run_tests", arguments)
+
+    assert grant.server == "devflow-cicd"
+    with pytest.raises(MCPAuthorizationError, match="accepts only"):
+        policy.authorize(
+            context,
+            "devflow-cicd",
+            "run_tests",
+            {**arguments, "patch": _patch().model_dump(mode="json")},
+        )
 
 
 @pytest.mark.asyncio
@@ -358,10 +427,11 @@ async def test_isolated_test_service_never_mutates_canonical_repo(tmp_path: Path
     service = IsolatedTestService(
         repo,
         (sys.executable, "-m", "unittest", "discover", "-v"),
+        (sys.executable, "-m", "unittest", "discover", "-v"),
         timeout_seconds=30,
     )
 
-    result = await service.run_tests(_patch(original), full_suite=True)
+    result = await service.run_tests(_patch(original), risk_tier="T3")
 
     assert result.passed == 1
     assert result.baseline_comparison is not None
@@ -375,7 +445,8 @@ async def test_isolated_test_service_rejects_stale_candidate(tmp_path: Path) -> 
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "calculator.py").write_text("current\n", encoding="utf-8")
-    service = IsolatedTestService(repo, (sys.executable, "-c", "print('ok')"))
+    command = (sys.executable, "-c", "print('ok')")
+    service = IsolatedTestService(repo, command, command)
 
     with pytest.raises(MCPError, match="stale original content"):
-        await service.run_tests(_patch("stale\n"), full_suite=False)
+        await service.run_tests(_patch("stale\n"), risk_tier="T2")

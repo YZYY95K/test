@@ -36,6 +36,11 @@ from devflow.security.test_integrity import (
 )
 
 _COPY_IGNORE = shutil.ignore_patterns(*TEST_INTEGRITY_IGNORED_PARTS)
+PORTABLE_CICD_SERVER = "devflow-cicd-portable"
+PORTABLE_CICD_EXECUTION_PROFILE = "portable-process-only/v1"
+PORTABLE_CICD_POLICY_IDENTITY = "portable-immutable-baseline/v1"
+_FULL_SUITE_RISK_TIERS = frozenset({"T3", "T4", "T5"})
+_SUPPORTED_RISK_TIERS = frozenset({"T1", "T2", *_FULL_SUITE_RISK_TIERS})
 
 # Test commands receive only process bootstrap values.  In particular, tokens,
 # cloud credentials, SSH agents, and user-provided environment values do not
@@ -105,33 +110,41 @@ class IsolatedTestService:
     def __init__(
         self,
         repository_root: Path,
-        command: tuple[str, ...],
+        focused_command: tuple[str, ...],
+        full_command: tuple[str, ...],
         *,
         timeout_seconds: int = 600,
     ) -> None:
         resolved = repository_root.resolve()
         if not resolved.is_dir():
             raise MCPError(f"repository root is not a directory: {resolved}")
-        if not command or not all(command):
-            raise MCPError("test command must be a non-empty server-owned argv")
+        if not focused_command or not all(focused_command):
+            raise MCPError("focused test command must be a non-empty server-owned argv")
+        if not full_command or not all(full_command):
+            raise MCPError("full test command must be a non-empty server-owned argv")
         if timeout_seconds < 1 or timeout_seconds > 3600:
             raise MCPError("test timeout must be between 1 and 3600 seconds")
         self.repository_root = resolved
-        self.command = command
+        self.focused_command = focused_command
+        self.full_command = full_command
+        # PipelineService predates the portable profile split and treats
+        # ``command`` as its server-owned full-suite default.
+        self.command = full_command
         self.timeout_seconds = timeout_seconds
 
-    async def run_tests(self, patch: Patch, *, full_suite: bool) -> TestRunResult:
-        """Execute baseline and candidate without mutating the canonical checkout."""
+    async def run_tests(self, patch: Patch, *, risk_tier: str) -> TestRunResult:
+        """Execute the server-selected suite without mutating the canonical checkout."""
 
-        return await asyncio.to_thread(self._run_tests_sync, patch, full_suite)
+        return await asyncio.to_thread(self._run_tests_sync, patch, risk_tier)
 
-    def _run_tests_sync(self, patch: Patch, full_suite: bool) -> TestRunResult:
+    def _run_tests_sync(self, patch: Patch, risk_tier: str) -> TestRunResult:
+        command, suite, full_suite = self._select_profile(risk_tier)
         canonical_baseline = collect_protected_manifest(self.repository_root)
         require_patch_integrity(
             patch,
             baseline_protected_paths=canonical_baseline.paths,
         )
-        with tempfile.TemporaryDirectory(prefix="devflow-cicd-") as temp_dir:
+        with tempfile.TemporaryDirectory(prefix="devflow-cicd-portable-") as temp_dir:
             baseline_repository = Path(temp_dir) / "baseline"
             candidate_repository = Path(temp_dir) / "candidate"
             shutil.copytree(
@@ -151,7 +164,7 @@ class IsolatedTestService:
                 baseline_pre_run,
                 violation="baseline_copy_mismatch",
             )
-            baseline = self.execute(baseline_repository)
+            baseline = self.execute(baseline_repository, command=command)
             baseline_post_run = collect_protected_manifest(baseline_repository)
             require_same_manifest(
                 baseline_pre_run,
@@ -168,7 +181,7 @@ class IsolatedTestService:
                 violation="candidate_changed_immutable_baseline",
             )
             added_tests = candidate_pre_run.added_since(canonical_baseline)
-            current = self.execute(candidate_repository)
+            current = self.execute(candidate_repository, command=command)
             candidate_post_run = collect_protected_manifest(candidate_repository)
             require_same_manifest(
                 candidate_pre_run,
@@ -181,7 +194,13 @@ class IsolatedTestService:
             policy=TEST_INTEGRITY_POLICY,
             policy_digest=TEST_INTEGRITY_POLICY_DIGEST,
             command_digest=canonical_integrity_digest(
-                {"argv": list(self.command), "full_suite": full_suite}
+                {
+                    "argv": list(command),
+                    "execution_profile": PORTABLE_CICD_EXECUTION_PROFILE,
+                    "policy_identity": PORTABLE_CICD_POLICY_IDENTITY,
+                    "risk_tier": risk_tier,
+                    "suite": suite,
+                }
             ),
             baseline_manifest_digest=canonical_baseline.digest,
             candidate_baseline_manifest_digest=candidate_baseline.digest,
@@ -197,7 +216,7 @@ class IsolatedTestService:
 
         baseline_passed = int(baseline.returncode == 0)
         current_passed = int(current.returncode == 0)
-        case_name = "server-owned-full-suite" if full_suite else "server-owned-focused-suite"
+        case_name = f"server-owned-{suite}-suite"
         passed = current_passed
         failed = int(current.returncode != 0)
         return TestRunResult(
@@ -231,6 +250,15 @@ class IsolatedTestService:
             ),
             integrity_attestation=attestation,
         )
+
+    def _select_profile(self, risk_tier: str) -> tuple[tuple[str, ...], str, bool]:
+        """Map a trusted local risk tier to one immutable argv profile."""
+
+        if risk_tier not in _SUPPORTED_RISK_TIERS:
+            raise MCPError("portable CI requires a trusted risk tier T1 through T5")
+        if risk_tier in _FULL_SUITE_RISK_TIERS:
+            return self.full_command, "full", True
+        return self.focused_command, "focused", False
 
     def execute(
         self,
@@ -315,4 +343,11 @@ class IsolatedTestService:
                 target.unlink()
 
 
-__all__ = ["CommandOutcome", "IsolatedTestService", "isolated_command_environment"]
+__all__ = [
+    "CommandOutcome",
+    "IsolatedTestService",
+    "PORTABLE_CICD_EXECUTION_PROFILE",
+    "PORTABLE_CICD_POLICY_IDENTITY",
+    "PORTABLE_CICD_SERVER",
+    "isolated_command_environment",
+]

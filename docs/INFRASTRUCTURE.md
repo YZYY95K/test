@@ -2,23 +2,57 @@
 
 This document is an evidence map for the infrastructure that is executed by
 DevFlow. A YAML declaration alone is not treated as an implementation.
+Evidence is separated into local verification, candidate/deployment preflight,
+historical live records, and current server evidence still pending.
 
 ## CI/CD MCP
 
-`devflow.mcp.cicd_server` is a FastMCP server with five callable tools:
+The AgentTeams candidate surface is `agentteams/cicd/tester_server.py`, a
+Streamable HTTP MCP intended for a separate `devflow-tester-cicd` Deployment.
+The desired state gives the Tester Worker only its ClusterIP URL and declares
+the signing-key mount only on the independent main CI container. This is a
+candidate manifest, not current live mount evidence. It exposes exactly one
+tool, `run_tests`; no
+Agent can select a shell command, executable, repository root, workspace,
+network mode, suite, or resource limit. Those values come from canonical
+policies mounted at `/etc/devflow/agentteams-cicd/policy.json` and
+`/etc/devflow/agentteams-cicd/test-receipt-policy.json`, bound to the exact
+image-fixed runtime, clean repository commit, repository manifest, server
+bytes, isolation executable, and acknowledged `test-runner` assignment.
 
-| Tool | Owner | Runtime boundary | Evidence |
-|---|---|---|---|
-| `run_tests` | TesterAgent / `test-runner` | Applies a typed patch in a disposable repository copy and runs server-owned argv | `tests/test_mcp_adapter.py`, `tests/test_mcp_policy.py` |
-| `trigger_pipeline` | TesterAgent / `test-runner` | Runs a registered test command in a disposable copy; clients cannot send shell text | `tests/test_infrastructure.py` |
-| `get_test_results` | TesterAgent / `test-runner` | Reads only an opaque pipeline id | `tests/test_mcp_adapter.py` |
-| `get_coverage` | TesterAgent / `test-runner` | Parses `coverage.json` produced by that isolated run | `tests/test_infrastructure.py` |
-| `rollback_deployment` | TeamLeader / `team-orchestration` | Requires a digest-bound human approval, invokes server-owned argv, health-checks, then atomically changes the release registry | `tests/test_infrastructure.py`, `tests/test_mcp_policy.py` |
+The server validates the source HandoffEnvelope, task/run/trace identity,
+candidate digest, immutable revision, and one policy-derived workspace binding
+before copying baseline and candidate trees. It executes the fixed test adapter
+inside the configured isolation wrapper with an empty allowlisted environment,
+bounded time/CPU/memory/process/file descriptors/output, then returns integrity-
+bound baseline and candidate evidence. Test or manifest mutation, an unacked or
+cross-task assignment, a wrong candidate/revision, unknown JSON fields, an
+extra MCP tool, or placement on any non-Tester role fails closed.
 
-Every call is re-authorized inside the server from a signed Agent/Skill/task
-context. Unknown tools, mismatched ownership, stale contexts, unsafe branches,
-protected paths, and unapproved destructive calls fail before execution. Audit
-records contain argument digests rather than secret values.
+The current deployable image is truthfully limited to two fixed finals demo
+assignments and one image-fixed clean DevFlow repository fixture. It provides
+one T2 focused-suite route and one T3 full-suite route. `/readyz` identifies
+that source as `image-fixed-demo-fixture/v1` and explicitly reports that it is
+not a live AgentTeams task projection. Arbitrary repositories and real-time
+controller assignments are not implemented or claimed. The image/reconciler
+path is locally tested but remains candidate evidence until a digest-pinned
+cluster deployment and post-apply preflight are recorded. Even a successful
+preflight is not end-to-end evidence: a separate real
+`run_tests -> signed receipt -> Leader accept -> dual readback -> retry`
+record is required before `ciServiceVerified`, `endToEndReady`, or `verified`
+may be true.
+
+`src/devflow/mcp/cicd_server.py` is a different, explicitly local contract:
+`devflow-cicd-portable`, configured only by
+`config/mcp_servers.portable.yaml`. It accepts a typed Patch but no suite flag;
+the HMAC-authenticated local context supplies `risk_tier`, which selects one of
+two fixed server-owned argv profiles. Its policy identity is
+`portable-immutable-baseline/v1` and its execution profile is
+`portable-process-only/v1`, so its evidence cannot be mistaken for the
+AgentTeams Bubblewrap profile. Lower-level pipeline and rollback primitives
+remain separately unit-tested in the library but are not registered by either
+one-tool server. Repository publication, deployment, and rollback remain
+external.
 
 ## Observability
 
@@ -44,8 +78,11 @@ deployments must therefore ship the log to append-only external storage.
 
 ## Credential broker
 
-Agents receive a signed, short-lived capability handle, never a provider
-secret. The trusted adapter resolves a handle only when all of these match:
+In the locally tested portable credential-broker path, the caller receives a
+signed, short-lived capability handle rather than the mapped provider secret.
+This does not claim that every current OpenClaw Worker workspace is free of MCP
+consumer/configuration material. The trusted adapter resolves a handle only
+when all of these match:
 
 1. HMAC signature and expiry;
 2. expected Agent identity;

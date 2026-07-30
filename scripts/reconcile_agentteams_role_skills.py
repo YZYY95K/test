@@ -58,6 +58,7 @@ try:
         DIGEST,
         LEADER_ROLE,
         RUNTIME_BINDING_FIELDS,
+        TEAMHARNESS_APPROVAL_AUDIENCE,
         TEAMHARNESS_APPROVAL_LEDGER_PATH,
         TEAMHARNESS_APPROVAL_POLICY_PATH,
         TEAMHARNESS_APPROVAL_PUBLIC_KEY_PATH,
@@ -107,6 +108,7 @@ except ModuleNotFoundError:  # pragma: no cover - direct ``python -S`` execution
         DIGEST,
         LEADER_ROLE,
         RUNTIME_BINDING_FIELDS,
+        TEAMHARNESS_APPROVAL_AUDIENCE,
         TEAMHARNESS_APPROVAL_LEDGER_PATH,
         TEAMHARNESS_APPROVAL_POLICY_PATH,
         TEAMHARNESS_APPROVAL_PUBLIC_KEY_PATH,
@@ -149,12 +151,12 @@ ROLE_SKILLS: dict[str, tuple[str, ...]] = {
     "devflow-reviewer": ("pr-reviewer", "experience-distiller"),
 }
 RELEASE_ARCHIVE_DIGESTS = {
-    "devflow-lead": "82ffe34e3f02162febe4d1e88c5ed68b4676d4917007d6f8a2cf13e0cb9741a5",
-    "devflow-triage": "d5297a1741b0279310dc1adbe36cc02c5c33c8cf5897f4ea1532b4761f21630f",
-    "devflow-locator": "cab3503cd3100bf42238cf3b53ad65deca95e9e9e6b99551a81bb0f506daf54b",
-    "devflow-coder": "a54c323f4599899b8bee7950a759ec0e9cd0c56ae27fd091e559853ed9d41b16",
-    "devflow-tester": "684de72825bb0fdc9a0435c7e568934ce85dc8a37d30e17aa67d1eb7d3833563",
-    "devflow-reviewer": "e3d5513508f49b288384fbf47b746dbb52760de997388450f5636c640895842a",
+    "devflow-lead": "7a55f3a8fd8bc9490b03f1d99cea39f420f31a69cf84d19fb6b54851f36c0228",
+    "devflow-triage": "b6efdc4d7ca718682c059508054328a314d51f405a2cd463bdf37c7327752adf",
+    "devflow-locator": "1aa3cf8a61fec15736bdf3480371e1fffe1f568aada0d899a0420fa761305d7a",
+    "devflow-coder": "118836944dc2b244a1b2e05db61c351c7b1b9fe3188571db1ccc8e0b67c8f8ba",
+    "devflow-tester": "93ce45aaaa501b4c9c9696b1bbd70b6313782fd5ddc7cfe9956c7866a4f2e7a2",
+    "devflow-reviewer": "bb9e194aaab7eebb007b96ad2120616a3bc437c072e44b4c2eac5e07d57bbc08",
 }
 ALL_DEVFLOW_SKILLS = frozenset(skill for skills in ROLE_SKILLS.values() for skill in skills)
 COMMON_SKILL_FILES = frozenset(
@@ -3269,6 +3271,7 @@ REMOTE_HELPER = "\n\n".join(
         f"TEAMHARNESS_APPROVAL_POLICY_PATH = {TEAMHARNESS_APPROVAL_POLICY_PATH!r}",
         f"TEAMHARNESS_APPROVAL_LEDGER_PATH = {TEAMHARNESS_APPROVAL_LEDGER_PATH!r}",
         f"TEAMHARNESS_OPENSSL_PATH = {TEAMHARNESS_OPENSSL_PATH!r}",
+        f"TEAMHARNESS_APPROVAL_AUDIENCE = {TEAMHARNESS_APPROVAL_AUDIENCE!r}",
         f"TEAMHARNESS_SHARED_DIR = {TEAMHARNESS_SHARED_DIR!r}",
         inspect.getsource(PolicyError),
         inspect.getsource(_sha256_file),

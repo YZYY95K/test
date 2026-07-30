@@ -1,6 +1,6 @@
 schema_version: "1.0"
 name: github-evidence
-version: "3.0.0"
+version: "4.0.0"
 owner: LocatorAgent
 intent: Collect bounded, revision-pinned GitHub evidence without capability drift.
 invoke_when:
@@ -23,6 +23,8 @@ output:
 dependencies:
   - Read-only GitHub MCP capability enforced by the external scope Broker.
   - Fresh Broker capability bound to the exact task, repository, revision, and paths.
+  - Root-owned fixed-path Ed25519 receipt public key and deployment attestation.
+  - Fixed /usr/bin/openssl verifier; no caller-selected trust input.
   - Immutable repository revision and digest-addressed shared storage.
 mcp_tools:
   - github:get_file_contents
@@ -133,12 +135,15 @@ verification:
     evidence: Repository, commit SHA, file path, line range, and content digest.
   - id: operation
     requirement: Every MCP operation passed both local preflight and Broker data-plane authorization.
-    evidence: Tool decision, Broker receipt, and scope digest binding the full envelope, task ID, capability digest, trace ID, idempotency key, and matching sanitized arguments.
+    evidence: Tool decision plus a v2 Ed25519 Broker receipt whose signed assignment binds run ID, task ID, trace ID, repository, revision, complete path set, scope digest, capability digest, and matching returned content.
+  - id: receipt-trust
+    requirement: Receipt authenticity is verified offline without caller-controlled key material.
+    evidence: Fixed root-owned receipt policy, canonical Ed25519 public-key digest, and domain-separated signature verification.
   - id: integrity
     requirement: The output matches its declared digest and contains no secrets.
     evidence: Validator result and SHA-256 digest.
 release:
-  compatibility: AgentTeams v1beta1 and HandoffEnvelope 1.x.
+  compatibility: AgentTeams v1beta1, HandoffEnvelope 1.x, GitHub capability v2, and GitHub content receipt v2.
   change_policy: Tool authorization or output schema changes require a major version.
   rollback: Restore the prior signed Skill bundle; no repository state was mutated.
 examples_ref: references/examples.md

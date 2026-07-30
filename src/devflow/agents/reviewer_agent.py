@@ -1,11 +1,11 @@
-"""ReviewerAgent — correctness, security, approval, and optional PR gate."""
+"""ReviewerAgent — candidate correctness, security, and approval gate."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from devflow.agents.base import AgentIdentity, BaseAgent
-from devflow.exceptions import AgentError, MCPError
+from devflow.exceptions import AgentError
 from devflow.models.issue import ComplexityLevel, IssueData
 from devflow.models.patch import Patch
 from devflow.models.review import (
@@ -24,25 +24,27 @@ from devflow.skills.experience_distiller import (
 
 
 class ReviewerAgent(BaseAgent):
-    """Final autonomous gate; high-risk work always pauses for a human."""
+    """Final candidate gate; high-risk work always pauses for a human."""
 
     _IDENTITY = AgentIdentity(
         role="Reviewer Agent",
-        description=("Review correctness and security, create PRs, and enforce approval policy."),
+        description=(
+            "Review candidate correctness and security, enforce approval policy, "
+            "and distill verified experience."
+        ),
         model="glm-5.2",
         temperature=0.3,
     )
     _CAPABILITIES = (
-        "pr_creation",
-        "code_review",
+        "candidate_review",
         "security_scan",
         "approval_workflow",
     )
     _BOUNDARIES = (
-        "Cannot merge any PR; may only record review eligibility",
-        "Cannot merge when CI is red",
+        "Cannot create, review, approve, or merge a GitHub pull request",
+        "Cannot mark a candidate eligible when CI is red",
         "Cannot bypass high or critical security findings",
-        "Cannot self-approve a PR it authored",
+        "Cannot substitute for external human approval",
     )
     _WATCHES: tuple[str, ...] = ()
     _OWNED_SKILLS = ("pr-reviewer", "experience-distiller")
@@ -51,10 +53,12 @@ class ReviewerAgent(BaseAgent):
         "experience-distiller": frozenset({"TeamLeader"}),
     }
     _FORBIDDEN_ACTIONS = {
-        "merge_pr": "Cannot merge any PR; may only record review eligibility",
-        "merge_red_ci": "Cannot merge when CI is red",
+        "create_pr": "Cannot create a GitHub pull request",
+        "review_pr": "Cannot review or approve a GitHub pull request",
+        "merge_pr": "Cannot merge a GitHub pull request",
+        "merge_red_ci": "Cannot mark a candidate eligible when CI is red",
         "bypass_security": "Cannot bypass high or critical security findings",
-        "self_approve": "Cannot self-approve a PR it authored",
+        "self_approve": "Cannot substitute for external human approval",
     }
 
     def __init__(
@@ -90,38 +94,14 @@ class ReviewerAgent(BaseAgent):
             else:
                 decision = ReviewDecision.APPROVED
 
-            pr_url = None
-            if not blocked and input_data.get("create_pr", False):
-                try:
-                    response = await self._call_mcp(
-                        "github",
-                        "create_pull_request",
-                        {
-                            "issue_id": issue_id,
-                            "branch": patch.branch_name,
-                            "title": patch.commit_message,
-                            "body": patch.description,
-                        },
-                        skill="pr-reviewer",
-                        issue_id=issue_id,
-                        risk_tier=tier.value,
-                    )
-                    if isinstance(response, dict):
-                        pr_url = response.get("url") or response.get("html_url")
-                except MCPError as exc:
-                    findings.append(
-                        ReviewFinding(
-                            severity="medium",
-                            category="integration",
-                            message=f"PR creation deferred: {exc}",
-                        )
-                    )
-
             result = ReviewResult(
                 decision=decision,
                 findings=findings,
                 summary=self._summary(decision, findings),
-                pr_url=pr_url,
+                # Candidate review is deliberately not a repository write.
+                # The current AgentTeams and portable profiles expose no PR
+                # creation/review/merge grant to this role.
+                pr_url=None,
                 requires_human_approval=requires_human,
             )
             event = {
@@ -232,6 +212,9 @@ class ReviewerAgent(BaseAgent):
     ) -> tuple[int, ComplexityLevel, Patch, TestRunResult]:
         if not isinstance(input_data, dict):
             raise AgentError("ReviewerAgent expects a mapping input.")
+        expected_fields = {"issue_id", "tier", "patch", "test_result"}
+        if set(input_data) != expected_fields:
+            raise AgentError("ReviewerAgent input fields do not match the contract.")
         try:
             issue_id = int(input_data["issue_id"])
             tier_raw = input_data.get("tier", ComplexityLevel.T3)

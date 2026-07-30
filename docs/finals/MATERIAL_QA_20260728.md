@@ -1,4 +1,4 @@
-# DevFlow 决赛路演材料 QA（2026-07-28）
+# DevFlow 决赛路演材料 QA（2026-07-30）
 
 本记录只冻结本轮决赛 PPT/PDF 的内容、模板和可重建性证据；不把仍在变化的全量测试数、覆盖率、commit 或 tag 写成最终值。
 
@@ -51,8 +51,8 @@ PDF 由最终 PPTX 通过 PowerPoint 固定格式导出；随后用锁定版本 
 
 | 文件 | 字节 | SHA-256 |
 |---|---:|---|
-| `outputs/DevFlow_GOAI_2026_决赛路演_20260728.pptx` | 53,915 | `65D49007F3970A0779009B9BD778CD3A5A57C8DEB1277AFEC665CD2B18F210C7` |
-| `outputs/DevFlow_GOAI_2026_决赛路演_20260728.pdf` | 1,236,340 | `7E3AB8F825F18FD4044A2452CD0E249394751AEAEB29CA505A56EE019F1585AB` |
+| `outputs/DevFlow_GOAI_2026_决赛路演_20260728.pptx` | 54,222 | `0970EE720209D02589D74FE3B53DB2BD3A038A66648EBCD80A39A1E1611E1806` |
+| `outputs/DevFlow_GOAI_2026_决赛路演_20260728.pdf` | 1,245,621 | `22E56DCF8AE44CD41A3CD805D6B4C6D9B1B5179F1D693C9BAF18B02600770A1E` |
 | `docs/finals/assets/DevFlow_GOAI_2026_finals_template_source.pptx` | 51,883 | `3E6136FA24A4D41EC5564EC10991585E55F47AF9F6B5FFBF1F198FAB5AB14EFE` |
 
 这些哈希只对应本轮材料版本。全量工程门完成后，如重新生成 PPTX/PDF，必须同步更新本记录与提交包清单。

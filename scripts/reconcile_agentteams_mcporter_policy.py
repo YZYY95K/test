@@ -45,8 +45,13 @@ except ModuleNotFoundError:  # pragma: no cover - direct ``python -S`` execution
 
 LOCATOR_ROLE = "devflow-locator"
 LEADER_ROLE = "devflow-lead"
+TESTER_ROLE = "devflow-tester"
 TEAMHARNESS_SERVER = "teamharness"
 DEVFLOW_SERVER = "devflow-github-readonly"
+CICD_SERVER = "devflow-cicd"
+CICD_URL = (
+    "http://devflow-tester-cicd.agentteams-system.svc.cluster.local:8080/mcp"
+)
 STALE_SERVER = "github"
 DEVFLOW_URL = (
     "http://higress-gateway.agentteams-system.svc.cluster.local:80/"
@@ -63,7 +68,30 @@ TEAMHARNESS_APPROVAL_PUBLIC_KEY_PATH = "/etc/devflow/teamharness/approval-ed2551
 TEAMHARNESS_APPROVAL_POLICY_PATH = "/etc/devflow/teamharness/approval-policy.json"
 TEAMHARNESS_APPROVAL_LEDGER_PATH = "/var/lib/devflow/teamharness/approval-ledger.json"
 TEAMHARNESS_OPENSSL_PATH = "/usr/bin/openssl"
+TEAMHARNESS_APPROVAL_AUDIENCE = "devflow.agentteams.projectflow.approval/v1"
+TEAMHARNESS_GITHUB_RECEIPT_PUBLIC_KEY_PATH = (
+    "/etc/devflow/github-evidence/receipt-ed25519.pub"
+)
+TEAMHARNESS_GITHUB_RECEIPT_POLICY_PATH = (
+    "/etc/devflow/github-evidence/receipt-policy.json"
+)
+TEAMHARNESS_GITHUB_RECEIPT_AUDIENCE = "devflow.github-content-response/v2"
+TEAMHARNESS_GITHUB_RECEIPT_SIGNATURE_DOMAIN = (
+    "devflow.github-content-receipt/v2"
+)
 TEAMHARNESS_SHARED_DIR = "/root/hiclaw-fs/shared"
+MC_BINARY_PATH = "/usr/local/bin/mc.bin"
+MC_BINARY_SHA256 = "01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
+MC_BINARY_VERSION = (
+    "mc.bin version RELEASE.2025-08-13T08-35-41Z "
+    "(commit-id=7394ce0dd2a80935aded936b09fa12cbb3cb8096)"
+)
+MC_ENDPOINT = "http://agentteams-hiclaw-minio.agentteams-system.svc.cluster.local:9000"
+MC_ALIAS = "agentteams"
+MC_STORAGE_PREFIX = "agentteams/agentteams-storage"
+MC_CONFIG_VERSION = "10"
+MC_API = "S3v4"
+MC_PATH = "auto"
 TEAMHARNESS_CORE_ARTIFACTS = (
     ("guard", TEAMHARNESS_GUARD_PATH, "guardPath", "guardSha256"),
     ("adapter", TEAMHARNESS_ADAPTER_PATH, "adapterPath", "adapterSha256"),
@@ -89,20 +117,51 @@ TEAMHARNESS_LEADER_ARTIFACTS = (
         "approvalPublicKeySha256",
     ),
 )
+TEAMHARNESS_LOCATOR_ARTIFACTS = (
+    (
+        "githubReceiptPolicy",
+        TEAMHARNESS_GITHUB_RECEIPT_POLICY_PATH,
+        "githubReceiptPolicyPath",
+        "githubReceiptPolicySha256",
+    ),
+    (
+        "githubReceiptPublicKey",
+        TEAMHARNESS_GITHUB_RECEIPT_PUBLIC_KEY_PATH,
+        "githubReceiptPublicKeyPath",
+        "githubReceiptPublicKeySha256",
+    ),
+)
 TEAMHARNESS_POLICY_FIELDS = frozenset(
     {
         "schemaVersion",
         "algorithm",
+        "audience",
+        "approvalDomain",
         "guardSha256",
         "adapterSha256",
         "policyAttestationPath",
         "publicKeyPath",
         "publicKeySha256",
+        "policyKeySha256",
         "serverSha256",
         "ledgerPath",
         "opensslPath",
         "maxApprovalLifetimeSeconds",
         "remainingThreat",
+    }
+)
+TEAMHARNESS_GITHUB_RECEIPT_POLICY_FIELDS = frozenset(
+    {
+        "schemaVersion",
+        "algorithm",
+        "audience",
+        "signatureDomain",
+        "consumerRuntimeName",
+        "publicKeyPath",
+        "publicKeySha256",
+        "publicKeyFileSha256",
+        "policyPath",
+        "opensslPath",
     }
 )
 RUNTIME_BINDING_FIELDS = frozenset(
@@ -189,6 +248,15 @@ def _expected_teamharness_entry() -> dict[str, Any]:
     }
 
 
+def _expected_cicd_entry() -> dict[str, Any]:
+    """Return the credential-free isolated service visible only to Tester."""
+
+    return {
+        "url": CICD_URL,
+        "transport": "http",
+    }
+
+
 def _validate_teamharness_entry(value: Any) -> None:
     expected = _expected_teamharness_entry()
     if not isinstance(value, dict) or set(value) != set(expected):
@@ -201,6 +269,11 @@ def _validate_teamharness_entry(value: Any) -> None:
         raise PolicyError("TeamHarness guard path is outside policy")
     if value.get("env") != expected["env"]:
         raise PolicyError("TeamHarness environment is outside policy")
+
+
+def _validate_cicd_entry(value: Any) -> None:
+    if value != _expected_cicd_entry():
+        raise PolicyError("Tester CI/CD entry is outside policy")
 
 
 def _valid_legacy_teamharness_entry(value: Any, role: str) -> bool:
@@ -297,10 +370,13 @@ def _validate_runtime_attestation(
     runtime_binding: dict[str, Any],
     role: str,
     digests: dict[str, str],
+    github_receipt_policy: dict[str, Any] | None = None,
 ) -> None:
     artifacts = list(TEAMHARNESS_CORE_ARTIFACTS)
     if role == LEADER_ROLE:
         artifacts.extend(TEAMHARNESS_LEADER_ARTIFACTS)
+    elif role == LOCATOR_ROLE:
+        artifacts.extend(TEAMHARNESS_LOCATOR_ARTIFACTS)
     expected_digest_names = {name for name, _path, _path_field, _sha_field in artifacts}
     if set(digests) != expected_digest_names or any(
         not isinstance(value, str) or DIGEST.fullmatch(value) is None
@@ -343,21 +419,83 @@ def _validate_runtime_attestation(
         sha_field
         for _name, _path, _path_field, sha_field in TEAMHARNESS_LEADER_ARTIFACTS
     }
+    locator_fields = {
+        path_field
+        for _name, _path, path_field, _sha_field in TEAMHARNESS_LOCATOR_ARTIFACTS
+    } | {
+        sha_field
+        for _name, _path, _path_field, sha_field in TEAMHARNESS_LOCATOR_ARTIFACTS
+    } | {"githubReceiptKeyIdSha256"}
+    if role == LOCATOR_ROLE:
+        if (
+            policy is not None
+            or "approvalPolicy" in manifest
+            or leader_fields & set(manifest)
+        ):
+            raise PolicyError("Locator manifest contains approval policy material")
+        if (
+            not isinstance(github_receipt_policy, dict)
+            or set(github_receipt_policy)
+            != TEAMHARNESS_GITHUB_RECEIPT_POLICY_FIELDS
+            or manifest.get("githubReceiptPolicy") != github_receipt_policy
+            or github_receipt_policy.get("schemaVersion") != "1.0"
+            or github_receipt_policy.get("algorithm") != "Ed25519"
+            or github_receipt_policy.get("audience")
+            != TEAMHARNESS_GITHUB_RECEIPT_AUDIENCE
+            or github_receipt_policy.get("signatureDomain")
+            != TEAMHARNESS_GITHUB_RECEIPT_SIGNATURE_DOMAIN
+            or github_receipt_policy.get("consumerRuntimeName") != LOCATOR_ROLE
+            or github_receipt_policy.get("publicKeyPath")
+            != TEAMHARNESS_GITHUB_RECEIPT_PUBLIC_KEY_PATH
+            or github_receipt_policy.get("policyPath")
+            != TEAMHARNESS_GITHUB_RECEIPT_POLICY_PATH
+            or github_receipt_policy.get("opensslPath")
+            != TEAMHARNESS_OPENSSL_PATH
+            or github_receipt_policy.get("publicKeyFileSha256")
+            != digests["githubReceiptPublicKey"]
+            or manifest.get("githubReceiptKeyIdSha256")
+            != github_receipt_policy.get("publicKeySha256")
+            or not isinstance(
+                github_receipt_policy.get("publicKeySha256"),
+                str,
+            )
+            or DIGEST.fullmatch(github_receipt_policy["publicKeySha256"])
+            is None
+        ):
+            raise PolicyError("Locator GitHub receipt policy attestation mismatch")
+        return
     if role != LEADER_ROLE:
-        if policy is not None or "approvalPolicy" in manifest or leader_fields & set(manifest):
+        if (
+            policy is not None
+            or "approvalPolicy" in manifest
+            or leader_fields & set(manifest)
+            or github_receipt_policy is not None
+            or "githubReceiptPolicy" in manifest
+            or locator_fields & set(manifest)
+        ):
             raise PolicyError("non-Leader manifest contains approval policy material")
         return
+    if (
+        github_receipt_policy is not None
+        or "githubReceiptPolicy" in manifest
+        or locator_fields & set(manifest)
+    ):
+        raise PolicyError("Leader manifest contains Locator receipt trust material")
 
     if (
         not isinstance(policy, dict)
         or set(policy) != TEAMHARNESS_POLICY_FIELDS
         or manifest.get("approvalPolicy") != policy
-        or policy.get("schemaVersion") != "1.0"
+        or policy.get("schemaVersion") != "1.1"
         or policy.get("algorithm") != "Ed25519"
+        or policy.get("audience") != TEAMHARNESS_APPROVAL_AUDIENCE
+        or not isinstance(policy.get("approvalDomain"), str)
+        or DIGEST.fullmatch(policy["approvalDomain"]) is None
         or policy.get("guardSha256") != digests["guard"]
         or policy.get("adapterSha256") != digests["adapter"]
         or policy.get("serverSha256") != digests["server"]
         or policy.get("publicKeySha256") != digests["approvalPublicKey"]
+        or policy.get("policyKeySha256") != digests["approvalPublicKey"]
         or policy.get("policyAttestationPath") != TEAMHARNESS_APPROVAL_POLICY_PATH
         or policy.get("publicKeyPath") != TEAMHARNESS_APPROVAL_PUBLIC_KEY_PATH
         or policy.get("ledgerPath") != TEAMHARNESS_APPROVAL_LEDGER_PATH
@@ -375,6 +513,8 @@ def _validate_runtime_trust(workspace: str, role: str) -> None:
     artifacts = list(TEAMHARNESS_CORE_ARTIFACTS)
     if role == LEADER_ROLE:
         artifacts.extend(TEAMHARNESS_LEADER_ARTIFACTS)
+    elif role == LOCATOR_ROLE:
+        artifacts.extend(TEAMHARNESS_LOCATOR_ARTIFACTS)
 
     artifact_paths = {
         name: _trusted_fixed_file(expected_path, workspace)
@@ -393,8 +533,26 @@ def _validate_runtime_trust(workspace: str, role: str) -> None:
         if role == LEADER_ROLE
         else None
     )
+    github_receipt_policy = (
+        _read_strict_json(
+            artifact_paths["githubReceiptPolicy"],
+            "TeamHarness GitHub receipt policy",
+        )
+        if role == LOCATOR_ROLE
+        else None
+    )
     _trusted_fixed_directory(TEAMHARNESS_SHARED_DIR, workspace)
-    _validate_runtime_attestation(manifest, policy, runtime_binding, role, digests)
+    _validate_runtime_attestation(
+        manifest,
+        policy,
+        runtime_binding,
+        role,
+        digests,
+        github_receipt_policy,
+    )
+    # Tester CI is an independent NetworkPolicy-isolated Deployment.  Its
+    # image, receipt key, policy and tools/list are attested by the dedicated
+    # host reconciler; a Worker-local runtime must not be required or trusted.
 
 
 def _evaluate_config(
@@ -420,6 +578,8 @@ def _evaluate_config(
     required = {TEAMHARNESS_SERVER}
     if role == LOCATOR_ROLE:
         required.add(DEVFLOW_SERVER)
+    elif role == TESTER_ROLE:
+        required.add(CICD_SERVER)
     elif role not in EXPECTED_ROLES:
         raise PolicyError("role is outside the fixed Team")
     names = set(servers)
@@ -442,9 +602,15 @@ def _evaluate_config(
         role != LOCATOR_ROLE or not _valid_bearer_entry(servers[DEVFLOW_SERVER], DEVFLOW_URL)
     ):
         raise PolicyError("DevFlow GitHub entry is outside policy")
+    if CICD_SERVER in servers:
+        if role != TESTER_ROLE:
+            raise PolicyError("Tester CI/CD entry is visible to another role")
+        _validate_cicd_entry(servers[CICD_SERVER])
 
     desired_servers = {name: value for name, value in servers.items() if name != STALE_SERVER}
     desired_servers[TEAMHARNESS_SERVER] = _expected_teamharness_entry()
+    if role == TESTER_ROLE:
+        desired_servers[CICD_SERVER] = _expected_cicd_entry()
     desired = {"mcpServers": desired_servers}
     return (
         _config_digest(document),
@@ -487,35 +653,165 @@ def _remote_main() -> None:
         raise SystemExit(3)
     _validate_runtime_trust(workspace, role)
     prefix = os.environ.get("AGENTTEAMS_STORAGE_PREFIX", "").rstrip("/")
-    if not prefix:
+    if prefix != MC_STORAGE_PREFIX:
         raise SystemExit(3)
     remote_key = f"{prefix}/agents/{role}/config/mcporter.json"
-
-    def mc_copy(source: str, destination: str) -> None:
-        try:
-            completed = subprocess.run(
-                ["mc", "cp", source, destination],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError as exc:
-            raise PolicyError("object storage command failed") from exc
-        if completed.returncode != 0:
-            raise PolicyError("object storage command failed")
-
-    def read_remote(destination: Path) -> str:
-        mc_copy(remote_key, str(destination))
-        try:
-            return destination.read_text(encoding="utf-8")
-        except (OSError, UnicodeError) as exc:
-            raise PolicyError("authoritative config cannot be read") from exc
+    remote_prefix = f"{prefix}/agents/{role}/config/"
 
     with tempfile.TemporaryDirectory(prefix="devflow-mcporter-policy-") as temp:
+        mc_binary = Path(MC_BINARY_PATH)
+        try:
+            if (
+                not mc_binary.is_file()
+                or mc_binary.is_symlink()
+                or mc_binary.resolve(strict=True) != mc_binary
+                or _sha256_file(mc_binary) != MC_BINARY_SHA256
+            ):
+                raise PolicyError("object storage binary is outside policy")
+            version = subprocess.run(
+                [MC_BINARY_PATH, "--version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise PolicyError("object storage binary validation failed") from exc
+        if (
+            version.returncode != 0
+            or not version.stdout.splitlines()
+            or version.stdout.splitlines()[0] != MC_BINARY_VERSION
+        ):
+            raise PolicyError("object storage binary validation failed")
+
+        endpoint = os.environ.get("AGENTTEAMS_FS_ENDPOINT", "")
+        access_key = os.environ.get("AGENTTEAMS_FS_ACCESS_KEY", "")
+        secret_key = os.environ.get("AGENTTEAMS_FS_SECRET_KEY", "")
+        if (
+            endpoint != MC_ENDPOINT
+            or not 1 <= len(access_key) <= 4096
+            or not 1 <= len(secret_key) <= 4096
+            or "\x00" in access_key
+            or "\x00" in secret_key
+        ):
+            raise PolicyError("object storage environment is outside policy")
+        config_directory = Path(temp) / "mc-config"
+        config_directory.mkdir(mode=0o700)
+        config_payload = json.dumps(
+            {
+                "version": MC_CONFIG_VERSION,
+                "aliases": {
+                    MC_ALIAS: {
+                        "url": endpoint,
+                        "accessKey": access_key,
+                        "secretKey": secret_key,
+                        "api": MC_API,
+                        "path": MC_PATH,
+                    }
+                },
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        config_path = config_directory / "config.json"
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                config_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            with os.fdopen(descriptor, "wb") as stream:
+                descriptor = -1
+                stream.write(config_payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            metadata = config_path.lstat()
+            if (
+                config_path.is_symlink()
+                or not config_path.is_file()
+                or metadata.st_nlink != 1
+                or metadata.st_size != len(config_payload)
+                or metadata.st_mode & 0o777 != 0o600
+            ):
+                raise PolicyError("temporary object storage config is outside policy")
+        except OSError as exc:
+            raise PolicyError("temporary object storage config failed") from exc
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+        def mc_copy(source: str, destination: str) -> None:
+            try:
+                completed = subprocess.run(
+                    [
+                        MC_BINARY_PATH,
+                        "--config-dir",
+                        str(config_directory),
+                        "cp",
+                        source,
+                        destination,
+                    ],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=45,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise PolicyError("object storage command failed") from exc
+            if completed.returncode != 0:
+                raise PolicyError("object storage command failed")
+
+        def authoritative_config_is_absent() -> bool:
+            try:
+                completed = subprocess.run(
+                    [
+                        MC_BINARY_PATH,
+                        "--config-dir",
+                        str(config_directory),
+                        "ls",
+                        "--recursive",
+                        "--json",
+                        remote_prefix,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    timeout=45,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise PolicyError("object storage listing failed") from exc
+            if (
+                completed.returncode != 0
+                or completed.stderr
+                or len(completed.stdout) > 1024 * 1024
+            ):
+                raise PolicyError("object storage listing failed")
+            # A brand-new AgentTeams role has no authoritative config object.
+            # Only an entirely empty, successful listing is treated as that
+            # bootstrap state; any other object or output remains fail-closed.
+            return not completed.stdout.strip()
+
+        def read_remote(destination: Path) -> str:
+            try:
+                mc_copy(remote_key, str(destination))
+            except PolicyError:
+                if authoritative_config_is_absent():
+                    return '{"mcpServers":{}}\n'
+                raise
+            try:
+                return destination.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise PolicyError("authoritative config cannot be read") from exc
+
         remote_path = Path(temp) / "remote.json"
         live_text = live_path.read_text(encoding="utf-8")
         remote_text = read_remote(remote_path)
-        live = _evaluate_config(live_text, role, require_complete=True)
+        # A freshly rebuilt Worker may legitimately start without the fixed
+        # role-local entry.  The evaluator still rejects every unknown or
+        # malformed entry; incomplete known state is drift for the reconciler
+        # to repair, not a reason to make first installation impossible.
+        live = _evaluate_config(live_text, role, require_complete=False)
         remote = _evaluate_config(remote_text, role, require_complete=False)
         needs_apply = live[0] != live[1] or remote[0] != live[1]
 
@@ -583,8 +879,11 @@ REMOTE_HELPER = "\n\n".join(
         f"TEAM_NAME = {TEAM_NAME!r}",
         f"LOCATOR_ROLE = {LOCATOR_ROLE!r}",
         f"LEADER_ROLE = {LEADER_ROLE!r}",
+        f"TESTER_ROLE = {TESTER_ROLE!r}",
         f"TEAMHARNESS_SERVER = {TEAMHARNESS_SERVER!r}",
         f"DEVFLOW_SERVER = {DEVFLOW_SERVER!r}",
+        f"CICD_SERVER = {CICD_SERVER!r}",
+        f"CICD_URL = {CICD_URL!r}",
         f"STALE_SERVER = {STALE_SERVER!r}",
         f"DEVFLOW_URL = {DEVFLOW_URL!r}",
         f"STALE_URL = {STALE_URL!r}",
@@ -601,7 +900,17 @@ REMOTE_HELPER = "\n\n".join(
         f"TEAMHARNESS_APPROVAL_POLICY_PATH = {TEAMHARNESS_APPROVAL_POLICY_PATH!r}",
         f"TEAMHARNESS_APPROVAL_LEDGER_PATH = {TEAMHARNESS_APPROVAL_LEDGER_PATH!r}",
         f"TEAMHARNESS_OPENSSL_PATH = {TEAMHARNESS_OPENSSL_PATH!r}",
+        f"TEAMHARNESS_APPROVAL_AUDIENCE = {TEAMHARNESS_APPROVAL_AUDIENCE!r}",
         f"TEAMHARNESS_SHARED_DIR = {TEAMHARNESS_SHARED_DIR!r}",
+        f"MC_BINARY_PATH = {MC_BINARY_PATH!r}",
+        f"MC_BINARY_SHA256 = {MC_BINARY_SHA256!r}",
+        f"MC_BINARY_VERSION = {MC_BINARY_VERSION!r}",
+        f"MC_ENDPOINT = {MC_ENDPOINT!r}",
+        f"MC_ALIAS = {MC_ALIAS!r}",
+        f"MC_STORAGE_PREFIX = {MC_STORAGE_PREFIX!r}",
+        f"MC_CONFIG_VERSION = {MC_CONFIG_VERSION!r}",
+        f"MC_API = {MC_API!r}",
+        f"MC_PATH = {MC_PATH!r}",
         f"TEAMHARNESS_CORE_ARTIFACTS = {TEAMHARNESS_CORE_ARTIFACTS!r}",
         f"TEAMHARNESS_LEADER_ARTIFACTS = {TEAMHARNESS_LEADER_ARTIFACTS!r}",
         f"TEAMHARNESS_POLICY_FIELDS = frozenset({sorted(TEAMHARNESS_POLICY_FIELDS)!r})",
@@ -614,7 +923,9 @@ REMOTE_HELPER = "\n\n".join(
         inspect.getsource(_config_digest),
         inspect.getsource(_valid_bearer_entry),
         inspect.getsource(_expected_teamharness_entry),
+        inspect.getsource(_expected_cicd_entry),
         inspect.getsource(_validate_teamharness_entry),
+        inspect.getsource(_validate_cicd_entry),
         inspect.getsource(_valid_legacy_teamharness_entry),
         inspect.getsource(_sha256_file),
         inspect.getsource(_trusted_fixed_file),
@@ -710,6 +1021,8 @@ def _expected_names(role: str) -> tuple[str, ...]:
     names = [TEAMHARNESS_SERVER]
     if role == LOCATOR_ROLE:
         names.append(DEVFLOW_SERVER)
+    elif role == TESTER_ROLE:
+        names.append(CICD_SERVER)
     return tuple(sorted(names))
 
 
@@ -750,7 +1063,7 @@ def _parse_report(text: str, target: Target, *, applied: bool) -> Report:
     remote_names = tuple(value["remoteServerNames"])
     if (
         desired_names != expected_names
-        or not set(expected_names) <= set(live_names) <= allowed_names
+        or not set(live_names) <= allowed_names
         or not set(remote_names) <= allowed_names
     ):
         raise PolicyError("remote desired server names violate role policy")

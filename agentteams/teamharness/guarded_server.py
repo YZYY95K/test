@@ -51,6 +51,15 @@ PRODUCTION_APPROVAL_PUBLIC_KEY = Path("/etc/devflow/teamharness/approval-ed25519
 PRODUCTION_APPROVAL_POLICY = Path("/etc/devflow/teamharness/approval-policy.json")
 PRODUCTION_APPROVAL_LEDGER = Path("/var/lib/devflow/teamharness/approval-ledger.json")
 PRODUCTION_OPENSSL = Path("/usr/bin/openssl")
+PRODUCTION_TEST_RECEIPT_PUBLIC_KEY = Path(
+    "/etc/devflow/teamharness/test-receipt-ed25519.pub"
+)
+PRODUCTION_TEST_RECEIPT_POLICY = Path(
+    "/etc/devflow/teamharness/test-receipt-policy.json"
+)
+PRODUCTION_TEST_RECEIPT_LEDGER = Path(
+    "/var/lib/devflow/teamharness/test-receipt-ledger.json"
+)
 PRODUCTION_RUNTIME_BINDING = Path("/etc/devflow/teamharness/runtime-binding.json")
 PRODUCTION_SERVICE_ACCOUNT_TOKEN = Path("/var/run/secrets/agentteams/token")
 PRODUCTION_WORKSPACE_ROOT = Path("/root/hiclaw-fs/agents")
@@ -60,7 +69,7 @@ GITHUB_ISSUER_PATH = "/v1/capabilities"
 GITHUB_ISSUER_TIMEOUT_SECONDS = 5
 GITHUB_REQUEST_SCHEMA = "devflow.github-assignment-request/v1"
 GITHUB_REQUEST_SCHEMA_PREFIX = "devflow.github-assignment-request/"
-GITHUB_CAPABILITY_SCHEMA = "devflow.github-content-capability/v1"
+GITHUB_CAPABILITY_SCHEMA = "devflow.github-content-capability/v2"
 GITHUB_ARTIFACT_TYPE = "SkillInvocation"
 GITHUB_SKILL = "github-evidence"
 GITHUB_PRODUCER = "devflow-lead"
@@ -68,6 +77,27 @@ GITHUB_CONSUMER = "devflow-locator"
 GITHUB_MAX_RESPONSE_BYTES = 16_384
 GITHUB_MAX_TOKEN_BYTES = 16_384
 GITHUB_MAX_CAPABILITY_LIFETIME_SECONDS = 300
+TEST_RECEIPT_SCHEMA = "devflow.test-execution-receipt/v1"
+TEST_RECEIPT_ALGORITHM = "Ed25519"
+TEST_RECEIPT_ISSUER = "devflow-tester-cicd"
+TEST_RECEIPT_AUDIENCE = "devflow-teamharness"
+TEST_RECEIPT_SIGNATURE_DOMAIN = b"devflow.test-execution-receipt/v1\0"
+TEST_RECEIPT_LIFETIME_SECONDS = 120
+TEST_RECEIPT_MAX_CLOCK_SKEW_SECONDS = 30
+TEST_RECEIPT_LEDGER_SCHEMA = "devflow.test-execution-receipt-ledger/v2"
+TEST_RECEIPT_REPLAY_SCOPE = "pod-incarnation"
+TEST_RECEIPT_LEDGER_PERSISTENT_ACROSS_POD_REPLACEMENT = False
+TEST_RECEIPT_RESERVATION_LEASE_SECONDS = 30
+TEST_RECEIPT_LEDGER_MAX_RECORDS = 100_000
+TEST_RECEIPT_CONSUMPTION_PROTOCOL = (
+    "reserve-upstream-dual-authority-readback-commit/v1"
+)
+TEST_RECEIPT_AUTHORITATIVE_READBACK = [
+    "taskflow.check_task",
+    "projectflow.resolve_project",
+]
+TEST_RECEIPT_ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
+TEST_RECEIPT_ED25519_SPKI_BYTES = 44
 MAX_REQUEST_BYTES = 1_048_576
 MAX_PAYLOAD_BYTES = 1_000_000
 SKILL_ARTIFACT_MAX_BYTES = 1_048_576
@@ -93,7 +123,9 @@ GITHUB_RESPONSE_FIELDS = frozenset({"schema", "capability", "expires_at", "jti"}
 GITHUB_CAPABILITY_FIELDS = frozenset(
     {
         "schema",
+        "run_id",
         "task_id",
+        "trace_id",
         "owner",
         "repo",
         "revision",
@@ -137,6 +169,9 @@ NONCE_RE = re.compile(r"[A-Za-z0-9_-]{22,128}")
 APPROVER_RE = re.compile(r"[A-Za-z0-9@._:/+\-]{3,128}")
 RFC3339_UTC_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 DIGEST_RE = re.compile(r"[0-9a-f]{64}")
+REVISION_RE = re.compile(r"[0-9a-f]{40}")
+JTI_RE = re.compile(r"[0-9a-f]{32}")
+BASE64URL_SIGNATURE_RE = re.compile(r"[A-Za-z0-9_-]{86}")
 ROLES = frozenset({"leader", "worker", "remote-member", "manager"})
 
 
@@ -153,6 +188,15 @@ class SkillValidationPolicy:
     source_argument: str
 
 
+@dataclass(frozen=True)
+class SkillFailurePolicy:
+    """One declared, bounded failure outcome for a packaged Skill."""
+
+    retryable: bool
+    max_attempts: int
+    event: str
+
+
 SKILL_VALIDATION_POLICIES = {
     "issue-classifier": SkillValidationPolicy(
         "devflow-triage",
@@ -161,16 +205,16 @@ SKILL_VALIDATION_POLICIES = {
         "1.0",
         "ClassifiedIssue",
         "1.0",
-        "none",
+        "inline",
     ),
     "code-root-cause": SkillValidationPolicy(
         "devflow-locator",
         "LocatorAgent",
-        "ClassifiedIssue",
+        "SkillInvocation",
         "1.0",
         "LocatedContext",
         "1.0",
-        "none",
+        "inline",
     ),
     "github-evidence": SkillValidationPolicy(
         "devflow-locator",
@@ -206,7 +250,7 @@ SKILL_VALIDATION_POLICIES = {
         "1.0",
         "ReviewDecision",
         "1.0",
-        "none",
+        "inline",
     ),
     "experience-distiller": SkillValidationPolicy(
         "devflow-reviewer",
@@ -215,7 +259,7 @@ SKILL_VALIDATION_POLICIES = {
         "1.0",
         "ExperiencePattern",
         "1.0",
-        "none",
+        "inline",
     ),
 }
 DEVFLOW_RUNTIME_SKILLS = {
@@ -236,47 +280,198 @@ SKILL_RESULT_STATUSES: dict[str, frozenset[str]] = {
     )
     for skill in SKILL_VALIDATION_POLICIES
 }
+SKILL_FAILURE_TYPE = "SkillFailure"
+SKILL_FAILURE_SCHEMA = "1.0"
+SKILL_FAILURE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "skill",
+        "code",
+        "retryable",
+        "retry_count",
+        "max_attempts",
+        "exhausted",
+        "route_to",
+        "event",
+        "source_artifact_sha256",
+        "summary",
+        "diagnostics",
+    }
+)
+SKILL_FAILURE_LOCAL_VALIDATORS = frozenset(
+    {
+        "issue-classifier",
+        "code-root-cause",
+        "pr-reviewer",
+        "experience-distiller",
+    }
+)
+TEST_RECEIPT_FIELDS = frozenset(
+    {
+        "schema",
+        "algorithm",
+        "issuer",
+        "audience",
+        "run_id",
+        "task_id",
+        "trace_id",
+        "issue_id",
+        "repository",
+        "revision",
+        "workspace_binding",
+        "candidate_digest",
+        "tier",
+        "execution_profile",
+        "isolation_profile",
+        "test_result_digest",
+        "execution_policy_digest",
+        "policy_digest",
+        "server_digest",
+        "key_sha256",
+        "iat",
+        "exp",
+        "jti",
+        "signature",
+    }
+)
+TEST_RECEIPT_POLICY_FIELDS = frozenset(
+    {
+        "schemaVersion",
+        "algorithm",
+        "audience",
+        "issuer",
+        "signatureDomain",
+        "publicKeyPath",
+        "publicKeyFileSha256",
+        "publicKeySha256",
+        "policyAttestationPath",
+        "opensslPath",
+        "replayLedgerPath",
+        "replayScope",
+        "replayLedgerPersistentAcrossPodReplacement",
+        "receiptLifetimeSeconds",
+        "maxReceiptLifetimeSeconds",
+        "maxClockSkewSeconds",
+        "ciServerSha256",
+        "ciPolicySha256",
+        "repositoryArchiveSha256",
+        "repositoryManifestSha256",
+        "repositoryRevision",
+        "remainingThreat",
+    }
+)
+TEST_RECEIPT_CANDIDATE_REQUIRED_FIELDS = frozenset(
+    {
+        "schema_version",
+        "issue_id",
+        "tier",
+        "patch",
+        "candidate_digest",
+        "evidence_boundary",
+        "model_call_attempt",
+        "retry_attempt",
+    }
+)
+TEST_RECEIPT_PATCH_FIELDS = frozenset(
+    {"branch_name", "changes", "commit_message", "description"}
+)
+TEST_RECEIPT_CHANGE_FIELDS = frozenset(
+    {"file_path", "change_type", "original_content", "new_content", "diff"}
+)
+TEST_RECEIPT_BOUNDARY_FIELDS = frozenset(
+    {"schema_version", "located_context_digest", "allowed_files", "scope_digest"}
+)
+SKILL_FAILURE_POLICIES: dict[str, dict[str, SkillFailurePolicy]] = {
+    "issue-classifier": {
+        "EXPERIENCE_UNAVAILABLE": SkillFailurePolicy(True, 1, "triage.degraded"),
+        "CLASSIFICATION_INVALID": SkillFailurePolicy(True, 2, "triage.degraded"),
+        "INPUT_INVALID": SkillFailurePolicy(False, 0, "triage.failed"),
+    },
+    "code-root-cause": {
+        "RETRIEVAL_EMPTY": SkillFailurePolicy(True, 2, "locator.blocked"),
+        "FILE_UNAVAILABLE": SkillFailurePolicy(True, 1, "locator.degraded"),
+        "UNSAFE_PATH": SkillFailurePolicy(False, 0, "boundary.violation"),
+    },
+    "github-evidence": {
+        "HANDOFF_REQUIRED": SkillFailurePolicy(True, 1, "locator.blocked"),
+        "HANDOFF_INVALID": SkillFailurePolicy(False, 0, "boundary.violation"),
+        "HANDOFF_DIGEST_MISMATCH": SkillFailurePolicy(False, 0, "boundary.violation"),
+        "HANDOFF_CONSUMER_MISMATCH": SkillFailurePolicy(False, 0, "boundary.violation"),
+        "HANDOFF_PRODUCER_MISMATCH": SkillFailurePolicy(False, 0, "boundary.violation"),
+        "HANDOFF_EXPIRED": SkillFailurePolicy(True, 1, "locator.blocked"),
+        "HANDOFF_SKILL_MISMATCH": SkillFailurePolicy(False, 0, "boundary.violation"),
+        "HANDOFF_STATUS_INVALID": SkillFailurePolicy(False, 0, "boundary.violation"),
+        "MCP_TOOL_DENIED": SkillFailurePolicy(False, 0, "boundary.violation"),
+        "MCP_CAPABILITY_REQUIRED": SkillFailurePolicy(True, 1, "locator.blocked"),
+        "REVISION_REQUIRED": SkillFailurePolicy(True, 1, "locator.blocked"),
+        "MCP_SCOPE_INVALID": SkillFailurePolicy(False, 0, "boundary.violation"),
+        "MCP_SCOPE_MISMATCH": SkillFailurePolicy(False, 0, "boundary.violation"),
+        "MCP_EVIDENCE_UNVERIFIED": SkillFailurePolicy(True, 1, "locator.failed"),
+    },
+    "patch-generator": {
+        "CANDIDATE_INVALID": SkillFailurePolicy(True, 3, "coder.exhausted"),
+        "EVIDENCE_STALE": SkillFailurePolicy(False, 0, "coder.blocked"),
+        "BOUNDARY_VIOLATION": SkillFailurePolicy(False, 0, "boundary.violation"),
+        "RETRY_EVIDENCE_INVALID": SkillFailurePolicy(False, 0, "coder.blocked"),
+        "RETRY_BUDGET_EXHAUSTED": SkillFailurePolicy(False, 0, "coder.exhausted"),
+    },
+    "test-runner": {
+        "INFRASTRUCTURE_ERROR": SkillFailurePolicy(True, 1, "test.error"),
+        "ISOLATION_UNAVAILABLE": SkillFailurePolicy(False, 0, "test.error"),
+    },
+    "pr-reviewer": {
+        "EVIDENCE_INVALID": SkillFailurePolicy(False, 0, "review.failed"),
+        "REVIEW_GENERATION_INVALID": SkillFailurePolicy(True, 2, "review.failed"),
+        "POLICY_BLOCK": SkillFailurePolicy(False, 0, "approval.required"),
+    },
+    "experience-distiller": {
+        "NON_TERMINAL_EVIDENCE": SkillFailurePolicy(False, 0, "experience.rejected"),
+        "PROVENANCE_INCOMPLETE": SkillFailurePolicy(False, 0, "experience.rejected"),
+        "REDACTION_UNCERTAIN": SkillFailurePolicy(False, 0, "experience.quarantined"),
+        "STORE_UNAVAILABLE": SkillFailurePolicy(True, 2, "experience.degraded"),
+    },
+}
 SKILL_VALIDATOR_FILES: dict[str, dict[str, tuple[int, str]]] = {
     "issue-classifier": {
         "scripts/validate.py": (
-            2_358,
-            "74f9eac32a26b90aa0cfe757c4083a507e62b2fc962cfc406d1bd4b85a300eb6",
+            15_936,
+            "6f6827da380fb37d20e6706b1c78f748cdc969f6af57eb8ec1cc3abad174166d",
         ),
         "scripts/_contract.py": (
             2_829,
             "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
         ),
         "references/contract.yaml": (
-            3_106,
-            "2040f999c0250108cd014de3bfd0e97d39e83dbd67c2e9d7cd948f80fe839077",
+            3_546,
+            "104de53a092ef908f217b90de47b67d06bc5457656810502732b0389dd4cf1ed",
         ),
     },
     "code-root-cause": {
         "scripts/validate.py": (
-            2_358,
-            "74f9eac32a26b90aa0cfe757c4083a507e62b2fc962cfc406d1bd4b85a300eb6",
+            18_882,
+            "5462d900a7a1e325aaff8dc55371b60c8eba8e2ab6a26e7563b773931a026ad3",
         ),
         "scripts/_contract.py": (
             2_829,
             "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
         ),
         "references/contract.yaml": (
-            2_988,
-            "1e8e21735b355e8f9cce5c036a863685f6842a328757658f88302cf83d6738b1",
+            3_767,
+            "314035303627b6cbcca8a6fe941b214e3a1aeb854bd97d7cda40de18061f2678",
         ),
     },
     "github-evidence": {
         "scripts/validate.py": (
-            12_110,
-            "668e5bb30e25aab809cf42e49247d5326f26856a7ce5bd4fdadc91a917e59ce4",
+            22_759,
+            "db604b968ad6c547b1899cb0d0c03756f6ce6bbc432c80fcd6ef4c1e0a7ccaeb",
         ),
         "scripts/_contract.py": (
             2_829,
             "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
         ),
         "references/contract.yaml": (
-            5_519,
-            "3446d6183a315f260900bbdb5ea77f8fb4aabb13be3a328cf8e41e94c4e4230c",
+            6_013,
+            "cbecb372535763310dcc2b14043449b640ec7346cc913b6aae2f9d9c602ccc98",
         ),
     },
     "patch-generator": {
@@ -289,50 +484,50 @@ SKILL_VALIDATOR_FILES: dict[str, dict[str, tuple[int, str]]] = {
             "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
         ),
         "references/contract.yaml": (
-            6_376,
-            "f4eb6b6ac6e153ebf2bb7a888d582ca1c850a4e5bb3a4a8102d714461df58402",
+            6_414,
+            "1d11f664cd6a2420e35c9905547596a93c1a419ebca4d9b2fdb49428abb2e229",
         ),
     },
     "test-runner": {
         "scripts/validate.py": (
-            34_340,
-            "f1397f3faa9d8fa1b6a4f0290826ea38440ff05c165e75cb4c0d626957905334",
+            42_173,
+            "809d3540893b48e1030ddb28198a65bee725aa11ce373cf7769520db525e7497",
         ),
         "scripts/_contract.py": (
             2_829,
             "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
         ),
         "references/contract.yaml": (
-            7_457,
-            "7041dfe8cb5eedc26c6eaf3fc35de0c589690272163e7290465e9940f162cc74",
+            9_560,
+            "7258630de40007d3d9f9f715a461c431f229886b6175be870cb520d91f268088",
         ),
     },
     "pr-reviewer": {
         "scripts/validate.py": (
-            2_358,
-            "74f9eac32a26b90aa0cfe757c4083a507e62b2fc962cfc406d1bd4b85a300eb6",
+            19_833,
+            "e591b8b5a2cacf236dc9973f172c07f175010d3b60e3843f02c4ea3eca321bd4",
         ),
         "scripts/_contract.py": (
             2_829,
             "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
         ),
         "references/contract.yaml": (
-            3_457,
-            "2a4489a020037c2b80f086f7c82c2c9257b62ccfb2d8e2677c914fcc8cb1dd6b",
+            4_428,
+            "6f9bc47049b812d3c5a0dd72e69ad6a830f8d4fd1c5b0423f1ce3c7b471b523a",
         ),
     },
     "experience-distiller": {
         "scripts/validate.py": (
-            8_296,
-            "1f804f01838e49c28eb14c8917da74b99518b654d07b9a836405c76a5e1458f6",
+            27_650,
+            "9cbab1535c0cbaa15dec786f6ca2c93e97e8ad4995682d3a8372f30375f3ba17",
         ),
         "scripts/_contract.py": (
             2_829,
             "f4624c2bed5367390897f8a2c14f12736daba0e148795d20bb20ad23ed8eb08f",
         ),
         "references/contract.yaml": (
-            4_178,
-            "e2d1d1f751456d4db52424ac7ed0d573d1bccd76aade0195f8bfad165c5ddc19",
+            4_906,
+            "e741bbc8195e2337a91469f2fb312d0aaa39f5d1cd911de91ed3c946c5eac42e",
         ),
     },
 }
@@ -430,6 +625,25 @@ LEDGER_LOCK_OWNER_FIELDS = frozenset(
 )
 LEDGER_LOCK_NONCE_RE = re.compile(r"[0-9a-f]{64}")
 LEDGER_LOCK_MAX_OWNER_BYTES = 4_096
+TEST_RECEIPT_RESERVATION_FIELDS = frozenset(
+    {
+        "state",
+        "exp",
+        "receiptSha256",
+        "runId",
+        "taskId",
+        "acceptRequestSha256",
+        "acceptResultSha256",
+        "ownerId",
+        "ownerPid",
+        "ownerProcessIdentity",
+        "reservedAt",
+        "leaseExpiresAt",
+        "committedAt",
+        "authoritativeResultSha256",
+        "upstreamResponseSha256",
+    }
+)
 
 
 def _sha256(path: Path) -> str:
@@ -637,6 +851,162 @@ def _approval_policy(manifest: dict[str, Any]) -> dict[str, Any] | None:
     return policy
 
 
+def _test_execution_receipt_policy(
+    manifest: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Load the fixed public trust policy; never accept a caller-selected key."""
+
+    policy = manifest.get("testExecutionReceiptPolicy")
+    if not isinstance(policy, dict) or set(policy) != TEST_RECEIPT_POLICY_FIELDS:
+        return None
+    if (
+        policy.get("schemaVersion") != "1.0"
+        or policy.get("algorithm") != TEST_RECEIPT_ALGORITHM
+        or policy.get("audience") != TEST_RECEIPT_AUDIENCE
+        or policy.get("issuer") != TEST_RECEIPT_ISSUER
+        or policy.get("signatureDomain") != TEST_RECEIPT_SCHEMA
+        or policy.get("maxReceiptLifetimeSeconds") != TEST_RECEIPT_LIFETIME_SECONDS
+        or policy.get("replayScope") != TEST_RECEIPT_REPLAY_SCOPE
+        or policy.get("replayLedgerPersistentAcrossPodReplacement")
+        is not TEST_RECEIPT_LEDGER_PERSISTENT_ACROSS_POD_REPLACEMENT
+        or policy.get("receiptLifetimeSeconds") != TEST_RECEIPT_LIFETIME_SECONDS
+        or isinstance(policy.get("maxClockSkewSeconds"), bool)
+        or not isinstance(policy.get("maxClockSkewSeconds"), int)
+        or not 0
+        <= policy["maxClockSkewSeconds"]
+        <= TEST_RECEIPT_MAX_CLOCK_SKEW_SECONDS
+        or not isinstance(policy.get("remainingThreat"), str)
+        or "root" not in policy["remainingThreat"].lower()
+        or "pod replacement" not in policy["remainingThreat"].lower()
+        or "120" not in policy["remainingThreat"]
+    ):
+        return None
+    for field in (
+        "publicKeyFileSha256",
+        "publicKeySha256",
+        "ciServerSha256",
+        "ciPolicySha256",
+        "repositoryArchiveSha256",
+        "repositoryManifestSha256",
+    ):
+        if (
+            not isinstance(policy.get(field), str)
+            or DIGEST_RE.fullmatch(policy[field]) is None
+        ):
+            return None
+    if (
+        not isinstance(policy.get("repositoryRevision"), str)
+        or REVISION_RE.fullmatch(policy["repositoryRevision"]) is None
+    ):
+        return None
+    source_policy = manifest.get("sourcePolicy")
+    if source_policy == "production-pinned":
+        try:
+            production_policy_sha256 = _sha256(PRODUCTION_TEST_RECEIPT_POLICY)
+        except OSError:
+            return None
+        if (
+            policy.get("publicKeyPath") != str(PRODUCTION_TEST_RECEIPT_PUBLIC_KEY)
+            or policy.get("policyAttestationPath")
+            != str(PRODUCTION_TEST_RECEIPT_POLICY)
+            or policy.get("replayLedgerPath") != str(PRODUCTION_TEST_RECEIPT_LEDGER)
+            or policy.get("opensslPath") != str(PRODUCTION_OPENSSL)
+            or manifest.get("testExecutionReceiptPolicyPath")
+            != str(PRODUCTION_TEST_RECEIPT_POLICY)
+            or manifest.get("testExecutionReceiptPolicySha256")
+            != production_policy_sha256
+            or manifest.get("testExecutionReceiptPublicKeyPath")
+            != str(PRODUCTION_TEST_RECEIPT_PUBLIC_KEY)
+            or manifest.get("testExecutionReceiptPublicKeyFileSha256")
+            != policy.get("publicKeyFileSha256")
+            or manifest.get("testExecutionReceiptReplayScope")
+            != TEST_RECEIPT_REPLAY_SCOPE
+            or manifest.get(
+                "testExecutionReceiptReplayLedgerPersistentAcrossPodReplacement"
+            )
+            is not TEST_RECEIPT_LEDGER_PERSISTENT_ACROSS_POD_REPLACEMENT
+            or manifest.get("testExecutionReceiptLifetimeSeconds")
+            != TEST_RECEIPT_LIFETIME_SECONDS
+            or manifest.get("testExecutionReceiptLedgerSchema")
+            != TEST_RECEIPT_LEDGER_SCHEMA
+            or manifest.get("testExecutionReceiptConsumptionProtocol")
+            != TEST_RECEIPT_CONSUMPTION_PROTOCOL
+            or manifest.get("testExecutionReceiptReservationLeaseSeconds")
+            != TEST_RECEIPT_RESERVATION_LEASE_SECONDS
+            or manifest.get("testExecutionReceiptAuthoritativeReadback")
+            != TEST_RECEIPT_AUTHORITATIVE_READBACK
+        ):
+            return None
+    elif source_policy != "test-only":
+        return None
+    public_key = Path(str(policy.get("publicKeyPath") or ""))
+    attestation = Path(str(policy.get("policyAttestationPath") or ""))
+    ledger = Path(str(policy.get("replayLedgerPath") or ""))
+    openssl_path = Path(str(policy.get("opensslPath") or ""))
+    try:
+        key_metadata = public_key.lstat()
+        policy_metadata = attestation.lstat()
+        ledger_metadata = ledger.lstat()
+        openssl_metadata = openssl_path.lstat()
+        if (
+            public_key.is_symlink()
+            or not stat.S_ISREG(key_metadata.st_mode)
+            or key_metadata.st_nlink != 1
+            or attestation.is_symlink()
+            or not stat.S_ISREG(policy_metadata.st_mode)
+            or policy_metadata.st_nlink != 1
+            or ledger.is_symlink()
+            or not stat.S_ISREG(ledger_metadata.st_mode)
+            or ledger_metadata.st_nlink != 1
+            or openssl_path.is_symlink()
+            or not stat.S_ISREG(openssl_metadata.st_mode)
+            or not os.access(openssl_path, os.X_OK)
+            or _sha256(public_key) != policy["publicKeyFileSha256"]
+            or _load_object(attestation) != policy
+        ):
+            return None
+        if PRODUCTION_MODE and (
+            key_metadata.st_uid != 0
+            or key_metadata.st_gid != 0
+            or stat.S_IMODE(key_metadata.st_mode) & 0o022
+            or policy_metadata.st_uid != 0
+            or policy_metadata.st_gid != 0
+            or stat.S_IMODE(policy_metadata.st_mode) & 0o022
+            or ledger_metadata.st_uid != 0
+            or ledger_metadata.st_gid != 0
+            or stat.S_IMODE(ledger_metadata.st_mode) != 0o600
+            or openssl_metadata.st_uid != 0
+            or openssl_metadata.st_gid != 0
+            or stat.S_IMODE(openssl_metadata.st_mode) & 0o022
+        ):
+            return None
+        completed = subprocess.run(
+            [
+                str(openssl_path),
+                "pkey",
+                "-pubin",
+                "-in",
+                str(public_key),
+                "-outform",
+                "DER",
+            ],
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError, json.JSONDecodeError):
+        return None
+    public_der = completed.stdout
+    if (
+        completed.returncode != 0
+        or len(public_der) != TEST_RECEIPT_ED25519_SPKI_BYTES
+        or not public_der.startswith(TEST_RECEIPT_ED25519_SPKI_PREFIX)
+        or hashlib.sha256(public_der).hexdigest() != policy["publicKeySha256"]
+    ):
+        return None
+    return policy
+
+
 def _canonical_json(value: Any) -> bytes:
     return json.dumps(
         value,
@@ -828,7 +1198,9 @@ class GitHubAssignment:
     @property
     def issuer_scope(self) -> dict[str, Any]:
         return {
+            "run_id": self.run_id,
             "task_id": self.task_id,
+            "trace_id": self.trace_id,
             "owner": self.owner,
             "repo": self.repo,
             "revision": self.revision,
@@ -1127,7 +1499,9 @@ def _capability_from_response(
     claims = _decode_capability_claims(capability)
     if (
         claims.get("schema") != GITHUB_CAPABILITY_SCHEMA
+        or claims.get("run_id") != assignment.run_id
         or claims.get("task_id") != assignment.task_id
+        or claims.get("trace_id") != assignment.trace_id
         or claims.get("owner") != assignment.owner
         or claims.get("repo") != assignment.repo
         or claims.get("revision") != assignment.revision
@@ -1580,6 +1954,653 @@ def _verify_ed25519(policy: dict[str, Any], canonical_evidence: bytes, signature
         except (OSError, subprocess.SubprocessError):
             return False
     return completed.returncode == 0
+
+
+def _verify_test_receipt_signature(
+    policy: dict[str, Any],
+    claims: dict[str, Any],
+    signature: Any,
+) -> bool:
+    if (
+        not isinstance(signature, str)
+        or BASE64URL_SIGNATURE_RE.fullmatch(signature) is None
+    ):
+        return False
+    try:
+        signature_bytes = base64.urlsafe_b64decode(
+            signature + "=" * (-len(signature) % 4)
+        )
+    except (ValueError, binascii.Error):
+        return False
+    if len(signature_bytes) != 64:
+        return False
+    message = TEST_RECEIPT_SIGNATURE_DOMAIN + _canonical_json(claims)
+    with tempfile.TemporaryDirectory(prefix="devflow-test-receipt-") as directory:
+        root = Path(directory)
+        message_path = root / "receipt.msg"
+        signature_path = root / "signature.bin"
+        message_path.write_bytes(message)
+        signature_path.write_bytes(signature_bytes)
+        try:
+            completed = subprocess.run(
+                [
+                    str(policy["opensslPath"]),
+                    "pkeyutl",
+                    "-verify",
+                    "-pubin",
+                    "-inkey",
+                    str(policy["publicKeyPath"]),
+                    "-rawin",
+                    "-in",
+                    str(message_path),
+                    "-sigfile",
+                    str(signature_path),
+                ],
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+    return completed.returncode == 0
+
+
+def _test_receipt_repository_path(value: Any) -> str:
+    if not isinstance(value, str) or not 1 <= len(value) <= 512:
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or path.as_posix() != value
+        or "\\" in value
+        or "//" in value
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or CONTROL_CHARACTER_RE.search(value) is not None
+    ):
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    return value
+
+
+def _test_receipt_candidate_lineage(value: Any) -> tuple[str, str]:
+    """Bind the receipt to the exact validated patch and evidence scope.
+
+    PatchCandidate 1.2 intentionally has no repository revision field. The
+    fixed CI policy supplies that half of lineage; this function supplies the
+    other half by recomputing every candidate-local digest from the canonical
+    TeamHarness source artifact before the two are joined by one task receipt.
+    """
+
+    if not isinstance(value, dict):
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    fields = set(value)
+    if (
+        not fields >= TEST_RECEIPT_CANDIDATE_REQUIRED_FIELDS
+        or fields - TEST_RECEIPT_CANDIDATE_REQUIRED_FIELDS - {"revision_of"}
+        or value.get("schema_version") != "1.2"
+    ):
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    issue_id = value.get("issue_id")
+    tier = value.get("tier")
+    model_attempt = value.get("model_call_attempt")
+    retry_attempt = value.get("retry_attempt")
+    if (
+        isinstance(issue_id, bool)
+        or not isinstance(issue_id, int)
+        or issue_id < 1
+        or tier not in RISK_TIERS
+        or isinstance(model_attempt, bool)
+        or not isinstance(model_attempt, int)
+        or not 1 <= model_attempt <= 3
+        or isinstance(retry_attempt, bool)
+        or not isinstance(retry_attempt, int)
+        or not 1 <= retry_attempt <= 3
+        or model_attempt < retry_attempt
+    ):
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    revision_of = value.get("revision_of")
+    if (retry_attempt == 1 and revision_of is not None) or (
+        retry_attempt > 1
+        and (
+            not isinstance(revision_of, str)
+            or DIGEST_RE.fullmatch(revision_of) is None
+        )
+    ):
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+
+    boundary = value.get("evidence_boundary")
+    if (
+        not isinstance(boundary, dict)
+        or set(boundary) != TEST_RECEIPT_BOUNDARY_FIELDS
+        or boundary.get("schema_version") != "1.0"
+        or not isinstance(boundary.get("located_context_digest"), str)
+        or DIGEST_RE.fullmatch(boundary["located_context_digest"]) is None
+        or not isinstance(boundary.get("allowed_files"), list)
+        or not 1 <= len(boundary["allowed_files"]) <= 256
+    ):
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    allowed = [
+        _test_receipt_repository_path(path) for path in boundary["allowed_files"]
+    ]
+    if allowed != sorted(set(allowed)):
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    scope_body = {
+        "schema_version": "1.0",
+        "located_context_digest": boundary["located_context_digest"],
+        "allowed_files": allowed,
+    }
+    if boundary.get("scope_digest") != hashlib.sha256(
+        _canonical_json(scope_body)
+    ).hexdigest():
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+
+    patch = value.get("patch")
+    if not isinstance(patch, dict) or set(patch) != TEST_RECEIPT_PATCH_FIELDS:
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    for field in ("branch_name", "commit_message", "description"):
+        if not isinstance(patch.get(field), str) or not patch[field]:
+            raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    changes = patch.get("changes")
+    if not isinstance(changes, list) or not 1 <= len(changes) <= 256:
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    seen: set[str] = set()
+    for change in changes:
+        if (
+            not isinstance(change, dict)
+            or set(change) != TEST_RECEIPT_CHANGE_FIELDS
+            or change.get("change_type") not in {"create", "modify", "delete"}
+            or not isinstance(change.get("diff"), str)
+            or not change["diff"]
+        ):
+            raise GuardPolicyError("test_receipt_source_lineage_invalid")
+        path = _test_receipt_repository_path(change.get("file_path"))
+        if path in seen or path not in allowed:
+            raise GuardPolicyError("test_receipt_source_lineage_invalid")
+        seen.add(path)
+        for field in ("original_content", "new_content"):
+            if change.get(field) is not None and not isinstance(change[field], str):
+                raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    candidate_digest = value.get("candidate_digest")
+    if (
+        not isinstance(candidate_digest, str)
+        or DIGEST_RE.fullmatch(candidate_digest) is None
+        or candidate_digest != hashlib.sha256(_canonical_json(patch)).hexdigest()
+    ):
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    return tier, candidate_digest
+
+
+def _verify_test_execution_receipt(
+    policy: dict[str, Any],
+    source: dict[str, Any],
+    inline: dict[str, Any],
+    *,
+    now: dt.datetime,
+) -> dict[str, str | int]:
+    """Verify one signed receipt and every task/result binding without consuming it."""
+
+    receipt = inline.get("test_execution_receipt")
+    if not isinstance(receipt, dict) or set(receipt) != TEST_RECEIPT_FIELDS:
+        raise GuardPolicyError("test_receipt_invalid")
+    claims = {key: receipt[key] for key in TEST_RECEIPT_FIELDS - {"signature"}}
+    source_container = source.get("artifact")
+    if (
+        not isinstance(source_container, dict)
+        or source_container.get("type") != "PatchCandidate"
+        or source_container.get("schema_version") != "1.2"
+        or not isinstance(source_container.get("inline"), dict)
+        or source_container.get("sha256")
+        != hashlib.sha256(_canonical_json(source_container["inline"])).hexdigest()
+        or source.get("trace_id")
+        != f'{source.get("run_id")}:{source.get("task_id")}'
+    ):
+        raise GuardPolicyError("test_receipt_binding_invalid")
+    source_artifact = cast(dict[str, Any], source_container["inline"])
+    tier, candidate_digest = _test_receipt_candidate_lineage(source_artifact)
+    if source_artifact.get("issue_id") != source.get("issue_id"):
+        raise GuardPolicyError("test_receipt_source_lineage_invalid")
+    repository = inline.get("repository")
+    execution_policy = inline.get("execution_policy")
+    test_result = inline.get("test_result")
+    profile = "full" if tier in {"T3", "T4", "T5"} else "focused"
+    expected_repository = {
+        "archive_sha256": policy["repositoryArchiveSha256"],
+        "manifest_sha256": policy["repositoryManifestSha256"],
+    }
+    if (
+        repository != expected_repository
+        or inline.get("revision") != policy["repositoryRevision"]
+        or inline.get("workspace_binding") != policy["ciPolicySha256"]
+        or inline.get("execution_profile") != profile
+        or inline.get("isolation_profile") != "agentteams-bwrap-tests/v1"
+        or inline.get("tier") != tier
+        or not isinstance(execution_policy, dict)
+        or not isinstance(test_result, dict)
+        or execution_policy.get("profile") != profile
+        or execution_policy.get("isolation_profile") != "agentteams-bwrap-tests/v1"
+        or execution_policy.get("isolation_boundary")
+        != "linux-bubblewrap-unshare-all-cap-drop-process-boundary-not-node-root-or-kernel"
+        or execution_policy.get("policy_digest") != policy["ciPolicySha256"]
+        or execution_policy.get("server_digest") != policy["ciServerSha256"]
+        or execution_policy.get("repository_archive_sha256")
+        != policy["repositoryArchiveSha256"]
+        or execution_policy.get("repository_manifest_sha256")
+        != policy["repositoryManifestSha256"]
+    ):
+        raise GuardPolicyError("test_receipt_binding_invalid")
+    expected = {
+        "schema": TEST_RECEIPT_SCHEMA,
+        "algorithm": TEST_RECEIPT_ALGORITHM,
+        "issuer": TEST_RECEIPT_ISSUER,
+        "audience": TEST_RECEIPT_AUDIENCE,
+        "run_id": source["run_id"],
+        "task_id": source["task_id"],
+        "trace_id": source["trace_id"],
+        "issue_id": source["issue_id"],
+        "repository": expected_repository,
+        "revision": policy["repositoryRevision"],
+        "workspace_binding": policy["ciPolicySha256"],
+        "candidate_digest": candidate_digest,
+        "tier": tier,
+        "execution_profile": profile,
+        "isolation_profile": "agentteams-bwrap-tests/v1",
+        "test_result_digest": hashlib.sha256(_canonical_json(test_result)).hexdigest(),
+        "execution_policy_digest": hashlib.sha256(
+            _canonical_json(execution_policy)
+        ).hexdigest(),
+        "policy_digest": policy["ciPolicySha256"],
+        "server_digest": policy["ciServerSha256"],
+        "key_sha256": policy["publicKeySha256"],
+    }
+    if any(claims.get(key) != value for key, value in expected.items()):
+        raise GuardPolicyError("test_receipt_binding_invalid")
+    if (
+        inline.get("issue_id") != source["issue_id"]
+        or inline.get("candidate_digest") != candidate_digest
+    ):
+        raise GuardPolicyError("test_receipt_binding_invalid")
+    issued_at = claims.get("iat")
+    expires_at = claims.get("exp")
+    jti = claims.get("jti")
+    if (
+        isinstance(issued_at, bool)
+        or not isinstance(issued_at, int)
+        or isinstance(expires_at, bool)
+        or not isinstance(expires_at, int)
+        or not isinstance(jti, str)
+        or JTI_RE.fullmatch(jti) is None
+    ):
+        raise GuardPolicyError("test_receipt_invalid")
+    now = now.astimezone(dt.timezone.utc)
+    now_epoch = int(now.timestamp())
+    skew = int(policy["maxClockSkewSeconds"])
+    source_time = _skill_timestamp(source.get("created_at"), now)
+    source_epoch = int(source_time.timestamp())
+    if (
+        expires_at - issued_at != policy["maxReceiptLifetimeSeconds"]
+        or issued_at > now_epoch + skew
+        or expires_at < now_epoch - skew
+        or issued_at < source_epoch - skew
+    ):
+        raise GuardPolicyError("test_receipt_expired")
+    if not _verify_test_receipt_signature(policy, claims, receipt.get("signature")):
+        raise GuardPolicyError("test_receipt_signature_invalid")
+    return {
+        "jti": jti,
+        "exp": expires_at,
+        "receiptSha256": hashlib.sha256(_canonical_json(receipt)).hexdigest(),
+    }
+
+
+def _read_test_receipt_ledger(path: Path) -> dict[str, Any]:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        raise GuardPolicyError("test_receipt_ledger_unavailable") from None
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or (
+            PRODUCTION_MODE
+            and (metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) != 0o600)
+        )
+    ):
+        raise GuardPolicyError("test_receipt_ledger_invalid")
+    try:
+        value = _load_object(path)
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise GuardPolicyError("test_receipt_ledger_invalid") from exc
+    if (
+        set(value) != {"schemaVersion", "reservations"}
+        or value.get("schemaVersion") != TEST_RECEIPT_LEDGER_SCHEMA
+        or not isinstance(value.get("reservations"), dict)
+        or len(value["reservations"]) > TEST_RECEIPT_LEDGER_MAX_RECORDS
+    ):
+        raise GuardPolicyError("test_receipt_ledger_invalid")
+    for jti, record in value["reservations"].items():
+        state = record.get("state") if isinstance(record, dict) else None
+        committed_at = record.get("committedAt") if isinstance(record, dict) else None
+        authoritative_digest = (
+            record.get("authoritativeResultSha256")
+            if isinstance(record, dict)
+            else None
+        )
+        upstream_digest = (
+            record.get("upstreamResponseSha256")
+            if isinstance(record, dict)
+            else None
+        )
+        if (
+            not isinstance(jti, str)
+            or JTI_RE.fullmatch(jti) is None
+            or not isinstance(record, dict)
+            or set(record) != TEST_RECEIPT_RESERVATION_FIELDS
+            or state not in {"pending", "committed"}
+            or isinstance(record.get("exp"), bool)
+            or not isinstance(record.get("exp"), int)
+            or not isinstance(record.get("receiptSha256"), str)
+            or DIGEST_RE.fullmatch(record["receiptSha256"]) is None
+            or not isinstance(record.get("runId"), str)
+            or SAFE_ID_RE.fullmatch(record["runId"]) is None
+            or not isinstance(record.get("taskId"), str)
+            or SAFE_ID_RE.fullmatch(record["taskId"]) is None
+            or not isinstance(record.get("acceptRequestSha256"), str)
+            or DIGEST_RE.fullmatch(record["acceptRequestSha256"]) is None
+            or not isinstance(record.get("acceptResultSha256"), str)
+            or DIGEST_RE.fullmatch(record["acceptResultSha256"]) is None
+            or not isinstance(record.get("ownerId"), str)
+            or DIGEST_RE.fullmatch(record["ownerId"]) is None
+            or isinstance(record.get("ownerPid"), bool)
+            or not isinstance(record.get("ownerPid"), int)
+            or record["ownerPid"] < 1
+            or not isinstance(record.get("ownerProcessIdentity"), str)
+            or DIGEST_RE.fullmatch(record["ownerProcessIdentity"]) is None
+            or isinstance(record.get("reservedAt"), bool)
+            or not isinstance(record.get("reservedAt"), int)
+            or isinstance(record.get("leaseExpiresAt"), bool)
+            or not isinstance(record.get("leaseExpiresAt"), int)
+            or record["leaseExpiresAt"] < record["reservedAt"]
+            or (
+                state == "pending"
+                and (
+                    committed_at is not None
+                    or authoritative_digest is not None
+                    or upstream_digest is not None
+                )
+            )
+            or (
+                state == "committed"
+                and (
+                    isinstance(committed_at, bool)
+                    or not isinstance(committed_at, int)
+                    or committed_at < record["reservedAt"]
+                    or not isinstance(authoritative_digest, str)
+                    or DIGEST_RE.fullmatch(authoritative_digest) is None
+                    or not isinstance(upstream_digest, str)
+                    or DIGEST_RE.fullmatch(upstream_digest) is None
+                )
+            )
+        ):
+            raise GuardPolicyError("test_receipt_ledger_invalid")
+    return value
+
+
+def _test_receipt_reservation_matches(
+    record: dict[str, Any],
+    source: dict[str, Any],
+    verified: dict[str, str | int],
+    *,
+    accept_request_sha256: str,
+    accept_result_sha256: str,
+) -> bool:
+    return (
+        record.get("exp") == int(verified["exp"])
+        and record.get("receiptSha256") == str(verified["receiptSha256"])
+        and record.get("runId") == source.get("run_id")
+        and record.get("taskId") == source.get("task_id")
+        and record.get("acceptRequestSha256") == accept_request_sha256
+        and record.get("acceptResultSha256") == accept_result_sha256
+    )
+
+
+def _test_receipt_reservation_owner_available(
+    record: dict[str, Any], *, now_epoch: int
+) -> bool:
+    """Return true only when a pending owner is expired or provably gone."""
+
+    if now_epoch >= int(record["leaseExpiresAt"]):
+        return True
+    alive, identity = _process_identity(int(record["ownerPid"]))
+    return not alive or (
+        identity is not None and identity != record["ownerProcessIdentity"]
+    )
+
+
+def _has_matching_test_receipt_reservation(
+    receipt_context: dict[str, Any], contract: dict[str, Any]
+) -> bool:
+    """Read one exact reservation without creating or changing it."""
+
+    policy = cast(dict[str, Any], receipt_context["policy"])
+    source = cast(dict[str, Any], receipt_context["source"])
+    verified = cast(dict[str, str | int], receipt_context["verified"])
+    ledger_path = Path(str(policy["replayLedgerPath"]))
+    with _ledger_lock(ledger_path):
+        ledger = _read_test_receipt_ledger(ledger_path)
+        record = cast(dict[str, Any], ledger["reservations"]).get(
+            str(verified["jti"])
+        )
+        if record is None:
+            return False
+        if not _test_receipt_reservation_matches(
+            record,
+            source,
+            verified,
+            accept_request_sha256=str(contract["acceptRequestSha256"]),
+            accept_result_sha256=str(contract["acceptResultSha256"]),
+        ):
+            raise GuardPolicyError("test_receipt_reservation_conflict")
+        return True
+
+
+def _reserve_test_execution_receipt_in_locked_ledger(
+    policy: dict[str, Any],
+    source: dict[str, Any],
+    verified: dict[str, str | int],
+    *,
+    accept_request_sha256: str,
+    accept_result_sha256: str,
+    now: dt.datetime,
+) -> tuple[str, dict[str, Any]]:
+    """Atomically create or inspect one exact receipt reservation.
+
+    The caller must hold ``_ledger_lock(replayLedgerPath)`` until the upstream
+    transition and authoritative readback have both completed.
+    """
+
+    if (
+        DIGEST_RE.fullmatch(accept_request_sha256) is None
+        or DIGEST_RE.fullmatch(accept_result_sha256) is None
+    ):
+        raise GuardPolicyError("test_receipt_reservation_invalid")
+    ledger_path = Path(str(policy["replayLedgerPath"]))
+    ledger = _read_test_receipt_ledger(ledger_path)
+    reservations = cast(dict[str, Any], ledger["reservations"])
+    jti = str(verified["jti"])
+    existing = reservations.get(jti)
+    if existing is not None:
+        if not _test_receipt_reservation_matches(
+            existing,
+            source,
+            verified,
+            accept_request_sha256=accept_request_sha256,
+            accept_result_sha256=accept_result_sha256,
+        ):
+            raise GuardPolicyError("test_receipt_reservation_conflict")
+        return str(existing["state"]), cast(dict[str, Any], existing)
+
+    now_epoch = int(now.astimezone(dt.timezone.utc).timestamp())
+    skew = int(policy["maxClockSkewSeconds"])
+    retained = {
+        key: value
+        for key, value in reservations.items()
+        if value["exp"] >= now_epoch - skew
+    }
+    if len(retained) >= TEST_RECEIPT_LEDGER_MAX_RECORDS:
+        raise GuardPolicyError("test_receipt_ledger_full")
+    alive, process_identity = _process_identity(os.getpid())
+    if not alive or process_identity is None:
+        raise GuardPolicyError("test_receipt_reservation_owner_unavailable")
+    record = {
+        "state": "pending",
+        "exp": int(verified["exp"]),
+        "receiptSha256": str(verified["receiptSha256"]),
+        "runId": source["run_id"],
+        "taskId": source["task_id"],
+        "acceptRequestSha256": accept_request_sha256,
+        "acceptResultSha256": accept_result_sha256,
+        "ownerId": secrets.token_hex(32),
+        "ownerPid": os.getpid(),
+        "ownerProcessIdentity": process_identity,
+        "reservedAt": now_epoch,
+        "leaseExpiresAt": now_epoch + TEST_RECEIPT_RESERVATION_LEASE_SECONDS,
+        "committedAt": None,
+        "authoritativeResultSha256": None,
+        "upstreamResponseSha256": None,
+    }
+    retained[jti] = record
+    _write_ledger(
+        ledger_path,
+        {"schemaVersion": TEST_RECEIPT_LEDGER_SCHEMA, "reservations": retained},
+    )
+    return "new", record
+
+
+def _commit_test_execution_receipt_in_locked_ledger(
+    policy: dict[str, Any],
+    source: dict[str, Any],
+    verified: dict[str, str | int],
+    *,
+    accept_request_sha256: str,
+    accept_result_sha256: str,
+    authoritative_result_sha256: str,
+    upstream_response_sha256: str,
+    now: dt.datetime,
+) -> dict[str, Any]:
+    """Commit an exact pending reservation after authoritative readback."""
+
+    if (
+        DIGEST_RE.fullmatch(authoritative_result_sha256) is None
+        or DIGEST_RE.fullmatch(upstream_response_sha256) is None
+    ):
+        raise GuardPolicyError("test_receipt_commit_invalid")
+    ledger_path = Path(str(policy["replayLedgerPath"]))
+    ledger = _read_test_receipt_ledger(ledger_path)
+    reservations = cast(dict[str, Any], ledger["reservations"])
+    jti = str(verified["jti"])
+    record = reservations.get(jti)
+    if record is None or not _test_receipt_reservation_matches(
+        record,
+        source,
+        verified,
+        accept_request_sha256=accept_request_sha256,
+        accept_result_sha256=accept_result_sha256,
+    ):
+        raise GuardPolicyError("test_receipt_reservation_conflict")
+    if record["state"] == "committed":
+        if record["authoritativeResultSha256"] != authoritative_result_sha256:
+            raise GuardPolicyError("test_receipt_commit_conflict")
+        return cast(dict[str, Any], record)
+    committed = dict(record)
+    committed.update(
+        state="committed",
+        committedAt=int(now.astimezone(dt.timezone.utc).timestamp()),
+        authoritativeResultSha256=authoritative_result_sha256,
+        upstreamResponseSha256=upstream_response_sha256,
+    )
+    reservations[jti] = committed
+    _write_ledger(ledger_path, ledger)
+    return committed
+
+
+def _release_test_execution_receipt_in_locked_ledger(
+    policy: dict[str, Any],
+    source: dict[str, Any],
+    verified: dict[str, str | int],
+    *,
+    accept_request_sha256: str,
+    accept_result_sha256: str,
+    owner_id: str | None,
+    now: dt.datetime,
+    allow_orphaned: bool = False,
+) -> None:
+    """Release only the current owner or an expired/provably-dead pending owner."""
+
+    ledger_path = Path(str(policy["replayLedgerPath"]))
+    ledger = _read_test_receipt_ledger(ledger_path)
+    reservations = cast(dict[str, Any], ledger["reservations"])
+    jti = str(verified["jti"])
+    record = reservations.get(jti)
+    if record is None or not _test_receipt_reservation_matches(
+        record,
+        source,
+        verified,
+        accept_request_sha256=accept_request_sha256,
+        accept_result_sha256=accept_result_sha256,
+    ):
+        raise GuardPolicyError("test_receipt_reservation_conflict")
+    if record["state"] != "pending":
+        raise GuardPolicyError("test_receipt_replayed")
+    now_epoch = int(now.astimezone(dt.timezone.utc).timestamp())
+    owned = owner_id is not None and secrets.compare_digest(record["ownerId"], owner_id)
+    orphaned = allow_orphaned and _test_receipt_reservation_owner_available(
+        record, now_epoch=now_epoch
+    )
+    if not owned and not orphaned:
+        raise GuardPolicyError("test_receipt_reservation_busy")
+    del reservations[jti]
+    _write_ledger(ledger_path, ledger)
+
+
+def _consume_test_execution_receipt(
+    policy: dict[str, Any],
+    source: dict[str, Any],
+    verified: dict[str, str | int],
+    *,
+    now: dt.datetime,
+) -> None:
+    """Compatibility helper for direct verifier tests; production uses reserve/commit."""
+
+    ledger_path = Path(str(policy["replayLedgerPath"]))
+    try:
+        with _ledger_lock(ledger_path):
+            binding = hashlib.sha256(
+                _canonical_json({"source": source, "verified": verified})
+            ).hexdigest()
+            state, _record = _reserve_test_execution_receipt_in_locked_ledger(
+                policy,
+                source,
+                verified,
+                accept_request_sha256=binding,
+                accept_result_sha256=binding,
+                now=now,
+            )
+            if state != "new":
+                raise GuardPolicyError("test_receipt_replayed")
+            _commit_test_execution_receipt_in_locked_ledger(
+                policy,
+                source,
+                verified,
+                accept_request_sha256=binding,
+                accept_result_sha256=binding,
+                authoritative_result_sha256=binding,
+                upstream_response_sha256=binding,
+                now=now,
+            )
+    except GuardPolicyError:
+        raise
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+        raise GuardPolicyError("test_receipt_ledger_invalid") from exc
 
 
 def _bind_project_risk(
@@ -2218,6 +3239,42 @@ def _validate_and_consume_approval(
         )
 
 
+def _validate_preconsumed_approval(
+    policy: dict[str, Any],
+    arguments: dict[str, Any],
+    *,
+    binding: dict[str, Any],
+    action: str,
+    project_id: str,
+    task_id: str | None,
+    risk_tier: str,
+) -> None:
+    """Permit an exact reserved retry only with its already-consumed approval."""
+
+    evidence, nonce = _validate_approval(
+        policy,
+        arguments,
+        binding=binding,
+        action=action,
+        project_id=project_id,
+        task_id=task_id,
+        risk_tier=risk_tier,
+    )
+    ledger_path = Path(str(policy["ledgerPath"]))
+    with _ledger_lock(ledger_path):
+        current = _read_ledger(ledger_path)
+        current_project = cast(dict[str, Any], current["projects"]).get(project_id)
+        used_nonces = cast(dict[str, Any], current["usedNonces"])
+        if (
+            not isinstance(current_project, dict)
+            or current_project.get("riskTier") != risk_tier
+            or current_project.get("projectBindingDigest")
+            != evidence.get("projectBindingDigest")
+            or used_nonces.get(nonce) != evidence.get("expiresAt")
+        ):
+            raise ValueError("reserved retry approval was not previously consumed")
+
+
 def _response_succeeded(response: dict[str, Any] | None) -> bool:
     if not isinstance(response, dict):
         return False
@@ -2631,6 +3688,91 @@ def _skill_envelope(
     return value, inline, _skill_timestamp(value["created_at"], now)
 
 
+def _validate_skill_failure(
+    skill: str,
+    status: str,
+    artifact: dict[str, Any],
+    source: dict[str, Any],
+) -> None:
+    """Validate a failure as data, bound to its exact Leader assignment."""
+
+    if status != "failed" or set(artifact) != SKILL_FAILURE_FIELDS:
+        raise GuardPolicyError("skill_failure_invalid")
+    if artifact.get("schema_version") != SKILL_FAILURE_SCHEMA or artifact.get(
+        "skill"
+    ) != skill:
+        raise GuardPolicyError("skill_failure_invalid")
+    code = artifact.get("code")
+    if not isinstance(code, str):
+        raise GuardPolicyError("skill_failure_invalid")
+    failure = SKILL_FAILURE_POLICIES.get(skill, {}).get(code)
+    if failure is None:
+        raise GuardPolicyError("skill_failure_invalid")
+    if (
+        artifact.get("retryable") is not failure.retryable
+        or artifact.get("max_attempts") != failure.max_attempts
+        or artifact.get("route_to") != "TeamLeader"
+        or artifact.get("event") != failure.event
+    ):
+        raise GuardPolicyError("skill_failure_invalid")
+    retry_count = artifact.get("retry_count")
+    if (
+        isinstance(retry_count, bool)
+        or not isinstance(retry_count, int)
+        or not 0 <= retry_count <= failure.max_attempts
+        or artifact.get("exhausted")
+        is not (not failure.retryable or retry_count == failure.max_attempts)
+    ):
+        raise GuardPolicyError("skill_failure_invalid")
+    source_inline = cast(dict[str, Any], cast(dict[str, Any], source["artifact"])["inline"])
+    if artifact.get("source_artifact_sha256") != hashlib.sha256(
+        _canonical_json(source_inline)
+    ).hexdigest():
+        raise GuardPolicyError("skill_failure_invalid")
+    summary = artifact.get("summary")
+    diagnostics = artifact.get("diagnostics")
+    if (
+        not isinstance(summary, str)
+        or not 1 <= len(summary) <= 1_024
+        or summary != summary.strip()
+        or CONTROL_CHARACTER_RE.search(summary) is not None
+        or not isinstance(diagnostics, list)
+        or len(diagnostics) > 16
+        or len(diagnostics) != len(set(item for item in diagnostics if isinstance(item, str)))
+        or any(
+            not isinstance(item, str)
+            or not 1 <= len(item) <= 2_048
+            or item != item.strip()
+            or CONTROL_CHARACTER_RE.search(item) is not None
+            for item in diagnostics
+        )
+    ):
+        raise GuardPolicyError("skill_failure_invalid")
+
+
+def _skill_failure_policy_digest(skill: str) -> str:
+    """Return a stable attestation digest for the central failure validator."""
+
+    rules = SKILL_FAILURE_POLICIES.get(skill)
+    if rules is None:
+        raise GuardPolicyError("skill_failure_invalid")
+    document = {
+        "schema": SKILL_FAILURE_SCHEMA,
+        "artifactType": SKILL_FAILURE_TYPE,
+        "fields": sorted(SKILL_FAILURE_FIELDS),
+        "routeTo": "TeamLeader",
+        "rules": {
+            code: {
+                "retryable": rule.retryable,
+                "maxAttempts": rule.max_attempts,
+                "event": rule.event,
+            }
+            for code, rule in sorted(rules.items())
+        },
+    }
+    return hashlib.sha256(_canonical_json(document)).hexdigest()
+
+
 def _skill_relative_path(value: str, task_id: str, *, suffix: str) -> str:
     path = PurePosixPath(value.replace("\\", "/"))
     normalized = path.as_posix()
@@ -2737,7 +3879,11 @@ def _run_packaged_validator(
     policy: SkillValidationPolicy,
     artifact: dict[str, Any],
     source: dict[str, Any],
+    *,
+    failure: bool = False,
 ) -> str:
+    if failure and skill not in SKILL_FAILURE_LOCAL_VALIDATORS:
+        return _skill_failure_policy_digest(skill)
     files = _packaged_validator_bytes(identity, skill, policy)
     with tempfile.TemporaryDirectory(prefix="devflow-skill-verify-") as temporary:
         root = Path(temporary) / skill
@@ -2800,6 +3946,8 @@ def _verify_skill_transition(
     probe: dict[str, Any],
     task: dict[str, Any],
     identity: dict[str, str],
+    *,
+    test_receipt_context: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     task_id = str(task.get("task_id") or task.get("taskId") or "").strip()
     if SAFE_ID_RE.fullmatch(task_id) is None:
@@ -2836,11 +3984,16 @@ def _verify_skill_transition(
         status=frozenset({"ready", "retry"}),
         now=now,
     )
+    raw_result_artifact = result_raw.get("artifact")
+    declared_failure = bool(
+        isinstance(raw_result_artifact, dict)
+        and raw_result_artifact.get("type") == SKILL_FAILURE_TYPE
+    )
     result, result_inline, result_time = _skill_envelope(
         result_raw,
-        artifact_type=policy.output_type,
-        artifact_schema=policy.output_schema,
-        status=SKILL_RESULT_STATUSES[skill],
+        artifact_type=SKILL_FAILURE_TYPE if declared_failure else policy.output_type,
+        artifact_schema=SKILL_FAILURE_SCHEMA if declared_failure else policy.output_schema,
+        status=frozenset({"failed"}) if declared_failure else SKILL_RESULT_STATUSES[skill],
         now=now,
     )
     expected_result_status = "SUCCESS" if result["status"] == "ready" else "FAILED"
@@ -2853,6 +4006,14 @@ def _verify_skill_transition(
     }
     if claimed_result_statuses != {expected_result_status}:
         raise GuardPolicyError("skill_result_status_invalid")
+    if identity["runtimeName"] == "devflow-lead":
+        claimed_acceptance = {
+            container.get("accepted")
+            for container in (arguments, submission_payload)
+            if "accepted" in container
+        }
+        if claimed_acceptance != {expected_result_status == "SUCCESS"}:
+            raise GuardPolicyError("skill_result_status_invalid")
     source_producers = {"devflow-lead", "TeamLeader"}
     source_consumers = {policy.runtime_name, policy.agent_name}
     result_producers = {policy.runtime_name, policy.agent_name}
@@ -2877,17 +4038,59 @@ def _verify_skill_transition(
         or result.get("parent_handoff_sha256") != source_digest
     ):
         raise GuardPolicyError("skill_source_route_mismatch")
-    _validate_skill_result_semantics(skill, result["status"], result_inline)
-    validator_digest = _run_packaged_validator(identity, skill, policy, result_inline, source)
-    return {
+    test_receipt_policy: dict[str, Any] | None = None
+    test_receipt_validation: dict[str, str | int] | None = None
+    if declared_failure:
+        _validate_skill_failure(skill, result["status"], result_inline, source)
+    else:
+        _validate_skill_result_semantics(skill, result["status"], result_inline)
+        if skill == "test-runner":
+            manifest = _load_object(INSTALL_MANIFEST)
+            test_receipt_policy = _test_execution_receipt_policy(manifest)
+            if test_receipt_policy is None:
+                raise GuardPolicyError("test_receipt_policy_invalid")
+            test_receipt_validation = _verify_test_execution_receipt(
+                test_receipt_policy,
+                source,
+                result_inline,
+                now=now,
+            )
+    validator_digest = _run_packaged_validator(
+        identity,
+        skill,
+        policy,
+        result_inline,
+        source,
+        failure=declared_failure,
+    )
+    if (
+        test_receipt_policy is not None
+        and test_receipt_validation is not None
+        and identity["runtimeName"] == "devflow-lead"
+        and test_receipt_context is not None
+    ):
+        test_receipt_context.update(
+            policy=test_receipt_policy,
+            source=source,
+            verified=test_receipt_validation,
+            validatedAt=now,
+        )
+    validation = {
         "schema": "devflow.agentteams.skill-validation/v1",
         "taskId": task_id,
         "skill": skill,
+        "outcome": "failure" if declared_failure else "result",
         "sourceRouteSha256": source_digest,
         "resultHandoffSha256": hashlib.sha256(_canonical_json(result)).hexdigest(),
         "artifactSha256": cast(dict[str, Any], result["artifact"])["sha256"],
         "validatorSha256": validator_digest,
     }
+    if test_receipt_validation is not None:
+        validation["testExecutionReceiptSha256"] = str(
+            test_receipt_validation["receiptSha256"]
+        )
+        validation["testExecutionReceiptJti"] = str(test_receipt_validation["jti"])
+    return validation
 
 
 def _validate_skill_result_semantics(
@@ -3018,6 +4221,435 @@ def _accept_task_probe(
     if state not in SUCCESSFUL_SUBMIT_STATES:
         raise GuardPolicyError("skill_task_not_submitted")
     return probe, task
+
+
+def _accept_semantic_value(
+    arguments: dict[str, Any],
+    aliases: tuple[str, ...],
+    *,
+    default: Any,
+) -> Any:
+    payload = _payload_object(arguments)
+    values = [
+        container[alias]
+        for container in (arguments, payload)
+        for alias in aliases
+        if alias in container
+    ]
+    if not values:
+        return default
+    canonical = {_canonical_json(value) for value in values}
+    if len(canonical) != 1:
+        raise GuardPolicyError("test_receipt_accept_request_ambiguous")
+    return values[0]
+
+
+def _test_receipt_accept_contract(
+    arguments: dict[str, Any],
+    submitted_task: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind one receipt to the exact semantic acceptance transition."""
+
+    project_id = _bound_value(arguments, ("projectId", "project_id"), "projectId")
+    task_id = _bound_value(arguments, ("taskId", "task_id"), "taskId")
+    accepted = _accept_semantic_value(arguments, ("accepted",), default=True)
+    result_status = _accept_semantic_value(
+        arguments,
+        ("resultStatus", "result_status"),
+        default="SUCCESS",
+    )
+    summary = _accept_semantic_value(arguments, ("summary",), default="")
+    publish_artifacts = _accept_semantic_value(
+        arguments,
+        ("publishArtifacts", "publish_artifacts"),
+        default=False,
+    )
+    if (
+        not isinstance(accepted, bool)
+        or not isinstance(result_status, str)
+        or result_status not in {"SUCCESS", "FAILED"}
+        or not isinstance(summary, str)
+        or len(summary.encode("utf-8")) > 16_384
+        or CONTROL_CHARACTER_RE.search(summary) is not None
+        or not isinstance(publish_artifacts, bool)
+    ):
+        raise GuardPolicyError("test_receipt_accept_request_invalid")
+    if publish_artifacts:
+        # Publishing is a second external side effect and cannot share the
+        # receipt's exactly-once acceptance reservation.
+        raise GuardPolicyError("test_receipt_accept_publish_forbidden")
+    if accepted != (result_status == "SUCCESS"):
+        raise GuardPolicyError("test_receipt_accept_request_invalid")
+    approval = arguments.get("approval")
+    if approval is not None and not isinstance(approval, dict):
+        raise GuardPolicyError("test_receipt_accept_request_invalid")
+    approval_digest = (
+        hashlib.sha256(_canonical_json(approval)).hexdigest()
+        if isinstance(approval, dict)
+        else None
+    )
+    submission_digest = _existing_submission_digest(
+        {"result": {"content": [{"type": "text", "text": json.dumps({"task": submitted_task})}]}}
+    )
+    if not submission_digest:
+        raise GuardPolicyError("test_receipt_submission_invalid")
+    upstream_result_status = "SUCCESS" if accepted else "REVISION_NEEDED"
+    expected_node_status = "completed" if accepted else "revision"
+    request_projection = {
+        "schema": "devflow.test-receipt-accept-request/v1",
+        "projectId": project_id,
+        "taskId": task_id,
+        "accepted": accepted,
+        "requestedResultStatus": result_status,
+        "upstreamResultStatus": upstream_result_status,
+        "summary": summary,
+        "publishArtifacts": False,
+        "submissionSha256": submission_digest,
+        "approvalSha256": approval_digest,
+    }
+    result_projection = {
+        "schema": "devflow.test-receipt-accept-result/v1",
+        "projectId": project_id,
+        "taskId": task_id,
+        "accepted": accepted,
+        "nodeStatus": expected_node_status,
+        "resultStatus": upstream_result_status,
+        "summary": summary,
+        "submissionSha256": submission_digest,
+    }
+    return {
+        **request_projection,
+        "expectedNodeStatus": expected_node_status,
+        "acceptRequestSha256": hashlib.sha256(
+            _canonical_json(request_projection)
+        ).hexdigest(),
+        "acceptResultSha256": hashlib.sha256(
+            _canonical_json(result_projection)
+        ).hexdigest(),
+    }
+
+
+def _forwarded_test_receipt_accept_arguments(
+    arguments: dict[str, Any], contract: dict[str, Any]
+) -> dict[str, Any]:
+    """Map DevFlow FAILED acknowledgement to AgentTeams' REVISION_NEEDED enum."""
+
+    forwarded = json.loads(json.dumps(arguments))
+    if not isinstance(forwarded, dict):  # pragma: no cover - JSON object invariant
+        raise GuardPolicyError("test_receipt_accept_request_invalid")
+    upstream_status = str(contract["upstreamResultStatus"])
+    raw_payload = forwarded.get("payload")
+    if isinstance(raw_payload, str):
+        payload = _payload_object(forwarded)
+        payload.pop("result_status", None)
+        payload["resultStatus"] = upstream_status
+        forwarded["payload"] = _canonical_json(payload).decode("utf-8")
+    elif isinstance(raw_payload, dict):
+        payload = dict(raw_payload)
+        payload.pop("result_status", None)
+        payload["resultStatus"] = upstream_status
+        forwarded["payload"] = payload
+    else:
+        forwarded.pop("result_status", None)
+        forwarded["resultStatus"] = upstream_status
+    if "resultStatus" in forwarded or "result_status" in forwarded:
+        forwarded.pop("result_status", None)
+        forwarded["resultStatus"] = upstream_status
+    return forwarded
+
+
+def _project_plan_task(project: dict[str, Any], task_id: str) -> dict[str, Any] | None:
+    tasks = list(project.get("tasks", []) if isinstance(project.get("tasks"), list) else [])
+    raw_loop = project.get("loop")
+    loop = cast(dict[str, Any], raw_loop) if isinstance(raw_loop, dict) else {}
+    if isinstance(loop.get("tasks"), list):
+        tasks.extend(loop["tasks"])
+    matches = [
+        item
+        for item in tasks
+        if isinstance(item, dict)
+        and str(item.get("task_id") or item.get("taskId") or "").strip() == task_id
+    ]
+    return dict(matches[0]) if len(matches) == 1 else None
+
+
+def _test_receipt_accept_readback(
+    request_id: Any,
+    arguments: dict[str, Any],
+    workspace: str,
+    binding: dict[str, Any],
+    contract: dict[str, Any],
+) -> tuple[str, str, dict[str, Any] | None]:
+    """Read both AgentTeams authorities and classify one exact transition."""
+
+    try:
+        task_probe, task = _accept_task_probe(request_id, arguments, workspace)
+        project_id = str(contract["projectId"])
+        _project_response, project = _project_probe(request_id, project_id, workspace)
+    except GuardPolicyError:
+        return "unknown", "", None
+    if project.get("source") != binding.get("source"):
+        return "conflict", "", project
+    project_risk = project.get("risk_tier")
+    if project_risk is not None and project_risk != binding.get("riskTier"):
+        return "conflict", "", project
+    task_id = str(contract["taskId"])
+    submission_digest = _existing_submission_digest(task_probe)
+    node = _project_plan_task(project, task_id)
+    if submission_digest != contract["submissionSha256"] or node is None:
+        return "conflict", "", project
+    node_status = str(node.get("status") or "").strip().lower()
+    task_projection = {
+        "taskId": task_id,
+        "status": str(task.get("status") or "").strip().lower(),
+        "assignedTo": str(task.get("assigned_to") or task.get("assignedTo") or ""),
+        "resultStatus": str(
+            task.get("result_status") or task.get("resultStatus") or ""
+        ),
+        "summary": task.get("summary"),
+        "deliverables": task.get("deliverables"),
+        "submissionSha256": submission_digest,
+    }
+    raw_requester_report = project.get("requester_report")
+    requester_report = (
+        cast(dict[str, Any], raw_requester_report)
+        if isinstance(raw_requester_report, dict)
+        else {}
+    )
+    relevant_report: dict[str, Any] | None = None
+    if requester_report.get("task_id") == task_id:
+        relevant_report = {
+            "pending": requester_report.get("pending"),
+            "reason": requester_report.get("reason"),
+            "taskId": requester_report.get("task_id"),
+            "resultStatus": requester_report.get("result_status"),
+            "summary": requester_report.get("summary"),
+            "reportPath": requester_report.get("report_path"),
+        }
+    immutable_report = (
+        {key: value for key, value in relevant_report.items() if key != "pending"}
+        if relevant_report is not None
+        else None
+    )
+    projection = {
+        "schema": "devflow.agentteams.accept-authoritative-readback/v1",
+        "projectId": contract["projectId"],
+        "task": task_projection,
+        "projectNode": {"taskId": task_id, "status": node_status},
+        "requesterReport": immutable_report,
+    }
+    digest = hashlib.sha256(_canonical_json(projection)).hexdigest()
+    if node_status == "submitted":
+        return "submitted", digest, project
+    if node_status != contract["expectedNodeStatus"]:
+        return "conflict", digest, project
+    if contract["expectedNodeStatus"] == "completed":
+        expected_report = {
+            "reason": "task_result_accepted",
+            "taskId": task_id,
+            "resultStatus": contract["upstreamResultStatus"],
+            "summary": contract["summary"],
+            "reportPath": f"shared/projects/{contract['projectId']}/result.md",
+        }
+        if (
+            relevant_report is None
+            or not isinstance(relevant_report.get("pending"), bool)
+            or immutable_report != expected_report
+        ):
+            return "conflict", digest, project
+    elif relevant_report is not None and (
+        relevant_report.get("pending") is not False
+        or relevant_report.get("reason") != "task_result_revision"
+    ):
+        return "conflict", digest, project
+    return "desired", digest, project
+
+
+def _idempotent_accept_response(
+    request_id: Any,
+    contract: dict[str, Any],
+    project: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {
+        "ok": True,
+        "idempotent": True,
+        "tool": "projectflow",
+        "action": "accept_task_result",
+        "project": project,
+        "taskId": contract["taskId"],
+        "nodeStatus": contract["expectedNodeStatus"],
+        "accepted": contract["accepted"],
+    }
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": {
+            "content": [
+                {"type": "text", "text": _canonical_json(payload).decode("utf-8")}
+            ]
+        },
+    }
+
+
+def _execute_test_receipt_acceptance(
+    request: dict[str, Any],
+    request_id: Any,
+    arguments: dict[str, Any],
+    workspace: str,
+    binding: dict[str, Any],
+    receipt_context: dict[str, Any],
+    contract: dict[str, Any],
+) -> dict[str, Any]:
+    """Reserve, mutate once, read both authorities, then commit or fail closed."""
+
+    receipt_policy = cast(dict[str, Any], receipt_context["policy"])
+    source = cast(dict[str, Any], receipt_context["source"])
+    verified = cast(dict[str, str | int], receipt_context["verified"])
+    ledger_path = Path(str(receipt_policy["replayLedgerPath"]))
+    now = dt.datetime.now(dt.timezone.utc)
+    request_digest = str(contract["acceptRequestSha256"])
+    result_digest = str(contract["acceptResultSha256"])
+    with _ledger_lock(ledger_path):
+        state, reservation = _reserve_test_execution_receipt_in_locked_ledger(
+            receipt_policy,
+            source,
+            verified,
+            accept_request_sha256=request_digest,
+            accept_result_sha256=result_digest,
+            now=now,
+        )
+        if state != "new":
+            readback_state, readback_digest, project = _test_receipt_accept_readback(
+                request_id,
+                arguments,
+                workspace,
+                binding,
+                contract,
+            )
+            if readback_state == "desired" and project is not None:
+                if state == "committed":
+                    if reservation["authoritativeResultSha256"] != readback_digest:
+                        raise GuardPolicyError("test_receipt_commit_conflict")
+                else:
+                    _commit_test_execution_receipt_in_locked_ledger(
+                        receipt_policy,
+                        source,
+                        verified,
+                        accept_request_sha256=request_digest,
+                        accept_result_sha256=result_digest,
+                        authoritative_result_sha256=readback_digest,
+                        upstream_response_sha256=hashlib.sha256(
+                            _canonical_json({"observed": False, "reason": "recovered"})
+                        ).hexdigest(),
+                        now=dt.datetime.now(dt.timezone.utc),
+                    )
+                return _attest_project_response(
+                    _idempotent_accept_response(request_id, contract, project),
+                    str(contract["projectId"]),
+                    binding,
+                )
+            if state == "committed":
+                raise GuardPolicyError("test_receipt_commit_conflict")
+            if readback_state != "submitted":
+                raise GuardPolicyError("test_receipt_authoritative_conflict")
+            if not _test_receipt_reservation_owner_available(
+                reservation,
+                now_epoch=int(dt.datetime.now(dt.timezone.utc).timestamp()),
+            ):
+                raise GuardPolicyError("test_receipt_reservation_busy")
+            _release_test_execution_receipt_in_locked_ledger(
+                receipt_policy,
+                source,
+                verified,
+                accept_request_sha256=request_digest,
+                accept_result_sha256=result_digest,
+                owner_id=None,
+                now=dt.datetime.now(dt.timezone.utc),
+                allow_orphaned=True,
+            )
+            state, reservation = _reserve_test_execution_receipt_in_locked_ledger(
+                receipt_policy,
+                source,
+                verified,
+                accept_request_sha256=request_digest,
+                accept_result_sha256=result_digest,
+                now=dt.datetime.now(dt.timezone.utc),
+            )
+            if state != "new":  # pragma: no cover - lock-held invariant
+                raise GuardPolicyError("test_receipt_reservation_conflict")
+
+        forwarded_arguments = _forwarded_test_receipt_accept_arguments(
+            arguments, contract
+        )
+        params = request.get("params")
+        guarded_params = dict(params) if isinstance(params, dict) else {}
+        guarded_params["arguments"] = forwarded_arguments
+        guarded = dict(request)
+        guarded["params"] = guarded_params
+        try:
+            response = upstream.handle_request(guarded)
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            TimeoutError,
+            UnicodeError,
+            json.JSONDecodeError,
+        ):
+            # The readback below decides whether this was a pre-mutation
+            # failure or a response lost after the authoritative mutation.
+            response = None
+        readback_state, readback_digest, project = _test_receipt_accept_readback(
+            request_id,
+            arguments,
+            workspace,
+            binding,
+            contract,
+        )
+        response_payload = _action_payload(response if isinstance(response, dict) else None)
+        if readback_state == "desired" and project is not None:
+            response_digest = hashlib.sha256(
+                _canonical_json(
+                    response
+                    if isinstance(response, dict)
+                    else {"observed": False, "reason": "response-lost"}
+                )
+            ).hexdigest()
+            _commit_test_execution_receipt_in_locked_ledger(
+                receipt_policy,
+                source,
+                verified,
+                accept_request_sha256=request_digest,
+                accept_result_sha256=result_digest,
+                authoritative_result_sha256=readback_digest,
+                upstream_response_sha256=response_digest,
+                now=dt.datetime.now(dt.timezone.utc),
+            )
+            effective_response = (
+                response
+                if isinstance(response, dict)
+                and response_payload is not None
+                and response_payload.get("ok") is True
+                else _idempotent_accept_response(request_id, contract, project)
+            )
+            return _attest_project_response(
+                effective_response,
+                str(contract["projectId"]),
+                binding,
+            )
+        if readback_state == "submitted" and (
+            response_payload is None or response_payload.get("ok") is False
+        ):
+            _release_test_execution_receipt_in_locked_ledger(
+                receipt_policy,
+                source,
+                verified,
+                accept_request_sha256=request_digest,
+                accept_result_sha256=result_digest,
+                owner_id=str(reservation["ownerId"]),
+                now=dt.datetime.now(dt.timezone.utc),
+            )
+            raise GuardPolicyError("test_receipt_upstream_not_applied")
+        raise GuardPolicyError("test_receipt_authoritative_conflict")
 
 
 def _idempotent_response(
@@ -3971,6 +5603,8 @@ def handle_request(
                     return missing_response
                 raise GuardPolicyError("unbound_project_state") from None
 
+            test_receipt_acceptance_context: dict[str, Any] = {}
+            test_receipt_acceptance_contract: dict[str, Any] | None = None
             if action == "accept_task_result" and identity["runtimeName"] == "devflow-lead":
                 task_probe, submitted_task = _accept_task_probe(
                     request_id,
@@ -3982,7 +5616,13 @@ def handle_request(
                     task_probe,
                     submitted_task,
                     identity,
+                    test_receipt_context=test_receipt_acceptance_context,
                 )
+                if test_receipt_acceptance_context:
+                    test_receipt_acceptance_contract = _test_receipt_accept_contract(
+                        arguments,
+                        submitted_task,
+                    )
 
             if action == "resume_project":
                 ledger_path = Path(str(policy["ledgerPath"]))
@@ -4059,20 +5699,49 @@ def handle_request(
                 )
                 risk_tier = str(binding["riskTier"])
                 if risk_tier in HIGH_RISK_TIERS:
-                    _validate_and_consume_approval(
-                        policy,
-                        arguments,
-                        binding=binding,
-                        action=action,
-                        project_id=project_id,
-                        task_id=approval_task_id,
-                        risk_tier=risk_tier,
+                    reserved_retry = bool(
+                        test_receipt_acceptance_contract is not None
+                        and _has_matching_test_receipt_reservation(
+                            test_receipt_acceptance_context,
+                            test_receipt_acceptance_contract,
+                        )
                     )
+                    if reserved_retry:
+                        _validate_preconsumed_approval(
+                            policy,
+                            arguments,
+                            binding=binding,
+                            action=action,
+                            project_id=project_id,
+                            task_id=approval_task_id,
+                            risk_tier=risk_tier,
+                        )
+                    else:
+                        _validate_and_consume_approval(
+                            policy,
+                            arguments,
+                            binding=binding,
+                            action=action,
+                            project_id=project_id,
+                            task_id=approval_task_id,
+                            risk_tier=risk_tier,
+                        )
                 elif "approval" in arguments:
                     raise GuardPolicyError("low_risk_approval_forbidden")
                 arguments.pop("approval", None)
             elif action == "pause_project" and "approval" in arguments:
                 raise GuardPolicyError("pause_approval_forbidden")
+
+            if test_receipt_acceptance_contract is not None:
+                return _execute_test_receipt_acceptance(
+                    request,
+                    request_id,
+                    arguments,
+                    workspace,
+                    binding,
+                    test_receipt_acceptance_context,
+                    test_receipt_acceptance_contract,
+                )
 
             params["arguments"] = arguments
             guarded = dict(request)

@@ -1,0 +1,86 @@
+# =============================================================================
+# DevFlow portable/local MCP profile
+# =============================================================================
+# This file is intentionally separate from mcp_servers.yaml. It supports the
+# deterministic Python demo and local development only; it is not the
+# AgentTeams Tester deployment contract and is not an operating-system sandbox.
+# =============================================================================
+
+servers:
+  github:
+    description: "Official GitHub MCP Server — revision-pinned read-only evidence."
+    enabled: true
+    transport: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-github"
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      GITHUB_REPO_OWNER: "${GITHUB_REPO_OWNER}"
+      GITHUB_REPO_NAME: "${GITHUB_REPO_NAME}"
+    tools:
+      - name: "get_file_contents"
+        description: "Fetch file contents or a directory listing from a repository."
+        allowed_agents: ["LocatorAgent"]
+        allowed_skills: ["github-evidence"]
+        readonly: true
+    rate_limit:
+      requests_per_hour: 4000
+      burst: 30
+      on_limit: "wait_and_retry"
+    health_check:
+      interval_seconds: 60
+      timeout_seconds: 5
+
+  devflow-cicd-portable:
+    description: "Local process-only CI MCP with server-owned focused/full argv profiles."
+    enabled: true
+    execution_profile: "portable-process-only/v1"
+    policy_identity: "portable-immutable-baseline/v1"
+    transport: "http"
+    propagate_context: true
+    host: "127.0.0.1"
+    port: "${MCP_CICD_PORT}"
+    command: "python"
+    args:
+      - "-m"
+      - "devflow.mcp.cicd_server"
+    env:
+      DEVFLOW_REPOSITORY_ROOT: "${DEVFLOW_REPOSITORY_ROOT}"
+      CICD_FOCUSED_TEST_COMMAND_JSON: "${CICD_FOCUSED_TEST_COMMAND_JSON}"
+      CICD_FULL_TEST_COMMAND_JSON: "${CICD_FULL_TEST_COMMAND_JSON}"
+      DEVFLOW_MCP_CONTEXT_HMAC_KEY: "${DEVFLOW_MCP_CONTEXT_HMAC_KEY}"
+      AUDIT_LOG_PATH: "${AUDIT_LOG_PATH}"
+    tools:
+      - name: "run_tests"
+        description: >-
+          Apply a typed Patch to disposable copies. The signed local risk_tier
+          selects one of two fixed server-owned argv profiles; callers cannot
+          submit full_suite, a command, or a repository path.
+        allowed_agents: ["TesterAgent"]
+        allowed_skills: ["test-runner"]
+        readonly: false
+        input_schema:
+          type: "object"
+          required: ["issue_id", "patch"]
+          additionalProperties: false
+          properties:
+            issue_id: {type: "integer", minimum: 1}
+            patch: {type: "object"}
+    rate_limit:
+      requests_per_minute: 60
+      burst: 10
+      on_limit: "queue"
+    health_check:
+      interval_seconds: 30
+      timeout_seconds: 3
+
+client_policy:
+  call_timeout_seconds: 120
+  reconnect:
+    max_attempts: 5
+    initial_delay_seconds: 1
+    max_delay_seconds: 15
+  on_server_unavailable: "fail_closed"
+  audit: true

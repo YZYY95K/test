@@ -13,7 +13,7 @@ import json
 import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
@@ -30,8 +30,9 @@ from devflow.agents.locator_agent import LocatedContext, RootCause
 from devflow.collaboration import DurableRouteLedger
 from devflow.event_bus import LocalAgentEventRuntime, clear, event_bus, publish
 from devflow.local_runtime import LocalAgentTaskRouter
-from devflow.mcp.cicd import IsolatedTestService
+from devflow.mcp.cicd import PORTABLE_CICD_SERVER, IsolatedTestService
 from devflow.mcp.context_auth import HMACContextAuthority
+from devflow.mcp.contracts import MCPCallContext
 from devflow.mcp.policy import MCPPolicy, MemoryAuditSink, PolicyEnforcedMCPClient
 from devflow.models.issue import (
     ComplexityLevel,
@@ -134,38 +135,39 @@ class DemoVectorStore:
 
 
 class DemoMCPClient:
-    """Confined file and CI adapter used by the offline demonstration."""
+    """Confined CI adapter used by the offline demonstration."""
 
     def __init__(self, repo: Path) -> None:
         self.repo = repo.resolve()
 
     async def call_tool(self, server: str, tool: str, arguments: dict[str, Any]) -> Any:
-        if (server, tool) == ("github", "get_file_contents"):
-            path = self._safe_path(str(arguments["path"]))
-            return {"content": path.read_text(encoding="utf-8")}
-        if (server, tool) == ("cicd", "run_tests"):
+        if (server, tool) == (PORTABLE_CICD_SERVER, "run_tests"):
             patch = Patch.model_validate(arguments["patch"])
+            context = MCPCallContext.model_validate(arguments["devflow_context"])
+            if context.risk_tier is None:
+                raise ValueError("portable demo CI requires a signed risk tier")
             service = IsolatedTestService(
                 self.repo,
+                (
+                    sys.executable,
+                    "-m",
+                    "unittest",
+                    "discover",
+                    "-s",
+                    "tests",
+                    "-p",
+                    "test_calculator.py",
+                    "-v",
+                ),
                 (sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"),
                 timeout_seconds=30,
             )
             result = await service.run_tests(
                 patch,
-                full_suite=bool(arguments["full_suite"]),
+                risk_tier=context.risk_tier,
             )
             return result.model_dump(mode="json")
         raise ValueError(f"Demo MCP tool is not available: {server}:{tool}")
-
-    def _safe_path(self, relative: str) -> Path:
-        path = PurePosixPath(relative.replace("\\", "/"))
-        if path.is_absolute() or ".." in path.parts:
-            raise ValueError(f"Unsafe repository path: {relative}")
-        resolved = (self.repo / Path(*path.parts)).resolve()
-        if self.repo not in resolved.parents and resolved != self.repo:
-            raise ValueError(f"Path escapes demo repository: {relative}")
-        return resolved
-
 
 class DemoExperienceStore:
     """In-memory evidence sink proving the terminal knowledge write."""
@@ -207,7 +209,7 @@ async def run_demo(output_dir: Path | None = None) -> tuple[dict[str, Any], Path
     context_authority = HMACContextAuthority(b"devflow-offline-demo-context-key-only")
     mcp = PolicyEnforcedMCPClient(
         DemoMCPClient(repo),
-        MCPPolicy.from_file(_root() / "config" / "mcp_servers.yaml"),
+        MCPPolicy.from_file(_root() / "config" / "mcp_servers.portable.yaml"),
         mcp_audit,
         context_signer=context_authority,
     )

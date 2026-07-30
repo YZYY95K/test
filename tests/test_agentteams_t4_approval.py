@@ -7,12 +7,15 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+import scripts.run_agentteams_github_success_path as github_success_path
+import scripts.run_agentteams_t4_approval as t4_approval
 from scripts.run_agentteams_github_success_path import (
     REMOTE_CONTROL_HELPER,
     DriverError,
@@ -23,6 +26,8 @@ from scripts.run_agentteams_t4_approval import (
     APPROVAL_AUDIENCE,
     PREPARE_CONFIRMATION,
     RESUME_CONFIRMATION_PREFIX,
+    T4KubernetesBackend,
+    _load_approval,
     _resume_arguments,
     approval_request_digest,
     approval_target_digest,
@@ -40,6 +45,154 @@ PROJECT_ID = "devflow-live-t4-driver-test"
 TEST_APPROVAL_DOMAIN = "a" * 64
 TEST_POLICY_KEY_SHA256 = "b" * 64
 TEST_PROJECT_BINDING_DIGEST = "c" * 64
+
+
+def test_approval_loader_reads_one_bounded_regular_file(tmp_path: Path) -> None:
+    approval_path = tmp_path / "approval.json"
+    approval_path.write_text('{"evidence":{},"signature":"fixture"}\n', encoding="utf-8")
+    if os.name == "posix":
+        approval_path.chmod(0o600)
+
+    assert _load_approval(approval_path) == {
+        "evidence": {},
+        "signature": "fixture",
+    }
+
+
+def test_approval_loader_rejects_empty_or_oversized_files(tmp_path: Path) -> None:
+    for name, payload in (("empty.json", b""), ("large.json", b"x" * 16_385)):
+        approval_path = tmp_path / name
+        approval_path.write_bytes(payload)
+        if os.name == "posix":
+            approval_path.chmod(0o600)
+        with pytest.raises(DriverError, match="approval_file_invalid"):
+            _load_approval(approval_path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX metadata is not portable")
+def test_approval_loader_rejects_weak_mode_or_hard_link(tmp_path: Path) -> None:
+    weak = tmp_path / "weak.json"
+    weak.write_text("{}", encoding="utf-8")
+    weak.chmod(0o644)
+    with pytest.raises(DriverError, match="approval_file_invalid"):
+        _load_approval(weak)
+
+    original = tmp_path / "original.json"
+    linked = tmp_path / "linked.json"
+    original.write_text("{}", encoding="utf-8")
+    original.chmod(0o600)
+    os.link(original, linked)
+    with pytest.raises(DriverError, match="approval_file_invalid"):
+        _load_approval(original)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX metadata is not portable")
+def test_approval_loader_requires_private_absolute_parent(tmp_path: Path) -> None:
+    weak_parent = tmp_path / "weak-parent"
+    weak_parent.mkdir(mode=0o755)
+    weak_parent.chmod(0o755)
+    approval_path = weak_parent / "approval.json"
+    approval_path.write_text("{}", encoding="utf-8")
+    approval_path.chmod(0o600)
+
+    with pytest.raises(DriverError, match="approval_file_invalid"):
+        _load_approval(approval_path)
+
+
+def test_t4_runtime_preflight_attests_only_leader_required_surface(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    roles = (
+        "devflow-lead",
+        "devflow-triage",
+        "devflow-locator",
+        "devflow-coder",
+        "devflow-tester",
+        "devflow-reviewer",
+    )
+    targets = [
+        SimpleNamespace(
+            role_name=role,
+            workspace=f"/root/hiclaw-fs/agents/{role}",
+            matrix_user_id=f"@{role}:matrix.test",
+        )
+        for role in roles
+    ]
+    backend = T4KubernetesBackend("kubectl")
+    runner_calls: list[list[str]] = []
+
+    def fake_run(
+        arguments: list[str],
+        *,
+        input_data: bytes | None = None,
+        timeout: int = 180,
+    ) -> str:
+        del input_data, timeout
+        runner_calls.append(arguments)
+        return "{}"
+
+    monkeypatch.setattr(backend.runner, "run", fake_run)
+    monkeypatch.setattr(
+        t4_approval,
+        "discover_targets",
+        lambda _team, _pods, *, require_github_issuer_token: (
+            targets
+            if require_github_issuer_token is False
+            else pytest.fail("T4 preflight must not require a GitHub issuer token")
+        ),
+    )
+    executed_roles: list[str] = []
+
+    def fake_exec(
+        target: Any,
+        helper: str,
+        helper_arguments: list[str],
+        *,
+        input_data: bytes | None = None,
+        timeout_seconds: int,
+    ) -> str:
+        del helper, helper_arguments, input_data, timeout_seconds
+        executed_roles.append(str(target.role_name))
+        server = github_success_path.TEAMHARNESS_SERVER
+        return _canonical_text(
+            {
+                "ok": True,
+                "role": "devflow-lead",
+                "serverNames": [server],
+                "skillAttested": False,
+                "mcporterSha256": github_success_path.EXPECTED_MCPORTER_SHA256,
+                "mcporterVersion": github_success_path.EXPECTED_MCPORTER_VERSION,
+                "configSha256": github_success_path._sha256(
+                    github_success_path._canonical_bytes(
+                        github_success_path._normalized_mcporter_config(
+                            "devflow-lead"
+                        )
+                    )
+                ),
+                "schemaCanonicalization": (
+                    github_success_path.MCP_SCHEMA_CANONICALIZATION_ID
+                ),
+                "schemaCanonicalSha256": {
+                    server: github_success_path.EXPECTED_MCP_SCHEMA_CANONICAL_SHA256[
+                        "devflow-lead"
+                    ][server]
+                },
+                "schemaCanonicalBytes": {
+                    server: github_success_path.EXPECTED_MCP_SCHEMA_CANONICAL_BYTES[
+                        "devflow-lead"
+                    ][server]
+                },
+            }
+        )
+
+    monkeypatch.setattr(backend, "_exec", fake_exec)
+
+    context = backend.preflight()
+
+    assert executed_roles == ["devflow-lead"]
+    assert context.leader_matrix_user_id == "@devflow-lead:matrix.test"
+    assert context.locator_matrix_user_id == "@devflow-locator:matrix.test"
+    assert len(runner_calls) == 3
 
 
 def _binding(

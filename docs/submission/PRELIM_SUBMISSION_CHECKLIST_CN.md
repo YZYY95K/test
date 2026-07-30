@@ -10,8 +10,8 @@
 ## 必交材料
 
 - [x] 作品简介正文已写入 `INTRO_500_CN.md`。
-- [x] 本地按 .NET UTF-16 `String.Length`（包含空格、段落换行与文件末尾换行）检查为 487，
-  小于 500；仍需以
+- [x] 本地按 .NET UTF-16 `String.Length` 检查：粘贴正文为 499，计入文件末尾换行为 500，
+  不超过 500；仍需以
   报名表计数器为最终标准，标题不粘贴。
 - [x] 12 页最终候选方案已生成两种格式：
   [PPT](../../outputs/DevFlow_GOAI_2026_初赛方案_20260728.pptx)（52,153 bytes，
@@ -138,7 +138,7 @@
 | OpenClaw 强边界 | `strongBoundaryEnforceable=false`，6 项 blocker 已记录 |
 | 方案文件 | 12 页 PPT/PDF 已完成本地 QA；未等同平台提交 |
 | 正式视频 | 未完成 |
-| 当前候选工作树覆盖率 | 2026-07-28 冻结前门：971 passed、17 skipped、84.75%（6,314 statements / 963 missed）；其后代码仍有变化，最终 commit 必须再次复跑 |
+| 当前候选工作树覆盖率 | 2026-07-30 完整门：1,330 passed、24 skipped、84.06%（6,325 statements / 1,008 missed）；尚未绑定 clean commit、CI 或 release provenance，最终 commit 必须再次复跑 |
 
 ## 最终提交前 30 分钟
 

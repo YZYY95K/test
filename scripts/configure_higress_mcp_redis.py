@@ -151,7 +151,9 @@ def _scalar(tail: str) -> str:
     return value
 
 
-def reconcile_higress_yaml(source: str) -> tuple[str, bool]:
+def reconcile_higress_yaml(
+    source: str, *, initialize_missing_mcp_server: bool = False
+) -> tuple[str, bool]:
     """Return a canonical Redis block and whether the source needed a change.
 
     This is intentionally not a general YAML parser.  It recognizes only the
@@ -179,6 +181,50 @@ def reconcile_higress_yaml(source: str) -> tuple[str, bool]:
         parsed = _mapping(line)
         if parsed is not None and parsed[0] == 0 and parsed[1] == "mcpServer":
             mcp_indexes.append(index)
+    if not mcp_indexes and initialize_missing_mcp_server:
+        # The pinned Higress 2.2.1 Helm chart renders only the generic gateway
+        # settings.  Its official MCP quick start requires operators to add the
+        # top-level mcpServer block explicitly.  Keep that bootstrap behind a
+        # dedicated flag and reject YAML document/sequence/complex-key shapes
+        # rather than guessing how to merge them.
+        top_level_keys: set[str] = set()
+        saw_top_level = False
+        for line in lines:
+            if _is_ignorable(line):
+                continue
+            indentation = len(line) - len(line.lstrip(" "))
+            parsed = _mapping(line)
+            if indentation == 0:
+                if parsed is None or parsed[1] in top_level_keys:
+                    raise ConfigurationError(
+                        "higress configuration has an unsupported top-level structure"
+                    )
+                top_level_keys.add(parsed[1])
+                saw_top_level = True
+            elif not saw_top_level:
+                raise ConfigurationError(
+                    "higress configuration has an unsupported top-level structure"
+                )
+        if not top_level_keys:
+            raise ConfigurationError(
+                "higress configuration has an unsupported top-level structure"
+            )
+        newline = "\r\n" if "\r\n" in source else "\n"
+        canonical = "".join(
+            [
+                f"mcpServer:{newline}",
+                f"  sse_path_suffix: /sse{newline}",
+                f"  enable: true{newline}",
+                f"  redis:{newline}",
+                f"    address: {REDIS_ADDRESS}{newline}",
+                f'    username: ""{newline}',
+                f'    password: ""{newline}',
+                f"    db: 0{newline}",
+                f"  match_list: []{newline}",
+                f"  servers: []{newline}",
+            ]
+        )
+        return canonical + source, True
     if len(mcp_indexes) != 1:
         raise ConfigurationError(
             "higress configuration must contain one top-level mcpServer mapping"
@@ -380,7 +426,12 @@ def _configmap_state(document: dict[str, Any]) -> tuple[str, str]:
     return resource_version, source
 
 
-def configure(client: KubernetesClient, *, apply: bool) -> bool:
+def configure(
+    client: KubernetesClient,
+    *,
+    apply: bool,
+    initialize_missing_mcp_server: bool = False,
+) -> bool:
     """Validate dependencies and check or reconcile Redis session storage."""
 
     service = client.get_json("service", name=SERVICE_NAME)
@@ -393,7 +444,10 @@ def configure(client: KubernetesClient, *, apply: bool) -> bool:
 
     configmap = client.get_json("configmap", name=CONFIGMAP_NAME)
     previous_version, source = _configmap_state(configmap)
-    desired, changed = reconcile_higress_yaml(source)
+    desired, changed = reconcile_higress_yaml(
+        source,
+        initialize_missing_mcp_server=initialize_missing_mcp_server,
+    )
     if not changed:
         return False
     if not apply:
@@ -431,13 +485,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="verify only (the default); do not mutate Kubernetes",
     )
+    parser.add_argument(
+        "--initialize-missing-mcp-server",
+        action="store_true",
+        help=(
+            "with --apply, bootstrap the official Higress 2.2.1 mcpServer "
+            "block when the chart did not render one"
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        changed = configure(KubectlClient(), apply=bool(args.apply))
+        if args.initialize_missing_mcp_server and not args.apply:
+            raise ConfigurationError(
+                "--initialize-missing-mcp-server requires --apply"
+            )
+        changed = configure(
+            KubectlClient(),
+            apply=bool(args.apply),
+            initialize_missing_mcp_server=bool(
+                args.initialize_missing_mcp_server
+            ),
+        )
     except ConfigurationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

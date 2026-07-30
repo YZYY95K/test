@@ -42,6 +42,10 @@ const finalPptxPath = path.resolve(
   repoRoot,
   args.out || "outputs/DevFlow_GOAI_2026_决赛路演_20260728.pptx",
 );
+// In the audited template-following workflow, --source is the validated
+// template-starter.pptx.  Keeping this explicit alias lets the fidelity gate
+// distinguish inherited-slide editing from a fresh-slide rebuild.
+const starterPptxPath = sourcePptxPath;
 
 const runtimeDependencies = path.resolve(
   process.env.CODEX_RUNTIME_DEPENDENCIES ||
@@ -69,7 +73,7 @@ if (!artifactEntrypoint) {
 }
 const { FileBlob, PresentationFile } = await import(pathToFileURL(artifactEntrypoint).href);
 
-const presentation = await PresentationFile.importPptx(await FileBlob.load(sourcePptxPath));
+const presentation = await PresentationFile.importPptx(await FileBlob.load(starterPptxPath));
 
 // Artifact-tool anchor ids are scoped to the current import. Resolve the
 // inherited template elements by their exact source text inside this import.
@@ -109,6 +113,9 @@ function replaceExact(label, before, after) {
   }
 }
 
+// The second string in each tuple is a match-only literal inherited from the
+// old template. Historical numbers in those literals are not output evidence;
+// only the third string is written to the rebuilt deck.
 const replacements = [
   ["sh/0nepknq1", "DevFlow\n边界驱动的多 Agent 研发闭环", "DevFlow\n可审计的多 Agent 研发闭环"],
   ["sh/mpw7mx87", "以 AgentTeams 为协同基点｜职责清晰、交接可验、工具默认拒绝", "AgentTeams 基点｜职责有界｜交接可验｜风险暂停"],
@@ -130,10 +137,10 @@ const replacements = [
   ["sh/y5krapsv", "Triage\nissue-classifier → ClassifiedIssue；不读写仓库。", "Triage\n只做分类；不读写仓库，结构化结果回 Leader。"],
   ["sh/z6tsja9g", "Locator\n固定 revision 只读定位；不得修改、执行或扩大路径范围。", "Locator\n固定四元 scope 只读；不修改、不执行、不扩权。"],
   ["sh/vy54jqxw", "Coder\n仅产最小补丁候选；不测试、不推送、不合并。", "Coder\n只产最小补丁；不测试、不推送，结果回 Leader。"],
-  ["sh/h0fat4re", "Tester\n一次性副本验证；只运行服务器预注册 CI 动作。", "Tester\n隔离副本跑预注册 CI，签名测试证据；不改 canonical。"],
+  ["sh/h0fat4re", "Tester\n一次性副本验证；只运行服务器预注册 CI 动作。", "Tester\n隔离副本跑预注册 CI，摘要绑定证据；不改 canonical。"],
   ["sh/i1obm9sz", "Reviewer\n独立审查与经验提炼；不合并、不部署、无 GitHub 写能力。", "Reviewer\n只给 ready/retry/blocked；不合并、不部署、不直达 Coder。"],
   ["sh/32xsve9k", "HumanReviewer\n系统外部授权主体；只批准 T4/T5，不计入六个 Agent。", "Human Authority\n外部授权主体；只对精确 T4/T5 目标签名，不是 Agent。"],
-  ["sh/436toja5", "冲突优先级\n安全 > 人工策略 > 测试证据 > 审查 > Coder 自检。", "冲突优先级\n安全 > 外部批准 > 签名测试 > 审查 > Coder 自检。"],
+  ["sh/436toja5", "冲突优先级\n安全 > 人工策略 > 测试证据 > 审查 > Coder 自检。", "冲突优先级\n安全 > 外部批准 > 完整性证据 > 审查 > Coder 自检。"],
 
   ["sh/vapwjitg", "身份可执行，交接可校验\n房间消息只做协作，不做授权", "身份、交接、权限三层同时成立\n任务才可以执行"],
   ["sh/u9gvadsv", "01｜我是谁\n进程身份 + Worker 角色 + Skill owner。\n提示词里的“我是 Leader”不能改变进程身份。", "01｜我是谁\n进程身份 + Worker + Skill owner。\n提示词不能升级身份或权限。"],
@@ -142,35 +149,37 @@ const replacements = [
 
   ["sh/1orip4ju", "TeamHarness 将“协作”约束成有状态协议", "AgentTeams 五项硬映射：从框架对象到协作语义"],
   ["sh/orihkj25", "ASSIGN / ACK", "01 角色 / 02 拆解"],
-  ["sh/3upgfa1g", "SUBMIT / ACCEPT", "03 上下文 / 04 执行"],
+  ["sh/3upgfa1g", "SUBMIT / ACCEPT", "03/04 协同"],
   ["sh/itwz65kv", "REPORT / READBACK", "05 状态追踪"],
   ["sh/t8j6d43a", "风险先冻结\nLeader 固定 T1–T5；有界 assignment。Worker 只对自己的任务幂等 ACK。", "角色编排｜任务拆解\nManager 建 Team；Leader 拆 DAG 并定向 assignment；Worker 只 ACK 自己的任务。"],
   ["sh/snqp4z25", "摘要不漂移\n同 assignment 重试必须保持同一摘要；不同摘要直接冲突失败。红测经 Leader 转发脱敏、有界证据。", "上下文传递｜协同执行\nTeam Room 共享状态，Worker Room 保持最小上下文；Handoff 验证后调用所属 Skill。"],
   ["sh/6l8729kz", "完成要读回\nmark → push → pending=false。T4/T5 设计要求外部 Ed25519 批准；真人闭环尚待实证。", "状态追踪\ntaskflow 跟踪 ACK、结果、验收与读回；失败 retry，高风险 PAUSED。"],
 
   ["sh/0juhszid", "GitHub 只读能力：请求必须穿过五道边界", "MCP 权限不是提示词：每次读取穿过五道边界"],
-  ["sh/e9cnelcb", "Leader：签发固定 repo / revision / path", "Leader：签发 tenant / repo / revision / path"],
+  ["sh/e9cnelcb", "Leader：签发固定 repo / revision / path", "Leader：固定 assignment scope，不签发凭据"],
   ["sh/ofe5kfud", "Locator：仅 github-evidence，可读不可写", "Locator：仅 github-evidence；只读、不可扩大 scope"],
   ["sh/mdwni5cn", "Higress：Consumer=Locator；Wasm FAIL_CLOSE", "Higress：Consumer=Locator；身份错配 FAIL_CLOSE"],
-  ["sh/nml03eh4", "Broker：复核能力签名、Agent + Skill 与精确 scope", "Broker：复核 token、Agent/Skill 与精确 scope"],
+  ["sh/nml03eh4", "Broker：复核能力签名、Agent + Skill 与精确 scope", "Issuer / Broker：验身份与 scope，签发并复核短期 capability"],
   ["sh/bq507eh0", "回执：Git object + content digest，可独立重算", "回执：task/request + Git object + content digest"],
   ["sh/poni54zu", "默认拒绝：错路径 403｜Reviewer 403｜Locator 直连 Broker 被阻断", "默认拒绝：错路径｜错租户｜错身份｜直连｜过期或重放"],
 
   ["sh/476tsrux", "七个 Skill 的工程标准：可调用、可拒绝、可验证、可复用", "七个 Skill 是可发布资产，不是七段提示词"],
-  ["sh/58fu1wvi", "test-runner\nTester｜隔离副本、基线与回归 → TestEvidence", "test-runner\nTester｜隔离基线→候选；签名 attestation → TestEvidence"],
+  ["sh/58fu1wvi", "test-runner\nTester｜隔离副本、基线与回归 → TestEvidence", "test-runner\nTester｜候选独立 CI 合同；待服务器实跑"],
   ["sh/uh4bmxcv", "pr-reviewer\nReviewer｜正确性、安全性与是否可进入人工门", "pr-reviewer\nReviewer｜ready / retry / blocked；T4/T5 只能 blocked"],
   ["sh/vidsv2dg", "experience-distiller\nReviewer｜脱敏复盘 → 可复用经验", "experience-distiller\nReviewer｜只消费 VERIFIED 终态证据；无终态不沉淀"],
   ["sh/w3mto7u1", "统一质量门\n输入输出、触发拒绝、依赖失败、角色归属、安全验证、版本；7/7 静态 100/100。", "统一质量门\n7/7 静态 100/100；14 组行为案例结构门；每个 Skill 可独立校验与回滚。"],
   ["sh/fehc76dk", "github-evidence\nLocator｜固定 repo / revision / path 的只读证据", "github-evidence\nLocator｜固定 tenant / repo / revision / path 的只读证据"],
 
-  ["sh/zq1cnulc", "真实环境已验证的不是“会说”，而是状态与拒绝", "离线 Demo 不是预制 JSON：六阶段、真实测试、持久审计"],
+  ["sh/zq1cnulc", "真实环境已验证的不是“会说”，而是状态与拒绝", "本地已验：离线六阶段、真实副本测试、SQLite 审计"],
   ["sh/rmhcjulg", "2 节点", "6/6"],
   ["sh/3mh4rmxc", "3 层", "18"],
-  ["sh/2l83yhgr", "84.40%", "7/7"],
+  // The left-hand strings are immutable template match keys from the 2026-07-28
+  // source deck.  Only the right-hand strings are emitted into the candidate.
+  ["sh/2l83yhgr", "84.40%", "84.06%"],
   ["sh/0ratwz2x", "Triage → Reviewer\ncompleted；pending=false", "阶段路由\n注册→租约→封存"],
   ["sh/ql8bqp4v", "错路径 / 错身份 / 直连\n分别被拒绝或阻断", "审计事件\n哈希链可离线重算"],
-  ["sh/lsjup43i", "846 passed / 17 skipped\n7/7 Skill 静态 100/100", "Skill 包\n独立验证器全部通过"],
-  ["sh/pozmtwfi", "现场证据 + 本地发布门\n2026-07-27 AgentTeams v1.2.0-beta.1 现场；2026-07-28 DevFlow v1.3.0 本地门。数字分别对应项目状态、边界负例与本地质量。", "本地确定性证据\n同一 task 走六个阶段路由：隔离 CI、SQLite 路由账本、跨进程租约、哈希审计链均真实执行。它只证明本地状态机与边界可复跑；不冒充集群现场或仓库修复成功率。"],
+  ["sh/lsjup43i", "846 passed / 17 skipped\n7/7 Skill 静态 100/100", "1,330 passed / 24 skipped\n7/7 Skill 静态 100/100"],
+  ["sh/pozmtwfi", "现场证据 + 本地发布门\n2026-07-27 AgentTeams v1.2.0-beta.1 现场；2026-07-28 DevFlow v1.3.0 本地门。数字分别对应项目状态、边界负例与本地质量。", "本地确定性证据\n同一 task 走六阶段路由；临时副本测试、SQLite 路由账本、跨进程租约和哈希链真实执行。独立 AgentTeams CI Pod 仍待服务器实跑；本地证据不冒充集群或仓库修复成功率。"],
 
   ["sh/t43y1on6", "证据矩阵：把“现场”“测试”“待验证”明确分层", "证据矩阵：能力、失败与诚实口径逐项对齐"],
   ["sh/s3ux836l", "证据纪律\n每条能力只使用与其成熟度匹配的表述；真实集群、本地确定性演示与边界基准不得拼接成未发生的完整修复。", "证据纪律\n真实现场、本地集成与清单验证分别陈列。尚未发生的集群六阶段、真人批准恢复与仓库修复，不用拼接证据代替。"],
@@ -180,15 +189,15 @@ const replacements = [
   ["sh/vqxwfy1w", "20%｜工程、安全、审计\n可运行材料；日志、Trace、Metrics。\nMCP、RAG 与观测链可验证。\n密钥、审批、回滚、降级、审计不缺位。", "20%｜工程 / 安全 / 审计\n可运行交付；Trace / Metrics / Log。\nMCP、RAG、凭据、回滚与审计可验证。\n配置存在不等于集成完成。"],
   ["sh/apovmt0b", "5%｜开放 / 开源\nApache-2.0、接口契约、README、复现实例与贡献说明。公开仓库、最终 tag 与提交包一致性仍需提交人终检。", "5%｜开放 / 开源\nApache-2.0、README、部署与测试；固定 tag 和交付包用 SHA-256 对齐。"],
 
-  ["sh/zudsz2tw", "距离“夺冠作品”还差三条现场闭环", "决赛现场只演三条链：成功、失败、人工批准"],
+  ["sh/zudsz2tw", "距离“夺冠作品”还差三条现场闭环", "决赛目标三条链：未放行的不标 LIVE"],
   ["sh/mxorahsn", "P0 · 六阶段修复", "成功 · 六阶段"],
   ["sh/p4vatsbu", "P0 · 失败回传", "失败 · 红测回传"],
   ["sh/o3m90na9", "P0 · T4 人工门", "高风险 · T4"],
-  ["sh/nehc3qpg", "同一项目跑完整链\nTriage→定位→修复→测试→审查→经验沉淀；保留原始失败、补丁、绿测与 canonical 未改证据。", "同一 task 完整闭环\n分类→定位→修复→测试→审查→沉淀；展示 Team Room、6/6 路由、terminal bundle 与 audit head。"],
-  ["sh/md8va58v", "红测必须回 Coder\nTester 生成脱敏有界证据；Leader 校验后转 Coder，不得改写红测结论。", "红测只回 Coder\nTester 返回 FAILED + 红测证据；Leader 验证后只回 Coder，修复重试且不污染经验库。"],
-  ["sh/8fqdcvq1", "先拒绝，再签名恢复\npaused→未批准恢复失败→精确摘要签名→resume+审计。完成后再录正式视频并冻结最终覆盖率。", "先拒绝，再恢复\nblocked→PAUSED；无批准恢复失败；外部精确签名一次消费后 resume，重放仍拒绝。"],
+  ["sh/nehc3qpg", "同一项目跑完整链\nTriage→定位→修复→测试→审查→经验沉淀；保留原始失败、补丁、绿测与 canonical 未改证据。", "目标｜同一 task 完整闭环\n分类→定位→修复→测试→审查→沉淀；展示 Team Room、6/6 路由、terminal bundle 与 audit head。"],
+  ["sh/md8va58v", "红测必须回 Coder\nTester 生成脱敏有界证据；Leader 校验后转 Coder，不得改写红测结论。", "目标｜红测只回 Coder\nTester 返回 FAILED + 红测证据；Leader 验证后只回 Coder，修复重试且不污染经验库。"],
+  ["sh/8fqdcvq1", "先拒绝，再签名恢复\npaused→未批准恢复失败→精确摘要签名→resume+审计。完成后再录正式视频并冻结最终覆盖率。", "目标｜先拒绝，再恢复\nblocked→PAUSED；无批准恢复失败；外部精确签名一次消费后 resume，重放仍拒绝。"],
 
-  ["sh/nqtcv6dw", "已验证｜六角色部署 / 两节点闭环\n已验证｜GitHub 三层负例 / 摘要回执\n待现场｜六阶段 / 红测闭环 / T4 真人恢复", "本地已验｜六阶段 / CI / 审计 / T4\n现场已验｜两节点 / GitHub 只读边界\n待补录｜集群闭环 / 真人批准 / 三仓基准"],
+  ["sh/nqtcv6dw", "已验证｜六角色部署 / 两节点闭环\n已验证｜GitHub 三层负例 / 摘要回执\n待现场｜六阶段 / 红测闭环 / T4 真人恢复", "本地｜离线六阶段 / portable 测试 / T4 测试\n候选 / 历史｜v2.1 与 CI 合同 / 两节点与 GitHub 边界\n待服｜集群闭环 / 真人批准 / 三仓"],
   ["sh/2pkvm1wb", "DEVFLOW · PRELIM", "DEVFLOW FINALS"],
 ];
 
@@ -209,8 +218,8 @@ const evidenceRows = [
   ["路由权威", "跨进程测试", "SQLite 租约", "过期租约恢复", "外部副作用非恰一次"],
   ["测试完整性", "本地集成", "基线→候选转绿", "假 attestation 拒绝", "非真实仓库基准"],
   ["T4 审批", "本地集成", "精确签名后恢复", "错签名 / 重放拒绝", "集群恢复待录"],
-  ["AgentTeams", "真实现场", "T2 completed", "无批准恢复拒绝", "目前仅两节点"],
-  ["GitHub MCP", "真实现场", "固定 scope 读取", "错路径 / 身份 / 直连拒绝", "只读单范围"],
+  ["AgentTeams", "历史现场", "T2 completed", "无批准恢复拒绝", "2026-07-27/28，仅两节点"],
+  ["GitHub MCP", "历史现场", "固定 scope 读取", "错路径 / 身份 / 直连拒绝", "2026-07-27/28，只读单范围"],
   ["RAG 隔离", "本地集成", "tenant/repo/revision", "篡改 / 跨租户拒绝", "Chroma 现场待补"],
   ["仓库基准", "清单验证", "3 仓 × 7 任务", "executed = 0", "不报成功率"],
 ];
@@ -227,8 +236,8 @@ const notes = [
   "强调 Human Authority 不是第七个 Agent。所有 Worker 结果只回 Leader，避免点对点通信导致状态分叉；审批主体只授予精确目标的一次性授权。\n[Sources]\n- config/agents.yaml\n- agentteams/team.yaml\n- docs/BOUNDARIES_AND_MCP.md",
   "三层门：运行时身份决定‘是谁’，父子路由和摘要决定‘拿到什么’，Skill/MCP/scope/状态/批准的交集决定‘能做什么’。聊天内容本身不产生权限。\n[Sources]\n- src/devflow/collaboration/ledger.py\n- src/devflow/skills/contracts.py\n- docs/BOUNDARIES_AND_MCP.md",
   "这一页逐字对应官方五项核验：角色编排与任务拆解落在 Manager–Team–Worker 和 assignment；上下文传递与协同执行落在 Team Room、Worker Room、Handoff 与 Skill；状态追踪落在 taskflow、readback、retry 和 PAUSED。ready/SUCCESS 与 retry/blocked/FAILED 仍由 guard 强校验。\n[Sources]\n- https://www.goaihz.com/tracks?track=infra（AgentTeams 五项映射要求，访问 2026-07-28）\n- docs/submission/AGENTTEAMS_MAPPING_CN.md\n- agentteams/teamharness/guarded_server.py",
-  "MCP 不靠提示词保护。Leader、Locator、Higress、Broker、GitHub API 每层都校验不同边界；错路径、错租户、错身份、直连、过期与重放都 fail closed。\n[Sources]\n- config/mcp_servers.yaml\n- agentteams/teamharness/guarded_server.py\n- tests/test_teamharness_github_capability.py",
-  "每个 Skill 是版本化资产：合同、触发/拒绝条件、依赖失败、安全边界、正反例与独立验证器齐全。测试证据要签名，经验只从 VERIFIED 终态进入。\n[Sources]\n- skills/\n- evals/skill_behavior/cases.yaml\n- src/devflow/skills/catalog.py\n- tests/test_skill_validator_standalone.py",
+  "MCP 不靠提示词保护。2026-07-27/28 历史现场验证固定 scope 的错路径、错身份与直连拒绝；错租户、过期和冲突重放另有本地测试。不同证据层不拼接为当前任意仓库 E2E。\n[Sources]\n- config/mcp_servers.yaml\n- agentteams/teamharness/guarded_server.py\n- tests/test_teamharness_github_capability.py",
+  "每个 Skill 是版本化资产：合同、触发/拒绝条件、依赖失败、安全边界、正反例与独立验证器齐全。便携 profile 只生成摘要绑定自证明；AgentTeams 独立 CI 仍是候选。当前 Leader Pod 内完全相同的 JTI 与接受请求/结果绑定幂等读回，冲突绑定拒绝，不确定权威状态保持 pending 并 fail closed；ledger 不跨 Pod replacement，回执 120 秒过期。经验只从 VERIFIED 终态进入。\n[Sources]\n- skills/test-runner/\n- agentteams/cicd/tester_server.py\n- agentteams/teamharness/guarded_server.py\n- tests/test_teamharness_test_execution_receipt.py",
   "这是本地确定性 Demo 的真实运行口径：六个阶段路由全部注册、租约与封存；18 条审计事件形成可重算哈希链；7 个 Skill 独立验证器通过。它不替代真实集群证据。\n[Sources]\n- src/devflow/demo.py\n- src/devflow/collaboration/ledger.py\n- tests/test_demo.py",
   "证据必须分层。真实 AgentTeams 两节点与 GitHub 边界、本地六阶段/T4/RAG 集成、以及仅建立清单的仓库任务不能拼成一个未发生的‘生产闭环’。\n[Sources]\n- docs/evidence/AGENTTEAMS_LIVE_20260727.md\n- docs/finals/ACCEPTANCE_MATRIX_CN.md\n- docs/evidence/REPOSITORY_REPAIR_BASELINE.md",
   "这是截至 2026-07-28 唯一公开可核验的评分权重。MCP、RAG、可观测推荐但不按数量计分；AgentTeams 与 Skill 是硬基线。\n[Sources]\n- https://www.goaihz.com/tracks?track=infra（访问 2026-07-28）\n- https://www.goaihz.com/faq（访问 2026-07-28）\n- docs/finals/ACCEPTANCE_MATRIX_CN.md",

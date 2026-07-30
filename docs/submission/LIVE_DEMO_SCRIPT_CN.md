@@ -93,9 +93,10 @@ content digest 可复核、receipt response digest 重算一致；同 capability
 
 展示三个固定 revision、24 项路由/边界基准的精确决策、安全率、p50/p95
 时延与 token。展示七个 Skill 的静态质量门；同时指出 GLM-5.2 成对行为评测
-只覆盖较早的六个 Skill，`github-evidence` 不沿用该分数。2026-07-28 决赛分支
-冻结前门为 971 passed、17 skipped、84.75%（6,314 statements / 963 missed）；
-此后代码仍有变化，只有绑定最终 commit 后复跑一致，才把数字作为最终证据展示。
+只覆盖较早的六个 Skill，`github-evidence` 不沿用该分数。2026-07-30 当前候选
+工作树完整结果为 1,330 passed、24 skipped、84.06%（6,325 statements /
+1,008 missed）；它尚未绑定 clean commit、CI 或 release provenance，只有冻结后
+复跑一致，才把数字作为最终发布证据展示。
 
 ## 7:20–8:00｜结论与缺口
 
